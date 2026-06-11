@@ -120,6 +120,7 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, std::v
 TaskHandle_t predictorTaskHandle = NULL;
 std::vector<PassEvent> recommendedPasses;
 bool showRecommendations = false;
+bool isManualLocationMode = false;
 bool predictionsReady = false;
 portMUX_TYPE passMutex = portMUX_INITIALIZER_UNLOCKED;
 
@@ -461,21 +462,66 @@ void loop() {
     if (millis() - last_update >= 33) {
         last_update = millis();
         
-        // Handle continuous keyboard input (Time Machine)
-        if (M5Cardputer.Keyboard.isPressed()) {
-            if (appState == STATE_MAIN) {
-                if (M5Cardputer.Keyboard.isKeyPressed(',')) {
-                    current_unix -= 60; // Rewind 1 min (continuous if held)
-                } else if (M5Cardputer.Keyboard.isKeyPressed('/')) {
-                    current_unix += 60; // Fast forward 1 min (continuous if held)
+        // Handle continuous keyboard input (Time Machine or Manual Location)
+        static unsigned long keyHoldStartTime = 0;
+        static char lastKey = 0;
+        static unsigned long lastKeyRepeat = 0;
+        bool isFastForwarding = false;
+        
+        if (appState == STATE_MAIN) {
+            char currentKey = 0;
+            if (M5Cardputer.Keyboard.isKeyPressed(',')) currentKey = ',';
+            else if (M5Cardputer.Keyboard.isKeyPressed('/')) currentKey = '/';
+            else if (isManualLocationMode && M5Cardputer.Keyboard.isKeyPressed(';')) currentKey = ';';
+            else if (isManualLocationMode && M5Cardputer.Keyboard.isKeyPressed('.')) currentKey = '.';
+            
+            auto handleContinuousKey = [&](char key) {
+                if (isManualLocationMode) {
+                    if (key == ';') { baseUserLat += 1.0; if (baseUserLat > 90) baseUserLat = 90; }
+                    else if (key == '.') { baseUserLat -= 1.0; if (baseUserLat < -90) baseUserLat = -90; }
+                    else if (key == ',') { baseUserLon -= 1.0; if (baseUserLon < -180) baseUserLon += 360; }
+                    else if (key == '/') { baseUserLon += 1.0; if (baseUserLon > 180) baseUserLon -= 360; }
+                } else {
+                    if (key == ',') current_unix -= 60;
+                    else if (key == '/') current_unix += 60;
                 }
+            };
+            
+            if (currentKey != 0) {
+                if (lastKey != currentKey) {
+                    // Initial press
+                    lastKey = currentKey;
+                    keyHoldStartTime = millis();
+                    lastKeyRepeat = millis();
+                    handleContinuousKey(currentKey);
+                } else {
+                    // Held down
+                    if (millis() - keyHoldStartTime > 400) { // 400ms delay before repeat
+                        if (!isManualLocationMode) isFastForwarding = true; // Flag for rendering optimization
+                        if (millis() - lastKeyRepeat > 33) { // ~30Hz repeat rate
+                            lastKeyRepeat = millis();
+                            handleContinuousKey(currentKey);
+                        }
+                    }
+                }
+            } else {
+                lastKey = 0;
             }
         }
+
         
         // Handle discrete keyboard input
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
             if (appState == STATE_MAIN) {
-                if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                if (M5Cardputer.Keyboard.isKeyPressed('c')) {
+                    isManualLocationMode = !isManualLocationMode;
+                    if (!isManualLocationMode) {
+                        triggerPrediction = true;
+                        portENTER_CRITICAL(&passMutex);
+                        predictionsReady = false;
+                        portEXIT_CRITICAL(&passMutex);
+                    }
+                } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
                     showRecommendations = !showRecommendations;
                 } else if (M5Cardputer.Keyboard.isKeyPressed('w')) {
                     appState = STATE_WIFI_SETUP;
@@ -594,7 +640,11 @@ void loop() {
         double viewLat = 0.0;
         double viewLon = 0.0;
         
-        if (attitude && imu) {
+        if (isManualLocationMode) {
+            viewLat = baseUserLat;
+            viewLon = baseUserLon;
+            earth_renderer->setCameraAttitude(0, 0, 0);
+        } else if (attitude && imu) {
             AttitudeData att = attitude->getAttitude();
             
             // "平放设备时的观察视角改成在定位点上方" -> 默认对准用户的纬度
@@ -628,14 +678,25 @@ void loop() {
                 data.name = g_satellites[i].name;
                 data.currentPos = CoordTransform::ecefToGeodetic(ecef);
                 data.color = g_satellites[i].color;
-                calculateOrbit(g_satellites[i].calc, current_unix, g_satellites[i].cache, data.pastOrbit, data.futureOrbit);
+                
+                // Skip expensive orbit path recalculation if user is holding the fast-forward button
+                if (!isFastForwarding) {
+                    calculateOrbit(g_satellites[i].calc, current_unix, g_satellites[i].cache, data.pastOrbit, data.futureOrbit);
+                } else {
+                    data.pastOrbit = g_satellites[i].cache.past;
+                    data.futureOrbit = g_satellites[i].cache.future;
+                }
                 
                 sats.push_back(data);
             }
         }
         
         // Render scene
-        earth_renderer->render(viewLat, viewLon, baseUserLat, baseUserLon, sats);
+        double renderUserLat = baseUserLat;
+        if (isManualLocationMode && ((millis() / 500) % 2 == 0)) {
+            renderUserLat = 999.0; // Blink marker by putting it off-planet
+        }
+        earth_renderer->render(viewLat, viewLon, renderUserLat, baseUserLon, sats);
         
         if (showRecommendations) {
             // Draw semi-transparent dark overlay on the left side (width: 140)
