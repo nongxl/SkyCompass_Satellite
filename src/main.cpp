@@ -95,9 +95,11 @@ const int NUM_SATELLITES = sizeof(g_satellites) / sizeof(g_satellites[0]);
 uint32_t current_unix = 0; // Will be set in setup()
 unsigned long last_update = 0;
 
-// Default GNSS location (Beijing)
-double baseUserLat = 39.9042;
-double baseUserLon = 116.4074;
+// Default GNSS location (Beijing for public release)
+// double baseUserLat = 22.85; // Nanning (test location)
+// double baseUserLon = 108.33;
+double baseUserLat = 39.90; // Beijing
+double baseUserLon = 116.40;
 
 // Helper to pre-calculate orbits with caching
 void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, std::vector<GeodeticCoord>& past, std::vector<GeodeticCoord>& future) {
@@ -233,10 +235,7 @@ void networkTask(void* parameter) {
     }
     
     if (HalWifi::isConnected()) {
-        // 1.5 Update timezone
-        if (pos_manager) {
-            pos_manager->getTimezoneManager()->updateOnlineTimezone();
-        }
+        // Online timezone removed per user request (relies on offline grid)
         
         // 2. Fetch NTP
         HalWifi::syncNTPTime();
@@ -248,33 +247,7 @@ void networkTask(void* parameter) {
             Serial.printf("Time synced to UTC: %u\n", current_unix);
         }
 
-        // 3.5 IP Geolocation
-        if (!gnss || gnss->getStatus() != GNSS_STATUS_LOCKED) {
-            Serial.println("Fetching IP Geolocation...");
-            HTTPClient http;
-            http.begin("http://ip-api.com/json/");
-            int httpCode = http.GET();
-            if (httpCode == HTTP_CODE_OK) {
-                String payload = http.getString();
-                // Parse lat/lon directly from JSON string to avoid ArduinoJson dependency
-                int latIdx = payload.indexOf("\"lat\":");
-                int lonIdx = payload.indexOf("\"lon\":");
-                if (latIdx > 0 && lonIdx > 0) {
-                    int latEnd = payload.indexOf(",", latIdx);
-                    int lonEnd = payload.indexOf(",", lonIdx);
-                    if (latEnd > 0 && lonEnd > 0) {
-                        String latStr = payload.substring(latIdx + 6, latEnd);
-                        String lonStr = payload.substring(lonIdx + 6, lonEnd);
-                        baseUserLat = latStr.toDouble();
-                        baseUserLon = lonStr.toDouble();
-                        Serial.printf("IP Geolocation successful: Lat %f, Lon %f\n", baseUserLat, baseUserLon);
-                    }
-                }
-            } else {
-                Serial.printf("IP Geolocation failed. HTTP Code: %d\n", httpCode);
-            }
-            http.end();
-        }
+        // IP Geolocation removed per user request (relies on GNSS/cache instead)
 
         // 4. Fetch TLEs
         bool updated = false;
@@ -347,6 +320,7 @@ void setup() {
             if (i == 0) g_satellites[i].tle = TLEManager::getISS_TLE();
             else if (i == 1) g_satellites[i].tle = TLEManager::getTiangong_TLE();
             else if (i == 2) g_satellites[i].tle = TLEManager::getHubble_TLE();
+            else if (g_satellites[i].noradId == 50463) g_satellites[i].tle = TLEManager::getJWST_TLE();
         }
         
         if (g_satellites[i].tle.line1.length() > 0) {
@@ -370,15 +344,8 @@ void setup() {
     );
     
     // Start network task on Core 0 to handle WiFi and TLE fetching in background
-    xTaskCreatePinnedToCore(
-        networkTask,
-        "NetworkTask",
-        8192,
-        NULL,
-        1,
-        NULL,
-        0
-    );
+    // User requested WiFi to be OFF by default on boot.
+    // xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
 }
 
 void drawWiFiSetupPage() {
@@ -500,7 +467,7 @@ void drawSatSelectPage() {
     for (int i = 0; i < itemsPerPage && (startIndex + i) < NUM_SATELLITES; i++) {
         int index = startIndex + i;
         if (index == satSelectedIndex) {
-            canvas->fillRect(2, yPos - 2, 97, 15, canvas->color565(0, 120, 255));
+            canvas->fillRect(2, yPos - 2, 82, 15, canvas->color565(0, 120, 255));
             canvas->setTextColor(TFT_WHITE);
         } else {
             canvas->setTextColor(TFT_LIGHTGRAY);
@@ -510,52 +477,51 @@ void drawSatSelectPage() {
         canvas->drawString(checkBox.c_str(), 4, yPos);
         
         String nameStr = g_satellites[index].name;
-        if (nameStr.length() > 11) nameStr = nameStr.substring(0, 9) + "..";
+        if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
         canvas->drawString(nameStr.c_str(), 28, yPos);
         
         yPos += 16;
     }
     
     // Right Panel (Description)
-    canvas->drawFastVLine(100, 20, height-20, TFT_DARKGREY);
+    canvas->drawFastVLine(85, 20, height-20, TFT_DARKGREY);
     
-    int rightX = 104;
+    int rightX = 89;
     int descY = 25;
     SatProfile& selSat = g_satellites[satSelectedIndex];
     
-    // Draw Larger Icon
-    int iconX = rightX + 14;
-    int iconY = descY + 6;
+    // Draw 3x Scaled Icon
+    int iconX = rightX + 21;
+    int iconY = descY + 12;
     uint16_t satColor = selSat.color;
     SatIconType t = selSat.iconType;
     
     if (t == ICON_STATION) {
-        canvas->fillRect(iconX - 6, iconY - 2, 14, 6, TFT_WHITE);
-        canvas->fillRect(iconX - 14, iconY - 4, 8, 10, satColor);
-        canvas->fillRect(iconX + 8, iconY - 4, 8, 10, satColor);
+        canvas->fillRect(iconX - 6, iconY - 3, 15, 9, TFT_WHITE);
+        canvas->fillRect(iconX - 21, iconY - 9, 12, 21, satColor);
+        canvas->fillRect(iconX + 12, iconY - 9, 12, 21, satColor);
     } else if (t == ICON_TELESCOPE) {
-        canvas->fillRect(iconX - 4, iconY - 6, 10, 14, TFT_WHITE);
-        canvas->fillRect(iconX - 6, iconY - 8, 14, 4, TFT_LIGHTGRAY);
-        canvas->fillRect(iconX - 12, iconY, 6, 4, satColor);
-        canvas->fillRect(iconX + 8, iconY, 6, 4, satColor);
+        canvas->fillRect(iconX - 6, iconY - 9, 15, 21, TFT_WHITE);
+        canvas->fillRect(iconX - 9, iconY - 12, 21, 6, TFT_LIGHTGRAY);
+        canvas->fillRect(iconX - 18, iconY, 9, 6, satColor);
+        canvas->fillRect(iconX + 12, iconY, 9, 6, satColor);
     } else if (t == ICON_DEEPSPACE) {
-        canvas->drawFastVLine(iconX, iconY - 10, 21, satColor);
-        canvas->drawFastVLine(iconX - 1, iconY - 10, 21, satColor);
-        canvas->drawFastHLine(iconX - 10, iconY, 21, satColor);
-        canvas->drawFastHLine(iconX - 10, iconY - 1, 21, satColor);
-        canvas->drawLine(iconX - 4, iconY - 4, iconX + 4, iconY + 4, TFT_WHITE);
-        canvas->drawLine(iconX - 4, iconY + 4, iconX + 4, iconY - 4, TFT_WHITE);
-        canvas->drawLine(iconX - 5, iconY - 4, iconX + 4, iconY + 5, TFT_WHITE); // Make diagonals thicker
-        canvas->drawLine(iconX - 5, iconY + 4, iconX + 4, iconY - 5, TFT_WHITE);
+        canvas->fillRect(iconX - 1, iconY - 15, 3, 31, satColor);
+        canvas->fillRect(iconX - 15, iconY - 1, 31, 3, satColor);
+        for (int i = -1; i <= 1; i++) {
+            canvas->drawLine(iconX - 6 + i, iconY - 6, iconX + 6 + i, iconY + 6, TFT_WHITE);
+            canvas->drawLine(iconX - 6 + i, iconY + 6, iconX + 6 + i, iconY - 6, TFT_WHITE);
+        }
     } else { // SATELLITE
-        canvas->fillRect(iconX - 2, iconY - 2, 6, 6, TFT_WHITE);
-        canvas->fillRect(iconX + 4, iconY - 2, 8, 6, satColor);
+        canvas->fillRect(iconX - 3, iconY - 3, 9, 9, TFT_WHITE);
+        canvas->fillRect(iconX - 15, iconY - 3, 9, 9, satColor);
+        canvas->fillRect(iconX - 6, iconY - 1, 3, 3, TFT_LIGHTGRAY);
     }
     
     // Draw Name next to icon
     canvas->setTextColor(selSat.color);
-    canvas->drawString(selSat.name.c_str(), rightX + 32, descY + 2);
-    descY += 22; // Skip past icon and name
+    canvas->drawString(selSat.name.c_str(), rightX + 48, descY + 8);
+    descY += 32; // Skip past icon and name
     
     canvas->setTextColor(TFT_LIGHTGRAY);
     if (selSat.description) {
@@ -654,6 +620,12 @@ void loop() {
                         portEXIT_CRITICAL(&passMutex);
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed('w')) {
+                    if (!HalWifi::isConnected()) {
+                        xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+                    } else {
+                        WiFi.disconnect();
+                    }
+                } else if (M5Cardputer.Keyboard.isKeyPressed('W')) {
                     appState = STATE_WIFI_SETUP;
                     wifiIsScanning = true;
                     wifiIsInputtingPassword = false;
@@ -831,6 +803,17 @@ void loop() {
             earth_renderer->setSunPosition(sunPos.subsolarLat, sunPos.subsolarLon);
         }
 
+        static uint32_t lastLogTime = 0;
+        bool shouldLogNow = (current_unix != lastLogTime && (current_unix % 10 == 0));
+        if (shouldLogNow && appState == STATE_MAIN) {
+            lastLogTime = current_unix;
+            int offset = 8; // Nanning uses China Standard Time (UTC+8), while simple geo math gave +7
+            time_t local_unix = current_unix + offset * 3600;
+            struct tm *ti = gmtime(&local_unix);
+            log_i("--- Satellite Positions at Local Time: %04d-%02d-%02d %02d:%02d:%02d ---", 
+                  ti->tm_year + 1900, ti->tm_mon + 1, ti->tm_mday, ti->tm_hour, ti->tm_min, ti->tm_sec);
+        }
+
         std::vector<SatRenderData> sats;
 
         for (int i = 0; i < NUM_SATELLITES; i++) {
@@ -840,11 +823,30 @@ void loop() {
             if (g_satellites[i].calc.getTEME(current_unix, tx, ty, tz)) {
                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix));
                 ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                if (shouldLogNow && appState == STATE_MAIN) {
+                    bool inShadow = false;
+                    if (sun_calc) {
+                        SunPositionData sPos = sun_calc->calculatePosition(current_unix, viewLat, viewLon);
+                        float latR = geo.lat * DEG_TO_RAD;
+                        float lonR = geo.lon * DEG_TO_RAD;
+                        float subLatR = sPos.subsolarLat * DEG_TO_RAD;
+                        float subLonR = sPos.subsolarLon * DEG_TO_RAD;
+                        float cos_theta = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
+                        if (cos_theta < 0) {
+                            float r = 6371.0f + (float)geo.alt;
+                            float dist_sq = r * r * (1.0f - cos_theta * cos_theta);
+                            inShadow = (dist_sq < 6371.0f * 6371.0f);
+                        }
+                    }
+                    log_i("[%s] Lat: %.2f, Lon: %.2f, Alt: %.1f km, Shadow: %s", 
+                          g_satellites[i].name.c_str(), geo.lat, geo.lon, geo.alt, inShadow ? "YES" : "NO");
+                }
                 
                 SatRenderData data;
                 data.name = g_satellites[i].name;
                 data.iconType = g_satellites[i].iconType;
-                data.currentPos = CoordTransform::ecefToGeodetic(ecef);
+                data.currentPos = geo;
                 data.color = g_satellites[i].color;
                 
                 // Skip expensive orbit path recalculation if user is holding the fast-forward button
@@ -903,7 +905,7 @@ void loop() {
             
             canvas->setTextColor(TFT_CYAN);
             int ty = y + 20;
-            canvas->drawString("[W]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("WiFi Setup", x + 35, ty); ty += 12;
+            canvas->drawString("[w/W]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("WiFi Toggle/Setup", x + 40, ty); ty += 12;
             canvas->setTextColor(TFT_CYAN);
             canvas->drawString("[S]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Satellites", x + 35, ty); ty += 12;
             canvas->setTextColor(TFT_CYAN);
@@ -1005,6 +1007,26 @@ void loop() {
                     earth_renderer->getCanvas()->drawString("GNSS: SCH", 70, 115);
                 }
             }
+            
+            // Draw TLE Version
+            String tleEpoch = "TLE Epoch: ";
+            if (g_satellites[0].tle.line1.length() >= 24) {
+                int year = 2000 + g_satellites[0].tle.line1.substring(18, 20).toInt();
+                int doy = g_satellites[0].tle.line1.substring(20, 23).toInt();
+                int daysInMonth[] = {31, (year % 4 == 0 ? 29 : 28), 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+                int month = 0;
+                while (month < 12 && doy > daysInMonth[month]) {
+                    doy -= daysInMonth[month];
+                    month++;
+                }
+                char buf[16];
+                snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month + 1, doy);
+                tleEpoch += buf;
+            } else {
+                tleEpoch += "Unknown";
+            }
+            earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
+            earth_renderer->getCanvas()->drawString(tleEpoch.c_str(), 5, 125);
         }
         
         // Draw Time Machine at bottom right

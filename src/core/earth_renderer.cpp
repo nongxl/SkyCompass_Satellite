@@ -338,7 +338,38 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
     }
 }
 
-void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, double centerLon) {
+void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon) {
+    if (sat.pastOrbit.empty() && sat.futureOrbit.empty()) return;
+    
+    // Check observer visibility
+    bool isVisibleToObserver = false;
+    bool isEclipsed = false;
+    
+    if (_hasSunData) {
+        float uLatR = userLat * DEG_TO_RAD;
+        float uLonR = userLon * DEG_TO_RAD;
+        float sLatR = sat.currentPos.lat * DEG_TO_RAD;
+        float sLonR = sat.currentPos.lon * DEG_TO_RAD;
+        float subLatR = _subsolarLat * DEG_TO_RAD;
+        float subLonR = _subsolarLon * DEG_TO_RAD;
+        
+        // Satellite elevation from observer
+        float cos_dist = sinf(uLatR)*sinf(sLatR) + cosf(uLatR)*cosf(sLatR)*cosf(uLonR - sLonR);
+        float cos_horizon = 6371.0f / (6371.0f + (float)sat.currentPos.alt);
+        bool isAboveHorizon = cos_dist > cos_horizon;
+        
+        // Observer sun altitude
+        float sun_cos_dist = sinf(uLatR)*sinf(subLatR) + cosf(uLatR)*cosf(subLatR)*cosf(uLonR - subLonR);
+        float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
+        
+        // Heavens-Above uses a strict -5.0 degrees sun altitude threshold to cut off visible passes in the morning.
+        bool isNight = sun_alt < -5.0f;
+        
+        isEclipsed = isSatelliteInShadow(sat.currentPos.lat, sat.currentPos.lon, sat.currentPos.alt, _subsolarLat, _subsolarLon, _hasSunData);
+        
+        isVisibleToObserver = (isNight && isAboveHorizon && !isEclipsed);
+    }
+
     // Draw Orbit
     auto drawOrbit = [&](const std::vector<GeodeticCoord>& orbit, uint16_t baseColor) {
         int prevX = -1, prevY = -1;
@@ -369,29 +400,30 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
     // Draw Satellite Current Position
     int sx, sy;
     if (projectOrthographic(sat.currentPos.lat, sat.currentPos.lon, sat.currentPos.alt, centerLat, centerLon, sx, sy)) {
-        bool shadow = isSatelliteInShadow(sat.currentPos.lat, sat.currentPos.lon, sat.currentPos.alt, _subsolarLat, _subsolarLon, _hasSunData);
-        uint16_t drawColor = shadow ? _display->color565(100, 100, 100) : sat.color;
+        // Render colorful if visible to observer, otherwise render gray
+        uint16_t drawColor = isVisibleToObserver ? sat.color : _display->color565(100, 100, 100);
+        bool renderDark = !isVisibleToObserver;
         
         if (sat.iconType == ICON_STATION) {
             // 空间站 (核心舱+大太阳能帆板)
-            _canvas->fillRect(sx - 2, sy - 1, 5, 3, shadow ? _display->color565(80,80,80) : TFT_WHITE);
+            _canvas->fillRect(sx - 2, sy - 1, 5, 3, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
             _canvas->fillRect(sx - 7, sy - 3, 4, 7, drawColor);
             _canvas->fillRect(sx + 4, sy - 3, 4, 7, drawColor);
         } else if (sat.iconType == ICON_TELESCOPE) {
             // 望远镜 (长圆筒+镜头盖+小帆板)
-            _canvas->fillRect(sx - 2, sy - 3, 5, 7, shadow ? _display->color565(80,80,80) : TFT_WHITE);
-            _canvas->fillRect(sx - 3, sy - 4, 7, 2, shadow ? _display->color565(50,50,50) : TFT_LIGHTGRAY);
+            _canvas->fillRect(sx - 2, sy - 3, 5, 7, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
+            _canvas->fillRect(sx - 3, sy - 4, 7, 2, renderDark ? _display->color565(50,50,50) : TFT_LIGHTGRAY);
             _canvas->fillRect(sx - 6, sy, 3, 2, drawColor);
             _canvas->fillRect(sx + 4, sy, 3, 2, drawColor);
         } else if (sat.iconType == ICON_DEEPSPACE) {
             // 深空天体 (星芒图标)
             _canvas->drawLine(sx, sy - 5, sx, sy + 5, drawColor);
             _canvas->drawLine(sx - 5, sy, sx + 5, sy, drawColor);
-            _canvas->drawLine(sx - 2, sy - 2, sx + 2, sy + 2, TFT_WHITE);
-            _canvas->drawLine(sx - 2, sy + 2, sx + 2, sy - 2, TFT_WHITE);
+            _canvas->drawLine(sx - 2, sy - 2, sx + 2, sy + 2, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
+            _canvas->drawLine(sx - 2, sy + 2, sx + 2, sy - 2, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
         } else {
             // 普通卫星 (小盒子+单侧或不对称帆板)
-            _canvas->fillRect(sx - 1, sy - 1, 3, 3, shadow ? _display->color565(80,80,80) : TFT_WHITE);
+            _canvas->fillRect(sx - 1, sy - 1, 3, 3, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
             _canvas->fillRect(sx - 5, sy - 1, 3, 3, drawColor);
             _canvas->drawLine(sx - 2, sy, sx - 1, sy, TFT_LIGHTGRAY);
         }
@@ -399,11 +431,6 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
         _canvas->setTextColor(drawColor);
         _canvas->setTextSize(1);
         _canvas->drawString(sat.name.c_str(), sx + 8, sy - 4);
-        
-        if (shadow) {
-            _canvas->setTextColor(_display->color565(150, 150, 150));
-            _canvas->drawString("ECLIPSE", sx + 6, sy + 6);
-        }
     }
 }
 
@@ -417,7 +444,7 @@ void EarthRenderer::render(double centerLat, double centerLon, double userLat, d
     drawEarth(centerLat, centerLon, userLat, userLon);
     
     for (const auto& sat : satellites) {
-        drawSatellite(sat, centerLat, centerLon);
+        drawSatellite(sat, centerLat, centerLon, userLat, userLon);
     }
     
     frames++;

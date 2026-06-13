@@ -84,11 +84,32 @@ bool TLEUpdater::saveToCache(int noradId, const TLEData& tle, uint32_t timestamp
 }
 
 bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle) {
+    if (noradId == 50463) {
+        outTle = TLEManager::getJWST_TLE();
+        return true;
+    }
+    
+    WiFiClientSecure *client = new WiFiClientSecure;
+    if (!client) {
+        Serial.println("Failed to create WiFiClientSecure");
+        return false;
+    }
+    client->setInsecure(); // Skip certificate verification
+    
     HTTPClient http;
     String url = "https://celestrak.org/NORAD/elements/gp.php?CATNR=" + String(noradId) + "&FORMAT=tle";
     
-    http.begin(url);
+    http.begin(*client, url);
     int httpCode = http.GET();
+    
+    if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+        if (httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+            String newUrl = http.getLocation();
+            http.end();
+            http.begin(*client, newUrl);
+            httpCode = http.GET();
+        }
+    }
     
     if (httpCode == HTTP_CODE_OK) {
         String payload = http.getString();
@@ -107,11 +128,13 @@ bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle) {
             outTle.line2.trim();
             
             http.end();
+            delete client;
             return true;
         }
     }
     
-    Serial.printf("Failed to fetch TLE. HTTP Code: %d\n", httpCode);
+    Serial.printf("Failed to fetch TLE for %d. HTTP Code: %d\n", noradId, httpCode);
     http.end();
+    delete client;
     return false;
 }

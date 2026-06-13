@@ -10,8 +10,11 @@ double CoordTransform::unixToJulian(uint32_t unix_ts) {
 }
 
 double CoordTransform::getGMST(double julian_date) {
-    double T = (julian_date - 2451545.0) / 36525.0;
-    double gmst_sec = 24110.54841 + 8640184.812866 * T + 0.093104 * T * T - 6.2e-6 * T * T * T;
+    double jd0 = floor(julian_date + 0.5) - 0.5;
+    double T0 = (jd0 - 2451545.0) / 36525.0;
+    double gmst_0h_sec = 24110.54841 + 8640184.812866 * T0 + 0.093104 * T0 * T0 - 6.2e-6 * T0 * T0 * T0;
+    double time_of_day_sec = (julian_date - jd0) * 86400.0;
+    double gmst_sec = gmst_0h_sec + time_of_day_sec * 1.002737909350795;
     double gmst_rad = fmod(gmst_sec, 86400.0) * 2.0 * PI_CONST / 86400.0;
     if (gmst_rad < 0.0) {
         gmst_rad += 2.0 * PI_CONST;

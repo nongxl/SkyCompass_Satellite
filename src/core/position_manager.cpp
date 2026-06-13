@@ -404,8 +404,8 @@ TimeData PositionManager::getDefaultTime() {
  */
 PositionData PositionManager::getDefaultPosition() {
     PositionData defaultPosition;
-    defaultPosition.latitude = 39.9042; // 北京纬度
-    defaultPosition.longitude = 116.4074; // 北京经度
-    defaultPosition.altitude = 0.0;
+    defaultPosition.latitude = 22.85; // 南宁纬度 (用于离线校准)
+    defaultPosition.longitude = 108.33; // 南宁经度 (用于离线校准)
+    defaultPosition.altitude = 109.0;
     return defaultPosition;
 }

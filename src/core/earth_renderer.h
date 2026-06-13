@@ -62,5 +62,5 @@ private:
     
     void drawEarth(double centerLat, double centerLon, double userLat, double userLon);
     void drawContinents(double centerLat, double centerLon);
-    void drawSatellite(const SatRenderData& sat, double centerLat, double centerLon);
+    void drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon);
 };
