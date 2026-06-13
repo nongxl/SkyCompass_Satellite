@@ -73,7 +73,10 @@ struct SatProfile {
     OrbitCache cache;
 };
 
-SatProfile g_satellites[] = {
+const int MAX_SATELLITES = 50;
+int NUM_SATELLITES = 14;
+
+SatProfile g_satellites[MAX_SATELLITES] = {
     {25544, "ISS", TFT_YELLOW, 2, true, ICON_STATION, "International Space Station. The largest human-made structure in space, visible as a very bright moving star."},
     {48274, "Tiangong", TFT_GREEN, 1, true, ICON_STATION, "China's Tiangong Space Station. A permanent modular space station in LEO."},
     {20580, "Hubble", TFT_CYAN, 0, true, ICON_TELESCOPE, "Hubble Space Telescope. A vital observatory that revolutionized our understanding of the universe."},
@@ -89,7 +92,6 @@ SatProfile g_satellites[] = {
     {43166, "Iridium 127", TFT_WHITE, 0, false, ICON_SATELLITE, "Iridium NEXT network. The original 1st-gen Iridium satellites produced legendary 'flares' up to mag -8."},
     {57165, "Meteor-M2", TFT_WHITE, 0, false, ICON_SATELLITE, "Russian meteorological satellite transmitting LRPT weather images."}
 };
-const int NUM_SATELLITES = sizeof(g_satellites) / sizeof(g_satellites[0]);
 
 // We use a simulated time starting near the TLE epoch for Phase 3 offline testing
 uint32_t current_unix = 0; // Will be set in setup()
@@ -162,6 +164,13 @@ unsigned long bootTime = 0;
 bool showHelp = false;
 bool isManualLocationMode = false;
 bool predictionsReady = false;
+bool manualWifiToggle = false;
+
+// Custom Satellite Input State
+String noradInput = "";
+String downloadErrorMsg = "";
+int deleteConfirmIndex = -1;
+bool isDownloadingCustom = false;
 portMUX_TYPE passMutex = portMUX_INITIALIZER_UNLOCKED;
 
 volatile bool triggerPrediction = true;
@@ -236,13 +245,25 @@ void networkTask(void* parameter) {
     }
     
     if (ssid.length() == 0) {
-        Serial.println("No WiFi credentials available. Staying offline.");
+        Serial.println("No WiFi credentials available. Falling back to WiFi Setup.");
+        appState = STATE_WIFI_SETUP;
+        wifiIsScanning = true;
+        wifiIsInputtingPassword = false;
         vTaskDelete(NULL);
         return;
     }
 
     // 1. Connect WiFi
     HalWifi::begin(ssid.c_str(), pass.c_str());
+    
+    if (!HalWifi::isConnected()) {
+        Serial.println("WiFi connection failed. Falling back to WiFi Setup.");
+        appState = STATE_WIFI_SETUP;
+        wifiIsScanning = true;
+        wifiIsInputtingPassword = false;
+        vTaskDelete(NULL);
+        return;
+    }
     
     if (HalWifi::isConnected() && shouldSave) {
         HalWifi::saveCredentials(ssid, pass);
@@ -285,14 +306,30 @@ void networkTask(void* parameter) {
             portEXIT_CRITICAL(&passMutex);
             triggerPrediction = true;
         }
-        
-        Serial.println("Network tasks complete. Turning off WiFi to save power.");
-        HalWifi::disconnect();
+        if (!manualWifiToggle) {
+            Serial.println("Network tasks complete. Turning off WiFi to save power.");
+            HalWifi::disconnect();
+        } else {
+            Serial.println("Network tasks complete. WiFi remains connected.");
+        }
     }
     vTaskDelete(NULL);
 }
 
+void saveCustomSatellites() {
+    Preferences prefs;
+    prefs.begin("satellites", false);
+    String idList = "";
+    for (int i = 14; i < NUM_SATELLITES; i++) {
+        idList += String(g_satellites[i].noradId);
+        if (i < NUM_SATELLITES - 1) idList += ",";
+    }
+    prefs.putString("customIds", idList);
+    prefs.end();
+}
+
 void setup() {
+    
     Serial.begin(115200);
     // Remove the 4 second delay to boot instantly
     Serial.println(F("\n\n--- SkyCompass Satellite: Phase 4 ---"));
@@ -346,6 +383,49 @@ void setup() {
     current_unix = TLEManager::getMockTimeAnchor();
     Serial.println("Offline boot: Loaded cached TLEs. Using Mock Time Anchor.");
     
+    // Load Custom Satellites from Preferences
+    Preferences prefs;
+    prefs.begin("satellites", true);
+    String customIds = prefs.getString("customIds", "");
+    prefs.end();
+    
+    if (customIds.length() > 0) {
+        int start = 0;
+        int end = customIds.indexOf(',');
+        while (start < customIds.length()) {
+            String idStr;
+            if (end == -1) {
+                idStr = customIds.substring(start);
+                start = customIds.length();
+            } else {
+                idStr = customIds.substring(start, end);
+                start = end + 1;
+                end = customIds.indexOf(',', start);
+            }
+            
+            int id = idStr.toInt();
+            if (id > 0) {
+                Serial.printf("Loading Custom: %d\n", id);
+                TLEData loaded_tle;
+                if (TLEUpdater::getTLE(id, loaded_tle)) {
+                    SatProfile p;
+                    p.noradId = id;
+                    p.name = loaded_tle.name;
+                    p.color = TFT_WHITE;
+                    p.baseScore = 0;
+                    p.selected = true;
+                    p.iconType = ICON_SATELLITE;
+                    p.description = "Custom added satellite.";
+                    p.tle = loaded_tle;
+                    p.calc.init(p.tle);
+                    if (NUM_SATELLITES < MAX_SATELLITES) {
+                        g_satellites[NUM_SATELLITES++] = p;
+                    }
+                }
+            }
+        }
+    }
+    
     // Start predictor task on Core 0 for offline data (UI runs on Core 1)
     xTaskCreatePinnedToCore(
         predictorTask,
@@ -358,8 +438,9 @@ void setup() {
     );
     
     // Start network task on Core 0 to handle WiFi and TLE fetching in background
-    // User requested WiFi to be OFF by default on boot.
-    // xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+    // Auto connects at boot and auto disconnects when done
+    manualWifiToggle = false;
+    xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
 }
 
 void drawWiFiSetupPage() {
@@ -478,7 +559,8 @@ void drawSatSelectPage() {
     int itemsPerPage = 6;
     int startIndex = (satSelectedIndex / itemsPerPage) * itemsPerPage;
     
-    for (int i = 0; i < itemsPerPage && (startIndex + i) < NUM_SATELLITES; i++) {
+    // Total items is NUM_SATELLITES + 1 (the Add row)
+    for (int i = 0; i < itemsPerPage && (startIndex + i) <= NUM_SATELLITES; i++) {
         int index = startIndex + i;
         if (index == satSelectedIndex) {
             canvas->fillRect(2, yPos - 2, 82, 15, canvas->color565(0, 120, 255));
@@ -487,12 +569,18 @@ void drawSatSelectPage() {
             canvas->setTextColor(TFT_LIGHTGRAY);
         }
         
-        String checkBox = g_satellites[index].selected ? "[x]" : "[ ]";
-        canvas->drawString(checkBox.c_str(), 4, yPos);
-        
-        String nameStr = g_satellites[index].name;
-        if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
-        canvas->drawString(nameStr.c_str(), 28, yPos);
+        if (index < NUM_SATELLITES) {
+            String checkBox = g_satellites[index].selected ? "[x]" : "[ ]";
+            canvas->drawString(checkBox.c_str(), 4, yPos);
+            
+            String nameStr = g_satellites[index].name;
+            if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
+            canvas->drawString(nameStr.c_str(), 28, yPos);
+        } else {
+            // "Add Custom" row
+            String text = isDownloadingCustom ? "Downloading..." : ("[+] " + noradInput + "_");
+            canvas->drawString(text.c_str(), 4, yPos);
+        }
         
         yPos += 16;
     }
@@ -502,50 +590,65 @@ void drawSatSelectPage() {
     
     int rightX = 89;
     int descY = 25;
-    SatProfile& selSat = g_satellites[satSelectedIndex];
-    
-    // Draw 3x Scaled Icon
-    int iconX = rightX + 21;
-    int iconY = descY + 12;
-    uint16_t satColor = selSat.color;
-    SatIconType t = selSat.iconType;
-    
-    if (t == ICON_STATION) {
-        canvas->fillRect(iconX - 6, iconY - 3, 15, 9, TFT_WHITE);
-        canvas->fillRect(iconX - 21, iconY - 9, 12, 21, satColor);
-        canvas->fillRect(iconX + 12, iconY - 9, 12, 21, satColor);
-    } else if (t == ICON_TELESCOPE) {
-        canvas->fillRect(iconX - 6, iconY - 9, 15, 21, TFT_WHITE);
-        canvas->fillRect(iconX - 9, iconY - 12, 21, 6, TFT_LIGHTGRAY);
-        canvas->fillRect(iconX - 18, iconY, 9, 6, satColor);
-        canvas->fillRect(iconX + 12, iconY, 9, 6, satColor);
-    } else if (t == ICON_DEEPSPACE) {
-        canvas->fillRect(iconX - 1, iconY - 15, 3, 31, satColor);
-        canvas->fillRect(iconX - 15, iconY - 1, 31, 3, satColor);
-        for (int i = -1; i <= 1; i++) {
-            canvas->drawLine(iconX - 6 + i, iconY - 6, iconX + 6 + i, iconY + 6, TFT_WHITE);
-            canvas->drawLine(iconX - 6 + i, iconY + 6, iconX + 6 + i, iconY - 6, TFT_WHITE);
+    if (satSelectedIndex < NUM_SATELLITES) {
+        SatProfile& selSat = g_satellites[satSelectedIndex];
+        
+        // Draw 3x Scaled Icon
+        int iconX = rightX + 21;
+        int iconY = descY + 12;
+        uint16_t satColor = selSat.color;
+        SatIconType t = selSat.iconType;
+        
+        if (t == ICON_STATION) {
+            canvas->fillRect(iconX - 6, iconY - 3, 15, 9, TFT_WHITE);
+            canvas->fillRect(iconX - 21, iconY - 9, 12, 21, satColor);
+            canvas->fillRect(iconX + 12, iconY - 9, 12, 21, satColor);
+        } else if (t == ICON_TELESCOPE) {
+            canvas->fillRect(iconX - 6, iconY - 9, 15, 21, TFT_WHITE);
+            canvas->fillRect(iconX - 9, iconY - 12, 21, 6, TFT_LIGHTGRAY);
+            canvas->fillRect(iconX - 18, iconY, 9, 6, satColor);
+            canvas->fillRect(iconX + 12, iconY, 9, 6, satColor);
+        } else if (t == ICON_DEEPSPACE) {
+            canvas->fillRect(iconX - 1, iconY - 15, 3, 31, satColor);
+            canvas->fillRect(iconX - 15, iconY - 1, 31, 3, satColor);
+            for (int i = -1; i <= 1; i++) {
+                canvas->drawLine(iconX - 6 + i, iconY - 6, iconX + 6 + i, iconY + 6, TFT_WHITE);
+                canvas->drawLine(iconX - 6 + i, iconY + 6, iconX + 6 + i, iconY - 6, TFT_WHITE);
+            }
+        } else { // SATELLITE
+            canvas->fillRect(iconX - 3, iconY - 3, 9, 9, TFT_WHITE);
+            canvas->fillRect(iconX - 15, iconY - 3, 9, 9, satColor);
+            canvas->fillRect(iconX - 6, iconY - 1, 3, 3, TFT_LIGHTGRAY);
         }
-    } else { // SATELLITE
-        canvas->fillRect(iconX - 3, iconY - 3, 9, 9, TFT_WHITE);
-        canvas->fillRect(iconX - 15, iconY - 3, 9, 9, satColor);
-        canvas->fillRect(iconX - 6, iconY - 1, 3, 3, TFT_LIGHTGRAY);
-    }
-    
-    // Draw Name next to icon
-    canvas->setTextColor(selSat.color);
-    canvas->drawString(selSat.name.c_str(), rightX + 48, descY + 8);
-    descY += 32; // Skip past icon and name
-    
-    canvas->setTextColor(TFT_LIGHTGRAY);
-    if (selSat.description) {
-        drawWrappedText(canvas, selSat.description, rightX, descY, width - rightX - 5, 10);
+        
+        // Draw Name next to icon
+        canvas->setTextColor(selSat.color);
+        canvas->drawString(selSat.name.c_str(), rightX + 48, descY + 8);
+        descY += 32; // Skip past icon and name
+        
+        canvas->setTextColor(TFT_LIGHTGRAY);
+        if (selSat.description) {
+            drawWrappedText(canvas, selSat.description, rightX, descY, width - rightX - 5, 10);
+        } else {
+            canvas->drawString("No description.", rightX, descY);
+        }
     } else {
-        canvas->drawString("No description.", rightX, descY);
+        canvas->setTextColor(downloadErrorMsg.length() > 0 ? TFT_RED : TFT_LIGHTGRAY);
+        String msg = downloadErrorMsg.length() > 0 ? downloadErrorMsg : "Enter 5-digit NORAD ID to add custom satellite.";
+        drawWrappedText(canvas, msg.c_str(), rightX, descY, width - rightX - 5, 10);
     }
     
     canvas->setTextColor(TFT_DARKGREY);
-    canvas->drawString("[^/v] Sel [Enter] Toggle [ESC] Exit", 5, height - 12);
+    canvas->drawString("[^/v] Sel [Enter] Toggle [d] Del Custom [ESC] Exit", 5, height - 12);
+    
+    // Draw Delete Confirm Popup
+    if (deleteConfirmIndex >= 0 && deleteConfirmIndex < NUM_SATELLITES) {
+        canvas->fillRect(40, height/2 - 20, width - 80, 40, TFT_RED);
+        canvas->drawRect(40, height/2 - 20, width - 80, 40, TFT_WHITE);
+        canvas->setTextColor(TFT_WHITE);
+        canvas->drawString("Delete Custom Sat?", 45, height/2 - 15);
+        canvas->drawString("[y] Yes  [n] No", 45, height/2 + 5);
+    }
 }
 
 void loop() {
@@ -650,14 +753,12 @@ void loop() {
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed('w')) {
                     if (!HalWifi::isConnected()) {
+                        manualWifiToggle = true;
                         xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
                     } else {
-                        WiFi.disconnect();
+                        WiFi.disconnect(true);
+                        WiFi.mode(WIFI_OFF);
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed('W')) {
-                    appState = STATE_WIFI_SETUP;
-                    wifiIsScanning = true;
-                    wifiIsInputtingPassword = false;
                 } else if (M5Cardputer.Keyboard.isKeyPressed('s')) {
                     appState = STATE_SAT_SELECT;
                 } else if (M5Cardputer.Keyboard.isKeyPressed('h')) {
@@ -745,6 +846,7 @@ void loop() {
                         params->pass = String(wifiPasswordBuffer);
                         params->shouldSave = true;
                         
+                        manualWifiToggle = true; // Stay connected since user explicitly set it up
                         xTaskCreatePinnedToCore(
                             networkTask, "NetworkTask", 8192, params, 1, NULL, 0
                         );
@@ -781,20 +883,101 @@ void loop() {
                     }
                 }
             } else if (appState == STATE_SAT_SELECT) {
-                if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
-                    appState = STATE_MAIN;
-                    // Trigger predictor to rerun since selection might have changed
-                    portENTER_CRITICAL(&passMutex);
-                    predictionsReady = false;
-                    portEXIT_CRITICAL(&passMutex);
-                    triggerPrediction = true;
-                } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
-                    g_satellites[satSelectedIndex].selected = !g_satellites[satSelectedIndex].selected;
-                } else if (M5Cardputer.Keyboard.isKeyPressed(';')) { // UP arrow
-                    if (satSelectedIndex > 0) satSelectedIndex--;
-                    else satSelectedIndex = NUM_SATELLITES - 1;
-                } else if (M5Cardputer.Keyboard.isKeyPressed('.')) { // DOWN arrow
-                    satSelectedIndex = (satSelectedIndex + 1) % NUM_SATELLITES;
+                if (deleteConfirmIndex >= 0) {
+                    if (M5Cardputer.Keyboard.isKeyPressed('y')) {
+                        if (deleteConfirmIndex >= 14 && deleteConfirmIndex < NUM_SATELLITES) {
+                            for (int i = deleteConfirmIndex; i < NUM_SATELLITES - 1; i++) {
+                                g_satellites[i] = g_satellites[i + 1];
+                            }
+                            NUM_SATELLITES--;
+                            if (focusSatIndex == deleteConfirmIndex) focusSatIndex = -1;
+                            else if (focusSatIndex > deleteConfirmIndex) focusSatIndex--;
+                            if (satSelectedIndex >= NUM_SATELLITES) satSelectedIndex = NUM_SATELLITES;
+                            saveCustomSatellites();
+                            
+                            // Retrigger prediction
+                            triggerPrediction = true;
+                            portENTER_CRITICAL(&passMutex);
+                            predictionsReady = false;
+                            portEXIT_CRITICAL(&passMutex);
+                        }
+                        deleteConfirmIndex = -1;
+                    } else if (M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed(27)) {
+                        deleteConfirmIndex = -1;
+                    }
+                } else if (satSelectedIndex == NUM_SATELLITES) {
+                    // Inputting NORAD ID
+                    if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+                        if (noradInput.length() > 0) noradInput.remove(noradInput.length() - 1);
+                        downloadErrorMsg = "";
+                    } else if (M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
+                        appState = STATE_MAIN;
+                    } else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
+                        if (satSelectedIndex > 0) satSelectedIndex--;
+                    } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                        if (noradInput.length() == 5 && !isDownloadingCustom) {
+                            isDownloadingCustom = true;
+                            drawSatSelectPage();
+                            earth_renderer->getCanvas()->pushSprite(0, 0);
+                            
+                            int id = noradInput.toInt();
+                            TLEData loaded_tle;
+                            if (TLEUpdater::getTLE(id, loaded_tle)) {
+                                SatProfile p;
+                                p.noradId = id;
+                                p.name = loaded_tle.name;
+                                p.color = TFT_WHITE;
+                                p.baseScore = 0;
+                                p.selected = true; // Auto select newly added custom sat
+                                p.iconType = ICON_SATELLITE;
+                                p.tle = loaded_tle;
+                                p.calc.init(p.tle);
+                                if (NUM_SATELLITES < MAX_SATELLITES) {
+                                    g_satellites[NUM_SATELLITES++] = p;
+                                    saveCustomSatellites();
+                                }
+                                noradInput = "";
+                                
+                                // Retrigger prediction
+                                triggerPrediction = true;
+                                portENTER_CRITICAL(&passMutex);
+                                predictionsReady = false;
+                                portEXIT_CRITICAL(&passMutex);
+                            } else {
+                                if (WiFi.status() != WL_CONNECTED) {
+                                    downloadErrorMsg = "Error: WiFi not connected! Press 'w' on main screen.";
+                                } else {
+                                    downloadErrorMsg = "Error: Download failed or ID not found.";
+                                }
+                            }
+                            isDownloadingCustom = false;
+                        }
+                    } else {
+                        for (auto c : M5Cardputer.Keyboard.keysState().word) {
+                            if (c >= '0' && c <= '9' && noradInput.length() < 5) {
+                                noradInput += c;
+                                downloadErrorMsg = "";
+                            }
+                        }
+                    }
+                } else {
+                    if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
+                        appState = STATE_MAIN;
+                        // Trigger predictor to rerun since selection might have changed
+                        portENTER_CRITICAL(&passMutex);
+                        predictionsReady = false;
+                        portEXIT_CRITICAL(&passMutex);
+                        triggerPrediction = true;
+                    } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                        g_satellites[satSelectedIndex].selected = !g_satellites[satSelectedIndex].selected;
+                    } else if (M5Cardputer.Keyboard.isKeyPressed('d') && satSelectedIndex >= 14) {
+                        deleteConfirmIndex = satSelectedIndex;
+                    } else if (M5Cardputer.Keyboard.isKeyPressed(';')) { // UP arrow
+                        if (satSelectedIndex > 0) satSelectedIndex--;
+                        else satSelectedIndex = NUM_SATELLITES; // Move to Add row
+                    } else if (M5Cardputer.Keyboard.isKeyPressed('.')) { // DOWN arrow
+                        satSelectedIndex = (satSelectedIndex + 1) % (NUM_SATELLITES + 1); // +1 for Add row
+                    }
                 }
             }
         }
@@ -1032,7 +1215,7 @@ void loop() {
             
             canvas->setTextColor(TFT_CYAN);
             int ty = y + 20;
-            canvas->drawString("[w/W]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("WiFi Toggle/Setup", x + 40, ty); ty += 12;
+            canvas->drawString("[w]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("WiFi Toggle", x + 30, ty); ty += 12;
             canvas->setTextColor(TFT_CYAN);
             canvas->drawString("[S]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Satellites", x + 35, ty); ty += 12;
             canvas->setTextColor(TFT_CYAN);
