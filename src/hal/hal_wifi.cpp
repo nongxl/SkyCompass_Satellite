@@ -1,13 +1,14 @@
 #include "hal_wifi.h"
+#include "core/log_manager.h"
 #include <time.h>
 
 void HalWifi::begin(const char* ssid, const char* password) {
     if (ssid == nullptr || strlen(ssid) == 0) {
-        Serial.println("WiFi SSID is empty, skipping WiFi connection.");
+        LOG_I("APP", "WiFi SSID is empty, skipping WiFi connection.");
         return;
     }
     
-    Serial.printf("\nConnecting to WiFi: %s\n", ssid);
+    LOG_I("APP", "Connecting to WiFi: %s", ssid);
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, password);
     
@@ -15,16 +16,15 @@ void HalWifi::begin(const char* ssid, const char* password) {
     int retries = 0;
     while (WiFi.status() != WL_CONNECTED && retries < 30) {
         delay(500);
-        Serial.print(".");
+        log_i(".");
         retries++;
     }
     
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("\nWiFi Connected!");
-        Serial.print("IP Address: ");
-        Serial.println(WiFi.localIP());
+        LOG_I("APP", "\nWiFi Connected!");
+        log_i("IP Address: %s", WiFi.localIP().toString().c_str());
     } else {
-        Serial.println("\nWiFi Connection Failed (Timeout).");
+        LOG_I("APP", "\nWiFi Connection Failed (Timeout).");
     }
 }
 
@@ -37,24 +37,23 @@ bool HalWifi::syncNTPTime(long gmtOffset_sec, int daylightOffset_sec) {
         return false;
     }
     
-    Serial.println("Syncing NTP time...");
+    LOG_I("APP", "Syncing NTP time...");
     configTime(gmtOffset_sec, daylightOffset_sec, "pool.ntp.org", "time.nist.gov");
     
     struct tm timeinfo;
     int retries = 0;
     while (!getLocalTime(&timeinfo) && retries < 10) {
         delay(500);
-        Serial.print(".");
+        log_i(".");
         retries++;
     }
     
     if (retries < 10) {
-        Serial.println("\nTime synced successfully!");
-        Serial.print("Current time: ");
-        Serial.println(asctime(&timeinfo));
+        LOG_I("APP", "\nTime synced successfully!");
+        log_i("Current time: %s", asctime(&timeinfo));
         return true;
     } else {
-        Serial.println("\nFailed to sync NTP time.");
+        LOG_I("APP", "\nFailed to sync NTP time.");
         return false;
     }
 }
@@ -73,14 +72,14 @@ uint32_t HalWifi::getUnixTime() {
 
 std::vector<WiFiNetwork> HalWifi::scanNetworks() {
     std::vector<WiFiNetwork> networks;
-    Serial.println("Scanning WiFi networks...");
+    LOG_I("APP", "Scanning WiFi networks...");
     
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     delay(100);
     
     int n = WiFi.scanNetworks();
-    Serial.printf("Found %d networks\n", n);
+    LOG_I("APP", "Found %d networks", n);
     
     if (n > 0) {
         for (int i = 0; i < n; ++i) {
@@ -100,7 +99,7 @@ void HalWifi::saveCredentials(const String& ssid, const String& password) {
     prefs.putString("ssid", ssid);
     prefs.putString("pass", password);
     prefs.end();
-    Serial.println("WiFi credentials saved to NVS.");
+    LOG_I("APP", "WiFi credentials saved to NVS.");
 }
 
 bool HalWifi::loadCredentials(String& outSsid, String& outPassword) {
@@ -116,5 +115,5 @@ bool HalWifi::loadCredentials(String& outSsid, String& outPassword) {
 void HalWifi::disconnect() {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
-    Serial.println("WiFi disconnected and turned off.");
+    LOG_I("APP", "WiFi disconnected and turned off.");
 }

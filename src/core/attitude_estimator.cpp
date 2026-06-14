@@ -1,4 +1,5 @@
 #include "attitude_estimator.h"
+#include "core/log_manager.h"
 #include <math.h>
 
 /**
@@ -40,20 +41,20 @@ bool AttitudeEstimator::begin() {
     if (_imu) {
         ImuData imuData = _imu->getData();
         if (imuData.status == IMU_STATUS_READY) {
-            Serial.println("[AttitudeEstimator] IMU already initialized");
+            LOG_I("AttitudeEstimator", "IMU already initialized");
             initVirtualHeading();
             return true;
         } else {
-            Serial.println("[AttitudeEstimator] Initializing IMU...");
+            LOG_I("AttitudeEstimator", "Initializing IMU...");
             if (_imu->begin()) {
                 initVirtualHeading();
                 return true;
             }
-            Serial.println("[AttitudeEstimator] IMU initialization failed!");
+            LOG_I("AttitudeEstimator", "IMU initialization failed!");
             return false;
         }
     }
-    Serial.println("[AttitudeEstimator] No IMU instance!");
+    LOG_I("AttitudeEstimator", "No IMU instance!");
     return false;
 }
 
@@ -124,7 +125,7 @@ AttitudeData AttitudeEstimator::getAttitude() {
  * @brief 校准偏航角（设置当前方向为参考方向）
  */
 void AttitudeEstimator::calibrateHeading() {
-    Serial.println("[Attitude] Calibrating - setting reference orientation...");
+    LOG_I("Attitude", "Calibrating - setting reference orientation...");
     if (_imu) {
         _imu->calibrate();
     }
@@ -250,12 +251,12 @@ void AttitudeEstimator::enableNonlinearScaling(bool enable) {
  * 在系统启动或用户触发校准时调用
  */
 void AttitudeEstimator::initVirtualHeading() {
-    Serial.print("[DEBUG] Initializing virtual heading. Current yaw: ");
-    Serial.println(_attitude.yaw);
+//     log_i("[DEBUG] Initializing virtual heading. Current yaw: ");
+//     log_i("%s", String(_attitude.yaw).c_str());
     // 记录当前IMU Yaw作为参考值
     _yawReference = _attitude.yaw;
-    Serial.print("[DEBUG] Set yawReference: ");
-    Serial.println(_yawReference);
+//     log_i("[DEBUG] Set yawReference: ");
+//     log_i("%s", String(_yawReference).c_str());
 }
 
 /**

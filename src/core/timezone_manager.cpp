@@ -1,4 +1,5 @@
 #include "timezone_manager.h"
+#include "core/log_manager.h"
 #include <ArduinoJson.h>
 
 #if __has_include("timezone_grid.h")
@@ -19,23 +20,23 @@ void TimezoneManager::begin() {
     
     // 从NVS读取上次的时区（默认东八区：28800）
     _currentOffset = _preferences.getInt("offset", 8 * 3600);
-    Serial.printf("[TimezoneManager] Loaded offset from NVS: %d seconds (UTC%+d)\n", _currentOffset, _currentOffset / 3600);
+    LOG_I("TimezoneManager", "Loaded offset from NVS: %d seconds (UTC%+d)", _currentOffset, _currentOffset / 3600);
 }
 
 void TimezoneManager::setTimezoneOffset(int offsetSeconds) {
     _currentOffset = offsetSeconds;
     _isOnlineOffsetValid = true;
     _preferences.putInt("offset", _currentOffset);
-    Serial.printf("[TimezoneManager] Forced offset to: %d seconds (UTC%+d)\n", _currentOffset, _currentOffset / 3600);
+    LOG_I("TimezoneManager", "Forced offset to: %d seconds (UTC%+d)", _currentOffset, _currentOffset / 3600);
 }
 
 bool TimezoneManager::updateOnlineTimezone() {
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[TimezoneManager] WiFi not connected. Cannot fetch online timezone.");
+        LOG_I("TimezoneManager", "WiFi not connected. Cannot fetch online timezone.");
         return false;
     }
 
-    Serial.println("[TimezoneManager] Fetching timezone from ip-api.com...");
+    LOG_I("TimezoneManager", "Fetching timezone from ip-api.com...");
     HTTPClient http;
     // 使用 fields 参数仅获取需要的数据，减少解析负担
     http.begin("http://ip-api.com/json/?fields=status,offset");
@@ -63,20 +64,20 @@ bool TimezoneManager::updateOnlineTimezone() {
                         
                         // 保存到 NVS
                         _preferences.putInt("offset", _currentOffset);
-                        Serial.printf("[TimezoneManager] Online timezone updated: %d seconds (UTC%+d)\n", _currentOffset, _currentOffset / 3600);
+                        LOG_I("TimezoneManager", "Online timezone updated: %d seconds (UTC%+d)", _currentOffset, _currentOffset / 3600);
                     } else {
-                        Serial.println("[TimezoneManager] Online timezone unchanged.");
+                        LOG_I("TimezoneManager", "Online timezone unchanged.");
                     }
                     success = true;
                 }
             } else {
-                Serial.println("[TimezoneManager] API returned fail status.");
+                LOG_I("TimezoneManager", "API returned fail status.");
             }
         } else {
-            Serial.printf("[TimezoneManager] JSON parsing failed: %s\n", error.c_str());
+//             log_i("[TimezoneManager] JSON parsing failed: %s\n", error.c_str());
         }
     } else {
-        Serial.printf("[TimezoneManager] HTTP request failed, code: %d\n", httpCode);
+        LOG_I("TimezoneManager", "HTTP request failed, code: %d", httpCode);
     }
     
     http.end();

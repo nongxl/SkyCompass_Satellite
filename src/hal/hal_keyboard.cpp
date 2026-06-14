@@ -1,4 +1,5 @@
 #include "hal_keyboard.h"
+#include "core/log_manager.h"
 #include <M5Cardputer.h>
 
 /**
@@ -58,7 +59,7 @@ public:
             return KEY_DELETE;
         }
         if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
-            Serial.println("[Keyboard] ENTER key detected");
+            LOG_I("Keyboard", "ENTER key detected");
             return KEY_OK;
         }
         

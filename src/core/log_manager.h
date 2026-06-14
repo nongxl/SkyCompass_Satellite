@@ -2,6 +2,9 @@
 #define LOG_MANAGER_H
 
 #include <Arduino.h>
+#include <esp32-hal-log.h>
+
+#define LOG_I(tag, format, ...) log_i("[%s] " format, tag, ##__VA_ARGS__)
 
 /**
  * @brief 日志管理器类

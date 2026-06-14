@@ -1,4 +1,5 @@
 #include "moon_calculator.h"
+#include "core/log_manager.h"
 #include "log_manager.h"
 #include <math.h>
 
@@ -180,57 +181,57 @@ MoonPositionData MoonCalculator::calculatePosition(uint32_t timestamp, double la
     
     // 只有在需要时才输出详细计算链条
     if (shouldLog) {
-        Serial.println("[MoonCalculator] ====== 月亮计算链条 ======");
-        Serial.print("[MoonCalculator] Date (UTC): ");
-        Serial.print(year + 2000);
-        Serial.print("/");
-        Serial.print(month);
-        Serial.print("/");
-        Serial.print(day);
-        Serial.print(" ");
-        Serial.print(hours);
-        Serial.print(":");
-        Serial.print(minutes);
-        Serial.print(":");
-        Serial.println(seconds);
+        LOG_I("MoonCalculator", "====== 月亮计算链条 ======");
+//         log_i("[MoonCalculator] Date (UTC): ");
+//         log_i("%s", String(year + 2000).c_str());
+//         log_i("/");
+//         log_i("%s", String(month).c_str());
+//         log_i("/");
+//         log_i("%s", String(day).c_str());
+//         log_i(" ");
+//         log_i("%s", String(hours).c_str());
+//         log_i(":");
+//         log_i("%s", String(minutes).c_str());
+//         log_i(":");
+//         log_i("%s", String(seconds).c_str());
         
         // 增加本地时间输出
         TimeData localTime = _positionManager->getLocalTimeData(timestamp);
-        Serial.print("[MoonCalculator] Date (Local): ");
-        Serial.print(localTime.year + 2000);
-        Serial.print("/");
-        Serial.print(localTime.month);
-        Serial.print("/");
-        Serial.print(localTime.day);
-        Serial.print(" ");
-        Serial.print(localTime.hour);
-        Serial.print(":");
-        Serial.print(localTime.minute);
-        Serial.print(":");
-        Serial.println(localTime.second);
-        Serial.print("[MoonCalculator] Julian Day: ");
-        Serial.println(julianDay, 4);
-        Serial.print("[MoonCalculator] Julian Century: ");
-        Serial.println(jc, 8);
-        Serial.print("[MoonCalculator] Mean Longitude: ");
-        Serial.print(L, 2);
-        Serial.println("°");
-        Serial.print("[MoonCalculator] Mean Anomaly: ");
-        Serial.print(M, 2);
-        Serial.println("°");
-        Serial.print("[MoonCalculator] Right Ascension (RA): ");
-        Serial.print(result.ra, 2);
-        Serial.println("°");
-        Serial.print("[MoonCalculator] Declination (Dec): ");
-        Serial.print(result.dec, 2);
-        Serial.println("°");
-        Serial.print("[MoonCalculator] Latitude: ");
-        Serial.print(latitude, 2);
-        Serial.print("°, Altitude: ");
-        Serial.print(result.altitude, 2);
-        Serial.print("°, Azimuth: ");
-        Serial.println(result.azimuth, 2);
-        Serial.println("[MoonCalculator] ==========================");
+//         log_i("[MoonCalculator] Date (Local): ");
+//         log_i("%s", String(localTime.year + 2000).c_str());
+//         log_i("/");
+//         log_i("%s", String(localTime.month).c_str());
+//         log_i("/");
+//         log_i("%s", String(localTime.day).c_str());
+//         log_i(" ");
+//         log_i("%s", String(localTime.hour).c_str());
+//         log_i(":");
+//         log_i("%s", String(localTime.minute).c_str());
+//         log_i(":");
+//         log_i("%s", String(localTime.second).c_str());
+//         log_i("[MoonCalculator] Julian Day: ");
+//         log_i("%s", String(julianDay, 4).c_str());
+//         log_i("[MoonCalculator] Julian Century: ");
+//         log_i("%s", String(jc, 8).c_str());
+//         log_i("[MoonCalculator] Mean Longitude: ");
+//         log_i("%s", String(L, 2).c_str());
+        LOG_I("APP", "°");
+//         log_i("[MoonCalculator] Mean Anomaly: ");
+//         log_i("%s", String(M, 2).c_str());
+        LOG_I("APP", "°");
+//         log_i("[MoonCalculator] Right Ascension (RA): ");
+//         log_i("%s", String(result.ra, 2).c_str());
+        LOG_I("APP", "°");
+//         log_i("[MoonCalculator] Declination (Dec): ");
+//         log_i("%s", String(result.dec, 2).c_str());
+        LOG_I("APP", "°");
+//         log_i("[MoonCalculator] Latitude: ");
+//         log_i("%s", String(latitude, 2).c_str());
+//         log_i("°, Altitude: ");
+//         log_i("%s", String(result.altitude, 2).c_str());
+//         log_i("°, Azimuth: ");
+//         log_i("%s", String(result.azimuth, 2).c_str());
+        LOG_I("MoonCalculator", "==========================");
     }
     
     return result;

@@ -1,4 +1,5 @@
 #include "sun_calculator.h"
+#include "core/log_manager.h"
 #include "log_manager.h"
 #include <math.h>
 
@@ -159,86 +160,10 @@ SunPositionData SunCalculator::calculatePosition(uint32_t timestamp, double lati
     
     // 只有在需要时才输出详细计算链条
     if (shouldLog) {
-        Serial.println("[SunCalculator] ====== 太阳计算链条 ======");
-        Serial.print("[SunCalculator] Date (UTC): ");
-        Serial.print(year + 2000);
-        Serial.print("/");
-        Serial.print(month);
-        Serial.print("/");
-        Serial.print(day);
-        Serial.print(" ");
-        Serial.print(hours);
-        Serial.print(":");
-        Serial.print(minutes);
-        Serial.print(":");
-        Serial.println(seconds);
-        
-        // 增加本地时间输出
-        if (_positionManager != nullptr) {
-            TimeData localTime = _positionManager->getLocalTimeData(timestamp);
-            Serial.print("[SunCalculator] Date (Local): ");
-            Serial.print(localTime.year + 2000);
-            Serial.print("/");
-            Serial.print(localTime.month);
-            Serial.print("/");
-            Serial.print(localTime.day);
-            Serial.print(" ");
-            Serial.print(localTime.hour);
-            Serial.print(":");
-            Serial.print(localTime.minute);
-            Serial.print(":");
-            Serial.println(localTime.second);
-        }
-        Serial.print("[SunCalculator] Julian Day: ");
-        Serial.println(julianDay, 4);
-        Serial.print("[SunCalculator] Julian Century: ");
-        Serial.println(jc, 8);
-        Serial.print("[SunCalculator] Mean Longitude: ");
-        Serial.print(meanLongitude, 2);
-        Serial.println("°");
-        Serial.print("[SunCalculator] Mean Anomaly: ");
-        Serial.print(meanAnomaly, 2);
-        Serial.println("°");
-        Serial.print("[SunCalculator] Apparent Longitude (λ): ");
-        Serial.print(apparentLongitude, 2);
-        Serial.println("°");
-        Serial.print("[SunCalculator] Obliquity (ε): ");
-        Serial.print(correctedObliquity, 2);
-        Serial.println("°");
-        Serial.print("[SunCalculator] Right Ascension (RA): ");
-        Serial.print(rightAscension, 2);
-        Serial.println("°");
-        Serial.print("[SunCalculator] Declination (Dec): ");
-        Serial.print(declination, 2);
-        Serial.println("°");
-        Serial.print("[SunCalculator] GMST: ");
-        Serial.print(greenwichMeanSiderealTime, 2);
-        Serial.println("°");
-        Serial.print("[SunCalculator] LST: ");
-        Serial.print(localSiderealTime, 2);
-        Serial.println("°");
-        Serial.print("[SunCalculator] Hour Angle (H = LST - RA): ");
-        Serial.print(localHourAngle, 2);
-        Serial.println("°");
-        Serial.print("[SunCalculator] Latitude: ");
-        Serial.print(latitude, 2);
-        Serial.print("°, Declination: ");
-        Serial.print(declination, 2);
-        Serial.print("°, LocalHourAngle: ");
-        Serial.print(localHourAngle, 2);
-        Serial.print("°, Altitude: ");
-        Serial.print(altitude, 2);
-        Serial.print("°, Azimuth: ");
-        Serial.println(azimuth, 2);
-        Serial.print("[SunCalculator] Altitude: ");
-        Serial.print(altitude, 2);
-        Serial.println("°");
-        Serial.print("[SunCalculator] Azimuth (0°=N, 90°=E, 180°=S, 270°=W): ");
-        Serial.print(azimuth, 2);
-        Serial.println("°");
-        Serial.println("[SunCalculator] ==========================");
+        // Logging temporarily disabled by user request
     }
     
+
     return result;
 }
 

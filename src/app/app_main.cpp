@@ -1,4 +1,5 @@
 #include "app_main.h"
+#include "core/log_manager.h"
 #include "hal/hal_gnss.h"
 #include "hal/hal_imu.h"
 #include "hal/hal_display.h"
@@ -138,7 +139,7 @@ void AppMain::run() {
             
             // 获取到新数据后自动关闭GNSS模块
             if (hadNewData) {
-                Serial.println("[GNSS] New data acquired, auto-disabling GNSS module");
+                LOG_I("GNSS", "New data acquired, auto-disabling GNSS module");
                 
                 // 更新位置和时间数据
                 if (_positionManager) {
@@ -156,7 +157,7 @@ void AppMain::run() {
                 
                 // 自动关闭GNSS模块以省电
                 _gnss->disable();
-                Serial.println("[GNSS] GNSS module auto-disabled after new data");
+                LOG_I("GNSS", "GNSS module auto-disabled after new data");
             }
         }
     }
@@ -191,8 +192,7 @@ void AppMain::run() {
             // 每10次渲染才打印一次渲染耗时，避免覆盖其他调试信息
             //static int renderCount = 0;
             //if (renderCount % 10 == 0) {
-            //    Serial.printf("[DEBUG] Render Time | Time: %lu | Delta: %lu ms\n", 
-            //                  renderEndTime, renderEndTime - renderStartTime);
+            //    LOG_I("DEBUG", "Render Time | Time: %lu | Delta: %lu ms", //                  renderEndTime, renderEndTime - renderStartTime);
             //}
             //renderCount++;
             
@@ -223,7 +223,7 @@ void AppMain::stop() {
  * @return 初始化是否成功
  */
 bool AppMain::initHardware() {
-    Serial.println(F("[APP] initHardware() starting..."));
+    LOG_I("APP", "initHardware() starting...");
     Serial.flush();
     
     _gnss = gnss;
@@ -233,63 +233,63 @@ bool AppMain::initHardware() {
     
     bool allSuccess = true;
     
-    Serial.println(F("[APP] Initializing GNSS..."));
+    LOG_I("APP", "Initializing GNSS...");
     Serial.flush();
     if (_gnss) {
         if (!_gnss->begin()) {
-            Serial.println(F("[APP] GNSS initialization failed!"));
+            LOG_I("APP", "GNSS initialization failed!");
             allSuccess = false;
         } else {
-            Serial.println(F("[APP] GNSS initialized successfully"));
+            LOG_I("APP", "GNSS initialized successfully");
         }
     } else {
-        Serial.println(F("[APP] GNSS instance is NULL!"));
+        LOG_I("APP", "GNSS instance is NULL!");
     }
     Serial.flush();
     
-    Serial.println(F("[APP] Initializing IMU..."));
+    LOG_I("APP", "Initializing IMU...");
     Serial.flush();
     if (_imu) {
         if (!_imu->begin()) {
-            Serial.println(F("[APP] IMU initialization failed!"));
+            LOG_I("APP", "IMU initialization failed!");
             allSuccess = false;
         } else {
-            Serial.println(F("[APP] IMU initialized successfully"));
+            LOG_I("APP", "IMU initialized successfully");
         }
     } else {
-        Serial.println(F("[APP] IMU instance is NULL!"));
+        LOG_I("APP", "IMU instance is NULL!");
     }
     Serial.flush();
     
-    Serial.println(F("[APP] Initializing Display..."));
+    LOG_I("APP", "Initializing Display...");
     Serial.flush();
     if (_display) {
         if (!_display->begin()) {
-            Serial.println(F("[APP] Display initialization failed!"));
+            LOG_I("APP", "Display initialization failed!");
             allSuccess = false;
         } else {
-            Serial.println(F("[APP] Display initialized successfully"));
+            LOG_I("APP", "Display initialized successfully");
         }
     } else {
-        Serial.println(F("[APP] Display instance is NULL!"));
+        LOG_I("APP", "Display instance is NULL!");
     }
     Serial.flush();
     
-    Serial.println(F("[APP] Initializing Keyboard..."));
+    LOG_I("APP", "Initializing Keyboard...");
     Serial.flush();
     if (_keyboard) {
         if (!_keyboard->begin()) {
-            Serial.println(F("[APP] Keyboard initialization failed!"));
+            LOG_I("APP", "Keyboard initialization failed!");
             allSuccess = false;
         } else {
-            Serial.println(F("[APP] Keyboard initialized successfully"));
+            LOG_I("APP", "Keyboard initialized successfully");
         }
     } else {
-        Serial.println(F("[APP] Keyboard instance is NULL!"));
+        LOG_I("APP", "Keyboard instance is NULL!");
     }
     Serial.flush();
     
-    Serial.println(F("[APP] initHardware() complete"));
+    LOG_I("APP", "initHardware() complete");
     Serial.flush();
     
     return allSuccess;
@@ -358,7 +358,7 @@ bool AppMain::initCoreModules() {
         }
         // 显式启用虚拟航向
         _attitudeEstimator->enableVirtualHeading(true);
-        Serial.println("[DEBUG] Virtual heading enabled");
+        LOG_I("DEBUG", "Virtual heading enabled");
     }
     
     // 初始化UI管理器
@@ -378,23 +378,23 @@ bool AppMain::initCoreModules() {
     if (_display && _positionManager) {
         _view3DRenderer = new View3DRenderer();
         if (!_view3DRenderer) {
-            Serial.println("[APP] View3DRenderer creation failed!");
+            LOG_I("APP", "View3DRenderer creation failed!");
             return false;
         }
         if (!_view3DRenderer->begin(_display)) {
-            Serial.println("[APP] View3DRenderer begin failed!");
+            LOG_I("APP", "View3DRenderer begin failed!");
             delete _view3DRenderer;
             _view3DRenderer = nullptr;
             return false;
         }
-        Serial.println("[APP] View3DRenderer initialized successfully");
+        LOG_I("APP", "View3DRenderer initialized successfully");
         
         // 设置UI管理器的3D渲染器指针
         if (_uiManager) {
             _uiManager->setView3DRenderer(_view3DRenderer);
         }
     } else {
-        Serial.println("[APP] View3DRenderer creation skipped - missing dependencies");
+        LOG_I("APP", "View3DRenderer creation skipped - missing dependencies");
     }
     
     return true;

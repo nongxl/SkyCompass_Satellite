@@ -1,4 +1,5 @@
 #include "ui_manager.h"
+#include "core/log_manager.h"
 #include "app/time_machine.h"
 #include "core/sky_hemisphere.h"
 #include "hal/hal_gnss.h"
@@ -175,7 +176,7 @@ void UIManager::handleInput() {
 }
 
 void UIManager::setView3DRenderer(View3DRenderer* renderer) {
-    Serial.printf("[UIManager] setView3DRenderer called with renderer: %p\n", renderer);
+    LOG_I("UIManager", "setView3DRenderer called with renderer: %p", renderer);
     _view3DRenderer = renderer;
     if (_view3DRenderer) {
         _view3DRenderer->setSunCalculator(_sunCalculator);
@@ -183,7 +184,7 @@ void UIManager::setView3DRenderer(View3DRenderer* renderer) {
         _view3DRenderer->setCelestialCore(_celestialCore);
         _view3DRenderer->setPositionManager(_positionManager);
         _view3DRenderer->setTimeMachine(_timeMachine);
-        Serial.println("[UIManager] View3DRenderer set successfully");
+        LOG_I("UIManager", "View3DRenderer set successfully");
     }
 }
 
@@ -317,8 +318,7 @@ void UIManager::applyPositionSettings() {
         _positionManager->setManualPosition(pos);
         _positionManager->enableManualPosition(true);
         
-        Serial.printf("[UIManager] Applied manual position: %.6f, %.6f, %.1f\n", 
-            _editLongitude, _editLatitude, _editAltitude);
+        LOG_I("UIManager", "Applied manual position: %.6f, %.6f, %.1f", _editLongitude, _editLatitude, _editAltitude);
         
         // 重新绘制主页面以更新天体轨迹
         drawMainPage();
@@ -403,23 +403,23 @@ void UIManager::applySettings() {
     
     // 验证经纬度范围
     if (longitude < -180.0 || longitude > 180.0) {
-        Serial.println("[UIManager] Invalid longitude value");
+        LOG_I("UIManager", "Invalid longitude value");
         return; // 经度超出范围
     }
     if (latitude < -90.0 || latitude > 90.0) {
-        Serial.println("[UIManager] Invalid latitude value");
+        LOG_I("UIManager", "Invalid latitude value");
         return; // 纬度超出范围
     }
     
     // 验证海拔范围
     if (altitude < -1000.0 || altitude > 8848.0) {
-        Serial.println("[UIManager] Invalid altitude value");
+        LOG_I("UIManager", "Invalid altitude value");
         return; // 海拔超出范围
     }
     
     // 验证输入是否为空或无效
     if (strlen(_settingsInputBuffer[0]) == 0 || strlen(_settingsInputBuffer[1]) == 0 || strlen(_settingsInputBuffer[2]) == 0) {
-        Serial.println("[UIManager] Empty input value");
+        LOG_I("UIManager", "Empty input value");
         return; // 输入为空
     }
     
@@ -433,8 +433,7 @@ void UIManager::applySettings() {
         _positionManager->setManualPosition(pos);
         _positionManager->enableManualPosition(true);
         
-        Serial.printf("[UIManager] Applied manual position: %.6f, %.6f, %.1f\n", 
-            longitude, latitude, altitude);
+        LOG_I("UIManager", "Applied manual position: %.6f, %.6f, %.1f", longitude, latitude, altitude);
     }
     
     drawMainPage();
@@ -490,11 +489,11 @@ void UIManager::drawMainPage() {
     
     // 只使用 3D 渲染，不使用 2D 渲染
     if (!_view3DRenderer) {
-        Serial.println("[UIManager] _view3DRenderer is nullptr, skipping render");
+        LOG_I("UIManager", "_view3DRenderer is nullptr, skipping render");
         return;
     }
     
-    //Serial.println("[UIManager] Using 3D render path");
+    //LOG_I("UIManager", "Using 3D render path");
     
     float roll = 0.0, pitch = 0.0, yaw = heading;
     if (_attitudeEstimator) {

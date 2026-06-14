@@ -1,4 +1,5 @@
 #include "celestial_core.h"
+#include "core/log_manager.h"
 #include "log_manager.h"
 #include <math.h>
 
@@ -120,17 +121,17 @@ CelestialVector CelestialCore::calculateGalaxyCenter(uint32_t time_utc, double l
         // 注释掉详尽的串口输出，防止长按快进时造成串口阻塞而导致的系统卡顿
         double lst = fmod(280.46061837 + 360.98564736629 * (julianDay - 2451545.0) + 0.000387933 * jc * jc + lon, 360.0);
         if (lst < 0) lst += 360.0;
-        Serial.println("[CelestialCore] ====== 银河中心计算链条 ======");
-        Serial.print("[CelestialCore] Date (UTC): ");
-        Serial.print(year + 2000);
-        Serial.print("/"); Serial.print(month); Serial.print("/"); Serial.print(day);
-        Serial.print(" "); Serial.print(hours); Serial.print(":"); Serial.print(minutes);
-        Serial.print(":"); Serial.println(seconds);
-        Serial.print("[CelestialCore] Julian Day: "); Serial.println(julianDay, 4);
-        Serial.print("[CelestialCore] LST: "); Serial.print(lst, 2); Serial.println("°");
-        Serial.print("[CelestialCore] Azimuth: "); Serial.print(res.azimuth * RAD_TO_DEG, 2);
-        Serial.print("°, Altitude: "); Serial.println(res.altitude * RAD_TO_DEG, 2);
-        Serial.println("[CelestialCore] ==========================");
+        LOG_I("CelestialCore", "====== 银河中心计算链条 ======");
+//         log_i("[CelestialCore] Date (UTC): ");
+//         log_i("%s", String(year + 2000).c_str());
+//         log_i("/"); log_i("%s", String(month).c_str()); log_i("/"); log_i("%s", String(day).c_str());
+//         log_i(" "); log_i("%s", String(hours).c_str()); log_i(":"); log_i("%s", String(minutes).c_str());
+//         log_i(":"); log_i("%s", String(seconds).c_str());
+//         log_i("[CelestialCore] Julian Day: "); log_i("%s", String(julianDay, 4).c_str());
+//         log_i("[CelestialCore] LST: "); log_i("%s", String(lst, 2).c_str()); LOG_I("APP", "°");
+//         log_i("[CelestialCore] Azimuth: "); log_i("%s", String(res.azimuth * RAD_TO_DEG, 2).c_str());
+//         log_i("°, Altitude: "); log_i("%s", String(res.altitude * RAD_TO_DEG, 2).c_str());
+        LOG_I("CelestialCore", "==========================");
     }
     
     return res;

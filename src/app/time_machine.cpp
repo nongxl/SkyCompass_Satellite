@@ -1,4 +1,5 @@
 #include "time_machine.h"
+#include "core/log_manager.h"
 
 /**
  * @brief 构造函数
@@ -48,16 +49,15 @@ void TimeMachine::activate() {
         _targetTime.hour = utcHour;
         _targetTime.minute = utcMinute;
         
-        Serial.println("[DEBUG] TimeMachine: Using default local time (2026-05-10 22:00:00)");
+        LOG_I("DEBUG", "TimeMachine: Using default local time (2026-05-10 22:00:00)");
     }
     
     // 设置手动时间
     _positionManager->setManualTime(_targetTime);
     // 启用手动时间
     _positionManager->enableManualTime(true);
-    Serial.println("[DEBUG] TimeMachine activated");
-    Serial.printf("[DEBUG] Target time: %04d-%02d-%02d %02d:%02d:%02d\n", 
-                  _targetTime.year + 2000, _targetTime.month, _targetTime.day,
+    LOG_I("DEBUG", "TimeMachine activated");
+    LOG_I("DEBUG", "Target time: %04d-%02d-%02d %02d:%02d:%02d", _targetTime.year + 2000, _targetTime.month, _targetTime.day,
                   _targetTime.hour, _targetTime.minute, _targetTime.second);
     Serial.flush();
 }

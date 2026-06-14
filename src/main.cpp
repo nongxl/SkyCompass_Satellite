@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "core/log_manager.h"
 #include <M5Cardputer.h>
 #include "core/tle_data.h"
 #include "core/sgp4_calc.h"
@@ -245,7 +246,7 @@ void networkTask(void* parameter) {
     }
     
     if (ssid.length() == 0) {
-        Serial.println("No WiFi credentials available. Falling back to WiFi Setup.");
+        LOG_I("APP", "No WiFi credentials available. Falling back to WiFi Setup.");
         appState = STATE_WIFI_SETUP;
         wifiIsScanning = true;
         wifiIsInputtingPassword = false;
@@ -257,7 +258,7 @@ void networkTask(void* parameter) {
     HalWifi::begin(ssid.c_str(), pass.c_str());
     
     if (!HalWifi::isConnected()) {
-        Serial.println("WiFi connection failed. Falling back to WiFi Setup.");
+        LOG_I("APP", "WiFi connection failed. Falling back to WiFi Setup.");
         appState = STATE_WIFI_SETUP;
         wifiIsScanning = true;
         wifiIsInputtingPassword = false;
@@ -279,7 +280,7 @@ void networkTask(void* parameter) {
         uint32_t ntpTime = HalWifi::getUnixTime();
         if (ntpTime > 0) {
             current_unix = ntpTime;
-            Serial.printf("Time synced to UTC: %u\n", current_unix);
+            LOG_I("APP", "Time synced to UTC: %u", current_unix);
         }
 
         // IP Geolocation removed per user request (relies on GNSS/cache instead)
@@ -298,7 +299,7 @@ void networkTask(void* parameter) {
         }
         
         if (updated) {
-            Serial.println("TLE Data is ready and models updated!");
+            LOG_I("APP", "TLE Data is ready and models updated!");
             
             // Rerun predictor with new data
             portENTER_CRITICAL(&passMutex);
@@ -307,10 +308,10 @@ void networkTask(void* parameter) {
             triggerPrediction = true;
         }
         if (!manualWifiToggle) {
-            Serial.println("Network tasks complete. Turning off WiFi to save power.");
+            LOG_I("APP", "Network tasks complete. Turning off WiFi to save power.");
             HalWifi::disconnect();
         } else {
-            Serial.println("Network tasks complete. WiFi remains connected.");
+            LOG_I("APP", "Network tasks complete. WiFi remains connected.");
         }
     }
     vTaskDelete(NULL);
@@ -332,7 +333,7 @@ void setup() {
     
     Serial.begin(115200);
     // Remove the 4 second delay to boot instantly
-    Serial.println(F("\n\n--- SkyCompass Satellite: Phase 4 ---"));
+    LOG_I("APP", "\n\n--- SkyCompass Satellite: Phase 4 ---");
 
     auto cfg = M5.config();
     M5Cardputer.begin(cfg, true);
@@ -344,7 +345,7 @@ void setup() {
     if (imu && imu->begin()) {
         attitude = new AttitudeEstimator(imu);
         attitude->begin();
-        Serial.println(F("IMU Initialized"));
+        LOG_I("APP", "IMU Initialized");
     }
     
     // Initialize Position & Sun Calculator
@@ -381,7 +382,7 @@ void setup() {
     
     // Set default offline time to mock anchor if still 0
     current_unix = TLEManager::getMockTimeAnchor();
-    Serial.println("Offline boot: Loaded cached TLEs. Using Mock Time Anchor.");
+    LOG_I("APP", "Offline boot: Loaded cached TLEs. Using Mock Time Anchor.");
     
     // Load Custom Satellites from Preferences
     Preferences prefs;
@@ -405,7 +406,7 @@ void setup() {
             
             int id = idStr.toInt();
             if (id > 0) {
-                Serial.printf("Loading Custom: %d\n", id);
+                LOG_I("APP", "Loading Custom: %d", id);
                 TLEData loaded_tle;
                 if (TLEUpdater::getTLE(id, loaded_tle)) {
                     SatProfile p;
@@ -1019,7 +1020,7 @@ void loop() {
                 if (gData.timeValid && gData.dateValid && !gnssTimeSynced) {
                     current_unix = convertGNSSDateToUnix(gData.year, gData.month, gData.day, gData.hour, gData.minute, gData.second);
                     gnssTimeSynced = true;
-                    Serial.printf("Time synced to GNSS UTC: %u\n", current_unix);
+                    LOG_I("APP", "Time synced to GNSS UTC: %u", current_unix);
                     
                     // Trigger predictor again with correct time
                     portENTER_CRITICAL(&passMutex);
@@ -1029,12 +1030,12 @@ void loop() {
                 }
                 
                 gnssTimedOut = false;
-                Serial.println("GNSS Locked. Location/Time synced. Entering standby mode to save power.");
+                LOG_I("APP", "GNSS Locked. Location/Time synced. Entering standby mode to save power.");
                 gnss->enterStandbyMode();
             } else {
                 unsigned long timeoutDuration = gnssManualMode ? 600000 : 300000;
                 if (millis() - gnssStartTime > timeoutDuration) {
-                    Serial.println("GNSS Timeout. Entering standby mode to save power.");
+                    LOG_I("APP", "GNSS Timeout. Entering standby mode to save power.");
                     gnssTimedOut = true;
                     gnss->enterStandbyMode();
                 }

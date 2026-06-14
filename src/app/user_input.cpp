@@ -1,4 +1,5 @@
 #include "user_input.h"
+#include "core/log_manager.h"
 #include <M5Cardputer.h>
 
 /**
@@ -38,11 +39,11 @@ void UserInput::toggleGnssModule() {
         if (isEnabled) {
             // 禁用GNSS模块
             _gnss->disable();
-            Serial.println("[GNSS] GNSS module disabled");
+            LOG_I("GNSS", "GNSS module disabled");
         } else {
             // 启用GNSS模块
             _gnss->enable();
-            Serial.println("[GNSS] GNSS module enabled");
+            LOG_I("GNSS", "GNSS module enabled");
         }
         
         // 根据当前页面重绘界面，显示GNSS状态
@@ -52,7 +53,7 @@ void UserInput::toggleGnssModule() {
             _uiManager->setPage(PAGE_TIDE); // 重新设置页面以触发重绘
         }
     } else {
-        Serial.println("[GNSS] GNSS module is null");
+        LOG_I("GNSS", "GNSS module is null");
     }
 }
 
@@ -143,11 +144,10 @@ void UserInput::handleMainPageInput(Key key) {
         case KEY_S: // S键控制GNSS模块开关 (增加独立长防抖)
             if (currentTime - _lastSKeyTime >= _functionKeyDelay) {
                 _lastSKeyTime = currentTime;
-                Serial.println("[UserInput] S key pressed, toggling GNSS module");
+                LOG_I("UserInput", "S key pressed, toggling GNSS module");
                 toggleGnssModule();
             } else {
-                Serial.printf("[UserInput] S key ignored, time since last press: %lu ms (need %lu ms)\n", 
-                          currentTime - _lastSKeyTime, _functionKeyDelay);
+                LOG_I("UserInput", "S key ignored, time since last press: %lu ms (need %lu ms)", currentTime - _lastSKeyTime, _functionKeyDelay);
             }
             break;
         case KEY_F: // F键校准方向 (增加独立长防抖)
@@ -301,7 +301,7 @@ void UserInput::handleSettingsPageInput(Key key) {
         _uiManager->addSettingsChar('.');
     } else if (key == KEY_OK) {
         // 确认设置，应用位置数据
-        Serial.println("[UserInput] OK key pressed, applying settings");
+        LOG_I("UserInput", "OK key pressed, applying settings");
         _uiManager->applySettings();
         _uiManager->setPage(PAGE_MAIN);
     }

@@ -1,11 +1,12 @@
 #include "tle_updater.h"
+#include "core/log_manager.h"
 #include "../hal/hal_wifi.h"
 
 void TLEUpdater::begin() {
     if (!LittleFS.begin(true)) {
-        Serial.println("LittleFS Mount Failed. Formatting...");
+        LOG_I("APP", "LittleFS Mount Failed. Formatting...");
     } else {
-        Serial.println("LittleFS Mounted.");
+        LOG_I("APP", "LittleFS Mounted.");
     }
 }
 
@@ -17,28 +18,28 @@ bool TLEUpdater::getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds) {
     
     // If no time is available from network, just use cache if we have it
     if (now == 0 && hasCache) {
-        Serial.printf("No time available, using cached TLE for %d\n", noradId);
+        LOG_I("APP", "No time available, using cached TLE for %d", noradId);
         return true;
     }
     
     // If we have network and cache is old, or no cache exists
     if (HalWifi::isConnected()) {
         if (!hasCache || (now > 0 && (now - cacheTime) > maxAgeSeconds)) {
-            Serial.printf("Cache for %d is missing or old. Fetching from network...\n", noradId);
+            LOG_I("APP", "Cache for %d is missing or old. Fetching from network...", noradId);
             TLEData newTle;
             if (fetchFromNetwork(noradId, newTle)) {
                 outTle = newTle;
                 saveToCache(noradId, newTle, now);
-                Serial.printf("Successfully fetched TLE for %d from network!\n", noradId);
+                LOG_I("APP", "Successfully fetched TLE for %d from network!", noradId);
                 return true;
             } else if (hasCache) {
-                Serial.println("Network fetch failed, falling back to old cache.");
+                LOG_I("APP", "Network fetch failed, falling back to old cache.");
                 return true;
             } else {
                 return false;
             }
         } else {
-            Serial.printf("Using fresh cached TLE for %d (age %d sec)\n", noradId, now - cacheTime);
+            LOG_I("APP", "Using fresh cached TLE for %d (age %d sec)", noradId, now - cacheTime);
         }
     }
     
@@ -91,7 +92,7 @@ bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle) {
     
     WiFiClientSecure *client = new WiFiClientSecure;
     if (!client) {
-        Serial.println("Failed to create WiFiClientSecure");
+        LOG_I("APP", "Failed to create WiFiClientSecure");
         return false;
     }
     client->setInsecure(); // Skip certificate verification
@@ -133,7 +134,7 @@ bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle) {
         }
     }
     
-    Serial.printf("Failed to fetch TLE for %d. HTTP Code: %d\n", noradId, httpCode);
+    LOG_I("APP", "Failed to fetch TLE for %d. HTTP Code: %d", noradId, httpCode);
     http.end();
     delete client;
     return false;

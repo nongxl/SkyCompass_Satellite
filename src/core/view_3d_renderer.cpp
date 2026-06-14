@@ -1,4 +1,5 @@
 #include "view_3d_renderer.h"
+#include "core/log_manager.h"
 #include "ui_manager.h"
 #include <math.h>
 
@@ -912,11 +913,9 @@ void View3DRenderer::drawCelestialBody3D(uint16_t centerX, uint16_t centerY, uin
     // 打印天体的屏幕坐标（已注释掉以减少调试信息）
     /*
     if (color == 0xFFE0) {
-        Serial.printf("[DEBUG] drawCelestialBody3D - SUN - Az=%.2f, Alt=%.2f, Screen=(%d, %d), Camera=(Roll=%.2f, Pitch=%.2f, Yaw=%.2f)\n",
-                    azimuth, altitude, bodyPoint.x, bodyPoint.y, _camera.roll, _camera.pitch, _camera.yaw);
+        LOG_I("DEBUG", "drawCelestialBody3D - SUN - Az=%.2f, Alt=%.2f, Screen=(%d, %d), Camera=(Roll=%.2f, Pitch=%.2f, Yaw=%.2f)", azimuth, altitude, bodyPoint.x, bodyPoint.y, _camera.roll, _camera.pitch, _camera.yaw);
     } else if (color == 0xC618) {
-        Serial.printf("[DEBUG] drawCelestialBody3D - MOON - Az=%.2f, Alt=%.2f, Screen=(%d, %d), Camera=(Roll=%.2f, Pitch=%.2f, Yaw=%.2f)\n",
-                    azimuth, altitude, bodyPoint.x, bodyPoint.y, _camera.roll, _camera.pitch, _camera.yaw);
+        LOG_I("DEBUG", "drawCelestialBody3D - MOON - Az=%.2f, Alt=%.2f, Screen=(%d, %d), Camera=(Roll=%.2f, Pitch=%.2f, Yaw=%.2f)", azimuth, altitude, bodyPoint.x, bodyPoint.y, _camera.roll, _camera.pitch, _camera.yaw);
     }
     */
     

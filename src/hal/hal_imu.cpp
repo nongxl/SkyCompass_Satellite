@@ -1,4 +1,5 @@
 #include "hal_imu.h"
+#include "core/log_manager.h"
 #include <M5Cardputer.h>
 #include <math.h>
 
@@ -58,18 +59,18 @@ public:
     }
 
     bool begin() override {
-        Serial.println("[IMU] Starting IMU initialization...");
+        LOG_I("IMU", "Starting IMU initialization...");
         
         bool imuOk = M5.Imu.begin();
         
         if (imuOk) {
-            Serial.println("[IMU] IMU initialized successfully");
+            LOG_I("IMU", "IMU initialized successfully");
             _enabled = true;
             _data.status = IMU_STATUS_READY;
             _lastUpdate = millis();
             return true;
         } else {
-            Serial.println("[IMU] IMU initialization FAILED!");
+            LOG_I("IMU", "IMU initialization FAILED!");
             _data.status = IMU_STATUS_ERROR;
             return false;
         }
@@ -201,12 +202,11 @@ public:
     }
 
     bool calibrate() override {
-        Serial.println("[IMU] Setting reference orientation...");
+        LOG_I("IMU", "Setting reference orientation...");
         _hasReferenceOrientation = true;
         _refRoll = _roll;
         _refPitch = _pitch;
-        Serial.printf("[IMU] Reference set: Pitch=%.1f deg, Roll=%.1f deg\n",
-                     _refPitch * RAD_TO_DEG, _refRoll * RAD_TO_DEG);
+        LOG_I("IMU", "Reference set: Pitch=%.1f deg, Roll=%.1f deg", _refPitch * RAD_TO_DEG, _refRoll * RAD_TO_DEG);
         _data.status = IMU_STATUS_READY;
         return true;
     }

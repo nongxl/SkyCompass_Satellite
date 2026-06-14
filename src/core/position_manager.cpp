@@ -1,4 +1,5 @@
 #include "position_manager.h"
+#include "core/log_manager.h"
 
 /**
  * @brief 构造函数
@@ -274,13 +275,13 @@ bool PositionManager::hasValidTime() {
 void PositionManager::updateFromGnss(GnssData gnssData) {
     // 检查GNSS是否已经获取到有效定位
     if (!gnssData.isValid || gnssData.status != GNSS_STATUS_LOCKED) {
-        Serial.printf("[PositionManager] GNSS not locked yet (status=%d), ignoring position update\n", gnssData.status);
+        LOG_I("PositionManager", "GNSS not locked yet (status=%d), ignoring position update", gnssData.status);
         return;
     }
     
     // 检查位置数据是否有效（经纬度不能为0）
     if (gnssData.latitude == 0.0 && gnssData.longitude == 0.0) {
-        Serial.printf("[PositionManager] Invalid position from GNSS (lat=0, lon=0), ignoring\n");
+//         log_i("[PositionManager] Invalid position from GNSS (lat=0, lon=0), ignoring\n");
         return;
     }
     
@@ -288,18 +289,18 @@ void PositionManager::updateFromGnss(GnssData gnssData) {
     _position.latitude = gnssData.latitude;
     _position.longitude = gnssData.longitude;
     _position.altitude = gnssData.altitude;
-    Serial.printf("[PositionManager] Updated position from GNSS: lat=%.6f, lon=%.6f, alt=%.1f\n", _position.latitude, _position.longitude, _position.altitude);
+    LOG_I("PositionManager", "Updated position from GNSS: lat=%.6f, lon=%.6f, alt=%.1f", _position.latitude, _position.longitude, _position.altitude);
 
     // 更新时间数据
     // 检查GNSS数据是否有效，以及日期是否有效
-    Serial.printf("[PositionManager] GNSS date data: year=%d, month=%d, day=%d, dateValid=%d, isValid=%d\n", gnssData.year, gnssData.month, gnssData.day, gnssData.dateValid, gnssData.isValid);
+    LOG_I("PositionManager", "GNSS date data: year=%d, month=%d, day=%d, dateValid=%d, isValid=%d", gnssData.year, gnssData.month, gnssData.day, gnssData.dateValid, gnssData.isValid);
     
     // 更严格的日期验证
     bool monthValid = gnssData.month >= 1 && gnssData.month <= 12;
     bool dayValid = gnssData.day >= 1 && gnssData.day <= 31;
     
     if (!gnssData.isValid || !gnssData.dateValid || !monthValid || !dayValid) {
-        Serial.printf("[PositionManager] Date not valid from GNSS (monthValid=%d, dayValid=%d), ignoring time update\n", monthValid, dayValid);
+        LOG_I("PositionManager", "Date not valid from GNSS (monthValid=%d, dayValid=%d), ignoring time update", monthValid, dayValid);
         return;
     }
     
@@ -312,7 +313,7 @@ void PositionManager::updateFromGnss(GnssData gnssData) {
         _time.hour = gnssData.hour;
         _time.minute = gnssData.minute;
         _time.second = gnssData.second;
-        Serial.printf("[PositionManager] Updated time from GNSS: %04d-%02d-%02d %02d:%02d:%02d\n", _time.year + 2000, _time.month, _time.day, _time.hour, _time.minute, _time.second);
+        LOG_I("PositionManager", "Updated time from GNSS: %04d-%02d-%02d %02d:%02d:%02d", _time.year + 2000, _time.month, _time.day, _time.hour, _time.minute, _time.second);
     } else if (gnssData.year >= 100 && gnssData.year < 2000) {
         // 处理1900-1999年的情况
         _time.year = gnssData.year - 1900;
@@ -321,7 +322,7 @@ void PositionManager::updateFromGnss(GnssData gnssData) {
         _time.hour = gnssData.hour;
         _time.minute = gnssData.minute;
         _time.second = gnssData.second;
-        Serial.printf("[PositionManager] Updated time from GNSS: %04d-%02d-%02d %02d:%02d:%02d\n", _time.year + 1900, _time.month, _time.day, _time.hour, _time.minute, _time.second);
+        LOG_I("PositionManager", "Updated time from GNSS: %04d-%02d-%02d %02d:%02d:%02d", _time.year + 1900, _time.month, _time.day, _time.hour, _time.minute, _time.second);
     } else if (gnssData.year > 0 && gnssData.year < 100) {
         // 已经是偏移量
         _time.year = gnssData.year;
@@ -330,10 +331,10 @@ void PositionManager::updateFromGnss(GnssData gnssData) {
         _time.hour = gnssData.hour;
         _time.minute = gnssData.minute;
         _time.second = gnssData.second;
-        Serial.printf("[PositionManager] Updated time from GNSS: %04d-%02d-%02d %02d:%02d:%02d\n", _time.year + 2000, _time.month, _time.day, _time.hour, _time.minute, _time.second);
+        LOG_I("PositionManager", "Updated time from GNSS: %04d-%02d-%02d %02d:%02d:%02d", _time.year + 2000, _time.month, _time.day, _time.hour, _time.minute, _time.second);
     } else {
         // 年份无效，不更新时间数据
-        Serial.printf("[PositionManager] Invalid year from GNSS: %d, ignoring time update\n", gnssData.year);
+        LOG_I("PositionManager", "Invalid year from GNSS: %d, ignoring time update", gnssData.year);
     }
 }
 

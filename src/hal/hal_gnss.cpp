@@ -1,4 +1,5 @@
 #include "hal_gnss.h"
+#include "core/log_manager.h"
 #include <M5Cardputer.h>
 #include "MultipleSatellite.h"
 
@@ -50,23 +51,23 @@ public:
     }
 
     bool begin() override {
-        Serial.println(F("[GNSS] Creating MultipleSatellite instance..."));
+        LOG_I("GNSS", "Creating MultipleSatellite instance...");
         Serial.flush();
         
         _gps = new MultipleSatellite(Serial1, _config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
         if (!_gps) {
-            Serial.println(F("[GNSS] Failed to create MultipleSatellite!"));
+            LOG_I("GNSS", "Failed to create MultipleSatellite!");
             return false;
         }
-        Serial.println(F("[GNSS] MultipleSatellite created, calling begin()..."));
+        LOG_I("GNSS", "MultipleSatellite created, calling begin()...");
         Serial.flush();
         
         _gps->begin();
-        Serial.println(F("[GNSS] begin() complete, setting boot mode..."));
+        LOG_I("GNSS", "begin() complete, setting boot mode...");
         Serial.flush();
         
-        _gps->setSystemBootMode(BOOT_FACTORY_START);
-        Serial.println(F("[GNSS] Boot mode set, initialization complete"));
+        _gps->setSystemBootMode(BOOT_HOST_START);
+        LOG_I("GNSS", "Boot mode set, initialization complete");
         Serial.flush();
         
         _enabled = true;
@@ -121,10 +122,10 @@ public:
                 _data.day = gnssDay;
                 _data.dateValid = _gps->date.isValid();
                 
-                Serial.printf("[GNSS] Date updated: %04d-%02d-%02d, valid: %d, dateValid: %d\n", _data.year, _data.month, _data.day, _data.dateValid, _gps->date.isValid());
+                log_i("[GNSS] Date updated: %04d-%02d-%02d, valid: %d, dateValid: %d\n", _data.year, _data.month, _data.day, _data.dateValid, _gps->date.isValid());
             } else {
                 //忽略无效数据
-                //Serial.printf("[GNSS] Invalid date received: %04d-%02d-%02d (monthValid=%d, dayValid=%d), ignoring\n", gnssYear, gnssMonth, gnssDay, monthValid, dayValid);
+                //LOG_I("GNSS", "Invalid date received: %04d-%02d-%02d (monthValid=%d, dayValid=%d), ignoring", gnssYear, gnssMonth, gnssDay, monthValid, dayValid);
                 _data.dateValid = false;
             }
         }
@@ -217,8 +218,7 @@ public:
                 _data.longitude > 73.0 && _data.longitude < 135.0) {
                 _config.timezoneOffset = 8;
             }
-            Serial.printf("[GNSS] Timezone calculated from longitude %.2f: UTC%+d\n",
-                         _data.longitude, _config.timezoneOffset);
+            LOG_I("GNSS", "Timezone calculated from longitude %.2f: UTC%+d", _data.longitude, _config.timezoneOffset);
         }
     }
     
@@ -334,7 +334,7 @@ public:
             Serial1.println("$PCAS10,0*1C");
             _isInStandby = true;
             _data.status = GNSS_STATUS_STANDBY;
-            Serial.println("[GNSS] Entered standby mode");
+            LOG_I("GNSS", "Entered standby mode");
         }
     }
     
@@ -343,7 +343,7 @@ public:
             Serial1.println("$PCAS10,0*1C");
             _isInStandby = false;
             _data.status = GNSS_STATUS_SEARCHING;
-            Serial.println("[GNSS] Exited standby mode");
+            LOG_I("GNSS", "Exited standby mode");
         }
     }
     
