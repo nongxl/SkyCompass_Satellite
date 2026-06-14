@@ -1230,7 +1230,7 @@ void loop() {
             canvas->setTextColor(TFT_CYAN);
             canvas->drawString("[g/G]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("GNSS Toggle", x + 40, ty); ty += 12;
             canvas->setTextColor(TFT_CYAN);
-            canvas->drawString("[v/V]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Sat View Mode", x + 40, ty); ty += 12;
+            canvas->drawString("[v/V]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Sat View (; .)", x + 40, ty); ty += 12;
         }
         
         if (showRecommendations) {
