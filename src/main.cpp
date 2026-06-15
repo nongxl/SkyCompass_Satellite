@@ -70,6 +70,8 @@ struct SatProfile {
     bool selected;
     SatIconType iconType;
     const char* description;
+    String downlinkFreq;
+    String radioMode;
     TLEData tle;
     SGP4Calc calc;
     OrbitCache cache;
@@ -79,24 +81,24 @@ const int MAX_SATELLITES = 50;
 int NUM_SATELLITES = 18;
 
 SatProfile g_satellites[MAX_SATELLITES] = {
-    {25544, "ISS", TFT_YELLOW, 2, -1.8, true, ICON_STATION, "International Space Station. The largest human-made structure in space, visible as a very bright moving star."},
-    {48274, "Tiangong", TFT_GREEN, 1, -0.5, true, ICON_STATION, "China's Tiangong Space Station. A permanent modular space station in LEO."},
-    {20580, "Hubble", TFT_CYAN, 0, 1.5, true, ICON_TELESCOPE, "Hubble Space Telescope. A vital observatory that revolutionized our understanding of the universe."},
-    {33591, "NOAA 19", TFT_ORANGE, 0, 3.5, false, ICON_SATELLITE, "NOAA weather satellite. Known for transmitting APT weather images back to Earth."},
-    {50463, "JWST", TFT_GOLD, 0, 10.0, false, ICON_DEEPSPACE, "James Webb Space Telescope. Located at L2 point 1.5 million km away, observing in infrared."},
-    {53807, "BlueWalker 3", TFT_WHITE, 0, 1.0, true, ICON_SATELLITE, "AST SpaceMobile's prototype. Features a massive 64 sqm array, very bright and controversial."},
-    {118, "Ablestar R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ablestar rocket body."},
-    {25732, "CZ-4B R/B", TFT_ORANGE, 0, 4.0, true, ICON_ROCKET, "Long March 4B rocket body."},
-    {6155, "Centaur R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Centaur rocket body."},
-    {28499, "Ariane 5 R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ariane 5 rocket body."},
-    {41882, "Fengyun-4A", TFT_BLUE, 0, 10.0, false, ICON_SATELLITE, "Chinese geostationary meteorological satellite, located 35,786 km above the equator."},
-    {43539, "BeiDou-3", TFT_RED, 0, 10.0, false, ICON_SATELLITE, "Medium Earth Orbit navigation satellite part of the BeiDou system (BDS)."},
-    {27386, "Envisat", TFT_LIGHTGRAY, 0, 2.5, false, ICON_SATELLITE, "A huge 8-ton inactive Earth observation satellite. Now one of the largest pieces of space debris."},
-    {4382, "DFH-1", TFT_RED, 0, 6.0, false, ICON_SATELLITE, "Dong Fang Hong I. China's first satellite launched in 1970, still orbiting today as a silent monument."},
-    {25994, "Terra", TFT_PINK, 0, 3.0, false, ICON_SATELLITE, "NASA's flagship Earth Observing System satellite."},
-    {27424, "Aqua", TFT_MAGENTA, 0, 3.0, false, ICON_SATELLITE, "NASA Earth observation satellite focusing on the water cycle."},
-    {43166, "Iridium 127", TFT_WHITE, 0, 4.0, false, ICON_SATELLITE, "Iridium NEXT network. The original 1st-gen Iridium satellites produced legendary 'flares' up to mag -8."},
-    {57165, "Meteor-M2", TFT_WHITE, 0, 3.5, false, ICON_SATELLITE, "Russian meteorological satellite transmitting LRPT weather images."}
+    {25544, "ISS", TFT_YELLOW, 2, -1.8, true, ICON_STATION, "International Space Station. The largest human-made structure in space, visible as a very bright moving star.", "145.800", "FM/SSTV"},
+    {48274, "Tiangong", TFT_GREEN, 1, -0.5, true, ICON_STATION, "China's Tiangong Space Station. A permanent modular space station in LEO.", "", ""},
+    {20580, "Hubble", TFT_CYAN, 0, 1.5, true, ICON_TELESCOPE, "Hubble Space Telescope. A vital observatory that revolutionized our understanding of the universe.", "", ""},
+    {33591, "NOAA 19", TFT_ORANGE, 0, 3.5, false, ICON_SATELLITE, "NOAA weather satellite. Known for transmitting APT weather images back to Earth.", "137.100", "APT"},
+    {50463, "JWST", TFT_GOLD, 0, 10.0, false, ICON_DEEPSPACE, "James Webb Space Telescope. Located at L2 point 1.5 million km away, observing in infrared.", "", ""},
+    {53807, "BlueWalker 3", TFT_WHITE, 0, 1.0, true, ICON_SATELLITE, "AST SpaceMobile's prototype. Features a massive 64 sqm array, very bright and controversial.", "", ""},
+    {118, "Ablestar R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ablestar rocket body.", "", ""},
+    {25732, "CZ-4B R/B", TFT_ORANGE, 0, 4.0, true, ICON_ROCKET, "Long March 4B rocket body.", "", ""},
+    {6155, "Centaur R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Centaur rocket body.", "", ""},
+    {28499, "Ariane 5 R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ariane 5 rocket body.", "", ""},
+    {41882, "Fengyun-4A", TFT_BLUE, 0, 10.0, false, ICON_SATELLITE, "Chinese geostationary meteorological satellite, located 35,786 km above the equator.", "", ""},
+    {43539, "BeiDou-3", TFT_RED, 0, 10.0, false, ICON_SATELLITE, "Medium Earth Orbit navigation satellite part of the BeiDou system (BDS).", "", ""},
+    {27386, "Envisat", TFT_LIGHTGRAY, 0, 2.5, false, ICON_SATELLITE, "A huge 8-ton inactive Earth observation satellite. Now one of the largest pieces of space debris.", "", ""},
+    {4382, "DFH-1", TFT_RED, 0, 6.0, false, ICON_SATELLITE, "Dong Fang Hong I. China's first satellite launched in 1970, still orbiting today as a silent monument.", "20.009", "Beacon"},
+    {25994, "Terra", TFT_PINK, 0, 3.0, false, ICON_SATELLITE, "NASA's flagship Earth Observing System satellite.", "", ""},
+    {27424, "Aqua", TFT_MAGENTA, 0, 3.0, false, ICON_SATELLITE, "NASA Earth observation satellite focusing on the water cycle.", "", ""},
+    {43166, "Iridium 127", TFT_WHITE, 0, 4.0, false, ICON_SATELLITE, "Iridium NEXT network. The original 1st-gen Iridium satellites produced legendary 'flares' up to mag -8.", "", ""},
+    {57165, "Meteor-M2", TFT_WHITE, 0, 3.5, false, ICON_SATELLITE, "Russian meteorological satellite transmitting LRPT weather images.", "137.100", "LRPT"}
 };
 
 // We use a simulated time starting near the TLE epoch for Phase 3 offline testing
@@ -577,9 +579,11 @@ void drawWiFiSetupPage() {
     }
 }
 
-void drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int w, int lineH) {
+int drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int w, int lineH) {
     int start = 0;
+    int lines = 0;
     while (start < text.length()) {
+        lines++;
         int fitChars = w / 6; // roughly 6px per char for setTextSize(1)
         if (start + fitChars >= text.length()) {
             canvas->drawString(text.substring(start).c_str(), x, y);
@@ -594,6 +598,7 @@ void drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int w, int 
         start = end + 1;
         y += lineH;
     }
+    return lines;
 }
 
 void drawSatSelectPage() {
@@ -689,18 +694,26 @@ void drawSatSelectPage() {
         
         canvas->setTextColor(TFT_LIGHTGRAY);
         if (selSat.description) {
-            drawWrappedText(canvas, selSat.description, rightX, descY, width - rightX - 5, 10);
+            int lines = drawWrappedText(canvas, selSat.description, rightX, descY, width - rightX - 5, 10);
+            descY += lines * 10 + 4;
         } else {
             canvas->drawString("No description.", rightX, descY);
+            descY += 14;
+        }
+        
+        if (selSat.downlinkFreq.length() > 0) {
+            // Draw a subtle background for the radio info
+            canvas->fillRect(rightX - 2, descY - 2, width - rightX - 2, 22, canvas->color565(30, 40, 50));
+            canvas->setTextColor(TFT_GREEN);
+            canvas->drawString("Rx: " + selSat.downlinkFreq + " MHz", rightX, descY);
+            canvas->setTextColor(TFT_CYAN);
+            canvas->drawString("Mode: " + selSat.radioMode, rightX, descY + 11);
         }
     } else {
         canvas->setTextColor(downloadErrorMsg.length() > 0 ? TFT_RED : TFT_LIGHTGRAY);
         String msg = downloadErrorMsg.length() > 0 ? downloadErrorMsg : "Enter 5-digit NORAD ID to add custom satellite.";
         drawWrappedText(canvas, msg.c_str(), rightX, descY, width - rightX - 5, 10);
     }
-    
-    canvas->setTextColor(TFT_DARKGREY);
-    canvas->drawString("[^/v] Sel [Enter] Toggle [d] Del Custom [ESC] Exit", 5, height - 12);
     
     // Draw Delete Confirm Popup
     if (deleteConfirmIndex >= 0 && deleteConfirmIndex < NUM_SATELLITES) {
@@ -1407,6 +1420,15 @@ void loop() {
                     if (p.visibleDuration > 300) reason += "+Long";
                     earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
                     earth_renderer->getCanvas()->drawString(reason.c_str(), 50, 85);
+                    
+                    int sIdx = -1;
+                    for (int i = 0; i < NUM_SATELLITES; i++) {
+                        if (g_satellites[i].name == p.satName) { sIdx = i; break; }
+                    }
+                    if (sIdx != -1 && g_satellites[sIdx].downlinkFreq.length() > 0) {
+                        earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
+                        earth_renderer->getCanvas()->drawString("Rx:" + g_satellites[sIdx].downlinkFreq + "MHz " + g_satellites[sIdx].radioMode, 5, 97);
+                    }
                     
                 } else {
                     // Draw Tree View
