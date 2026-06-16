@@ -41,6 +41,9 @@ SkyCompass Satellite 是 SkyCompass 项目的扩展演化版本，运行在 M5St
 - **极致的电源管理**：
   - 网络任务处理完毕后，立刻自动切断 WiFi 射频以节省电量。
   - 对于 GNSS 定位模块，一旦成功获得 3D Fix 并在同步时空坐标后，或搜星超时（1分钟）未果，即向其下发休眠指令（`$PCAS10,0*1C`），大幅提升续航表现。
+- **云端无线电频率下发 (API Gateway)**：为了解决单片机内存极小无法解析超大官方频率 JSON 的问题，本项目开创性地采用了 GitHub 仓库作为云端配置下发源。
+  - 维护本仓库中的 `data/frequencies.json`，并利用自带的 `.github/workflows/update_frequencies.yml` 自动化流水线。
+  - GitHub 会定期在云端执行庞大的 API 过滤任务，生成轻量级 JSON 喂给设备。设备连网后自动拉取，实现无缝的 HAM 通联频率与自定义卫星配置自动同步！
 
 ## 与 SkyCompass 的关系
 
