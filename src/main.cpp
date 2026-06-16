@@ -89,7 +89,7 @@ SatProfile g_satellites[MAX_SATELLITES] = {
     {20580, "Hubble", TFT_CYAN, 0, 1.5, true, ICON_TELESCOPE, "Hubble Space Telescope. A vital observatory that revolutionized our understanding of the universe.", "", ""},
     {33591, "NOAA 19", TFT_ORANGE, 0, 3.5, false, ICON_SATELLITE, "NOAA weather satellite. Known for transmitting APT weather images back to Earth.", "137.100", "APT"},
     {50463, "JWST", TFT_GOLD, 0, 10.0, false, ICON_DEEPSPACE, "James Webb Space Telescope. Located at L2 point 1.5 million km away, observing in infrared.", "", ""},
-    {53807, "BlueWalker 3", TFT_WHITE, 0, 1.0, true, ICON_SATELLITE, "AST SpaceMobile's prototype. Features a massive 64 sqm array, very bright and controversial.", "", ""},
+    {53807, "BlueWalker 3", TFT_WHITE, 0, 1.0, false, ICON_SATELLITE, "AST SpaceMobile's prototype. Features a massive 64 sqm array, very bright and controversial.", "", ""},
     {118, "Ablestar R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ablestar rocket body.", "", ""},
     {25732, "CZ-4B R/B", TFT_ORANGE, 0, 4.0, true, ICON_ROCKET, "Long March 4B rocket body.", "", ""},
     {6155, "Centaur R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Centaur rocket body.", "", ""},
@@ -626,14 +626,14 @@ void drawWiFiSetupPage() {
     }
 }
 
-int drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int w, int lineH) {
+int drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int w, int lineH, bool draw = true) {
     int start = 0;
     int lines = 0;
     while (start < text.length()) {
         lines++;
         int fitChars = w / 6; // roughly 6px per char for setTextSize(1)
         if (start + fitChars >= text.length()) {
-            canvas->drawString(text.substring(start).c_str(), x, y);
+            if (draw) canvas->drawString(text.substring(start).c_str(), x, y);
             break;
         }
         int end = start + fitChars;
@@ -641,7 +641,7 @@ int drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int w, int l
         if (lastSpace > start && lastSpace > start + fitChars/2) {
             end = lastSpace;
         }
-        canvas->drawString(text.substring(start, end).c_str(), x, y);
+        if (draw) canvas->drawString(text.substring(start, end).c_str(), x, y);
         start = end + 1;
         y += lineH;
     }
@@ -739,22 +739,106 @@ void drawSatSelectPage() {
         canvas->drawString(selSat.name.c_str(), rightX + 48, descY + 8);
         descY += 32; // Skip past icon and name
         
-        canvas->setTextColor(TFT_LIGHTGRAY);
-        if (selSat.description) {
-            int lines = drawWrappedText(canvas, selSat.description, rightX, descY, width - rightX - 5, 10);
-            descY += lines * 10 + 4;
-        } else {
-            canvas->drawString("No description.", rightX, descY);
-            descY += 14;
+        // Determine radio layout beforehand
+        double tx, ty, tz;
+        bool isTracking = false;
+        double az = 0, el = 0, dist = 0;
+        
+        if (selSat.calc.getTEME(current_unix, tx, ty, tz)) {
+            double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix));
+            ECEFCoord satEcef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+            GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+            TopocentricCoord topo = CoordTransform::ecefToTopocentric(obsGeo, satEcef);
+            az = topo.az; el = topo.el; dist = topo.range;
+            if (el > 0) isTracking = true;
         }
         
-        if (selSat.downlinkFreq.length() > 0) {
-            // Draw a subtle background for the radio info
-            canvas->fillRect(rightX - 2, descY - 2, width - rightX - 2, 22, canvas->color565(30, 40, 50));
+        int radioY = isTracking ? 90 : (selSat.downlinkFreq.length() > 0 ? 101 : height);
+        
+        // Draw Description with Auto-Scroll
+        canvas->setTextColor(TFT_LIGHTGRAY);
+        if (selSat.description) {
+            int descAreaHeight = radioY - descY - 2;
+            int totalLines = drawWrappedText(canvas, selSat.description, rightX, descY, width - rightX - 5, 10, false);
+            int totalHeight = totalLines * 10;
+            
+            int yOffset = 0;
+            if (totalHeight > descAreaHeight && descAreaHeight > 10) {
+                int scrollRange = totalHeight - descAreaHeight + 10; // Extra 10px to show bottom clearly
+                int cycleTime = scrollRange * 33 + 2000; // 1000ms pause at each end, 30px/sec speed
+                int t = millis() % cycleTime;
+                if (t < 1000) yOffset = 0;
+                else if (t < cycleTime - 1000) yOffset = (t - 1000) / 33;
+                else yOffset = scrollRange;
+            }
+            
+            canvas->setClipRect(rightX, descY, width - rightX, descAreaHeight);
+            drawWrappedText(canvas, selSat.description, rightX, descY - yOffset, width - rightX - 5, 10);
+            canvas->clearClipRect();
+        } else {
+            canvas->drawString("No description.", rightX, descY);
+        }
+        
+        // Draw Radio Info Block
+        if (isTracking) {
+            double tx_prev, ty_prev, tz_prev;
+            double dist_prev = dist;
+            if (selSat.calc.getTEME(current_unix - 1, tx_prev, ty_prev, tz_prev)) {
+                double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix - 1));
+                ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
+                GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
+                dist_prev = topo_prev.range;
+            }
+            double radialVel = dist - dist_prev;
+            
+            double dlFreq = selSat.downlinkFreq.toDouble();
+            double dopplerShiftHz = 0;
+            if (dlFreq > 0) {
+                dopplerShiftHz = -(radialVel / 299792.458) * (dlFreq * 1e6);
+            }
+            
+            canvas->fillRect(rightX - 2, radioY - 2, width - rightX - 2, 47, canvas->color565(30, 40, 50));
+            
+            canvas->setTextColor(TFT_YELLOW);
+            char posBuf[32];
+            sprintf(posBuf, "Az:%03.0f El:%02.0f", az, el);
+            canvas->drawString(posBuf, rightX, radioY);
+            
+            if (dlFreq > 0) {
+                canvas->setTextColor(TFT_GREEN);
+                char freqBuf[32];
+                sprintf(freqBuf, "Rx:%s", selSat.downlinkFreq.c_str());
+                canvas->drawString(freqBuf, rightX, radioY + 11);
+                
+                canvas->setTextColor(dopplerShiftHz > 0 ? TFT_CYAN : TFT_ORANGE);
+                char dopBuf[32];
+                sprintf(dopBuf, "%+dHz", (int)dopplerShiftHz);
+                canvas->drawString(dopBuf, rightX + canvas->textWidth(freqBuf) + 2, radioY + 11);
+            }
+            
+            if (selSat.uplinkFreq.length() > 0) {
+                canvas->setTextColor(TFT_RED);
+                String txStr = "Tx:" + selSat.uplinkFreq;
+                if (selSat.tone.length() > 0) txStr += " T:" + selSat.tone;
+                canvas->drawString(txStr.c_str(), rightX, radioY + 22);
+            }
+            
+            canvas->setTextColor(TFT_LIGHTGRAY);
+            canvas->drawString("Mode: " + selSat.radioMode, rightX, radioY + 33);
+        } else if (selSat.downlinkFreq.length() > 0) {
+            // Draw a subtle background for the radio info (static)
+            canvas->fillRect(rightX - 2, radioY - 2, width - rightX - 2, 36, canvas->color565(30, 40, 50));
             canvas->setTextColor(TFT_GREEN);
-            canvas->drawString("Rx: " + selSat.downlinkFreq + " MHz", rightX, descY);
+            canvas->drawString("Rx: " + selSat.downlinkFreq + " MHz", rightX, radioY);
+            if (selSat.uplinkFreq.length() > 0) {
+                canvas->setTextColor(TFT_RED);
+                String txStr = "Tx:" + selSat.uplinkFreq;
+                if (selSat.tone.length() > 0) txStr += " T:" + selSat.tone;
+                canvas->drawString(txStr.c_str(), rightX, radioY + 11);
+            }
             canvas->setTextColor(TFT_CYAN);
-            canvas->drawString("Mode: " + selSat.radioMode, rightX, descY + 11);
+            canvas->drawString("Mode: " + selSat.radioMode, rightX, radioY + 22);
         }
     } else {
         canvas->setTextColor(downloadErrorMsg.length() > 0 ? TFT_RED : TFT_LIGHTGRAY);
@@ -780,6 +864,10 @@ void loop() {
     if (imu && attitude) {
         imu->update();
         attitude->update();
+    }
+    
+    if (gnss) {
+        gnss->update();
     }
 
     // Render at 30 FPS (33ms)
@@ -1215,9 +1303,15 @@ void loop() {
             }
         }
         
-        // Default to looking at equator and prime meridian if no IMU
-        double viewLat = 0.0;
-        double viewLon = 0.0;
+        // Target camera values for smooth transitions
+        double targetViewLat = 0.0;
+        double targetViewLon = 0.0;
+        float targetPitch = 0.0f;
+        float targetRoll = 0.0f;
+        float targetYaw = 0.0f;
+        int targetOffsetX = 0;
+        int targetOffsetY = 0;
+        double targetFocusAlt = 0.0;
         
         earth_renderer->setZoom(currentZoom);
         
@@ -1227,33 +1321,29 @@ void loop() {
                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix));
                 ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
                 GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
-                viewLat = geo.lat;
-                viewLon = geo.lon;
-                earth_renderer->setCameraFocusAlt(geo.alt);
-            } else {
-                earth_renderer->setCameraFocusAlt(0);
+                targetViewLat = geo.lat;
+                targetViewLon = geo.lon;
+                targetFocusAlt = geo.alt;
             }
             
-            earth_renderer->setCenterOffset(0, 0); // Keep centered
+            targetOffsetX = 0; targetOffsetY = 0; // Keep centered
             if (attitude && imu) {
                 if (!isImuLocked) {
                     AttitudeData att = attitude->getAttitude();
                     lockedPitch = att.pitch - basePitch;
                     lockedRoll = att.roll - baseRoll;
                 }
-                // Option A: Pass real pitch and roll to camera (inverted as requested by user)
-                earth_renderer->setCameraAttitude(-lockedPitch, -lockedRoll, 0);
-            } else {
-                earth_renderer->setCameraAttitude(0, 0, 0);
+                // Pass real pitch and roll to camera, scaled by zoom to prevent flying off screen
+                float zoomScale = 1.0f / currentZoom;
+                targetPitch = -lockedPitch * zoomScale;
+                targetRoll = -lockedRoll * zoomScale;
+                targetYaw = 0;
             }
         } else if (isManualLocationMode) {
-            viewLat = baseUserLat;
-            viewLon = baseUserLon;
-            
-            // Keep perfectly centered when manually setting location
-            earth_renderer->setCenterOffset(0, 0);
-            earth_renderer->setCameraFocusAlt(0);
-            earth_renderer->setCameraAttitude(0, 0, 0);
+            targetViewLat = baseUserLat;
+            targetViewLon = baseUserLon;
+            targetOffsetX = 0; targetOffsetY = 0;
+            targetFocusAlt = 0;
         } else if (attitude && imu) {
             if (!isImuLocked) {
                 AttitudeData att = attitude->getAttitude();
@@ -1261,22 +1351,66 @@ void loop() {
                 lockedRoll = att.roll;
             }
             
-            // Anchor view to user location exactly
-            viewLat = baseUserLat; 
-            viewLon = baseUserLon; 
+            // Use IMU to tilt globe at 1x zoom, and tilt camera at high zoom
+            float t = (currentZoom - 1.0f) / 14.0f; // 0.0 to 1.0
+            float globeFactor = 1.0f - t;
+            float cameraFactor = t * (1.0f / currentZoom);
             
-            float dynamicPitch = (currentZoom - 1.0f) / 14.0f * 70.0f;
-            int offsetY = (int)((currentZoom - 1.0f) / 14.0f * 60.0f);
-            earth_renderer->setCenterOffset(0, offsetY);
-            earth_renderer->setCameraFocusAlt(0);
+            // Anchor view to user location, but let IMU spin globe at low zoom
+            // Note: signs are flipped to match the expected intuitive physical rotation
+            targetViewLat = baseUserLat - lockedPitch * globeFactor; 
+            targetViewLon = baseUserLon - lockedRoll * globeFactor; 
             
-            // Use IMU to tilt camera around the user pin, just like in Sat View mode
-            earth_renderer->setCameraAttitude(dynamicPitch - lockedPitch, -lockedRoll, 0);
-        } else {
-            earth_renderer->setCenterOffset(0, 0);
-            earth_renderer->setCameraFocusAlt(0);
-            earth_renderer->setCameraAttitude(0, 0, 0);
+            float dynamicPitch = t * 70.0f;
+            int baseOffsetY = (int)(t * 60.0f);
+            
+            targetPitch = dynamicPitch - lockedPitch * cameraFactor;
+            targetRoll = -lockedRoll * cameraFactor;
+            targetYaw = 0;
+            
+            // Fix: Calculate exact offset to counteract the pitch-induced displacement
+            // so the User Pin stays exactly at (centerY + baseOffsetY)
+            float r = 60.75f * currentZoom; // 135 * 0.45 * zoom
+            float pitchRad = targetPitch * DEG_TO_RAD;
+            targetOffsetY = baseOffsetY - (int)(r * sinf(pitchRad));
         }
+        
+        static double smoothViewLat = baseUserLat;
+        static double smoothViewLon = baseUserLon;
+        static float smoothPitch = 0.0f;
+        static float smoothRoll = 0.0f;
+        static float smoothYaw = 0.0f;
+        static float smoothOffsetX = 0.0f;
+        static float smoothOffsetY = 0.0f;
+        static double smoothFocusAlt = 0.0;
+        
+        // Handle longitude wrap-around for interpolation
+        double lonDiff = targetViewLon - smoothViewLon;
+        if (lonDiff > 180.0) targetViewLon -= 360.0;
+        else if (lonDiff < -180.0) targetViewLon += 360.0;
+        
+        float dt = isFastForwarding ? 1.0f : 0.15f; // Instant snap when fast forwarding
+        
+        smoothViewLat += (targetViewLat - smoothViewLat) * dt;
+        smoothViewLon += (targetViewLon - smoothViewLon) * dt;
+        if (smoothViewLon > 180.0) smoothViewLon -= 360.0;
+        if (smoothViewLon < -180.0) smoothViewLon += 360.0;
+        
+        smoothPitch += (targetPitch - smoothPitch) * dt;
+        smoothRoll += (targetRoll - smoothRoll) * dt;
+        smoothYaw += (targetYaw - smoothYaw) * dt;
+        
+        smoothOffsetX += (targetOffsetX - smoothOffsetX) * dt;
+        smoothOffsetY += (targetOffsetY - smoothOffsetY) * dt;
+        
+        smoothFocusAlt += (targetFocusAlt - smoothFocusAlt) * dt;
+        
+        earth_renderer->setCameraFocusAlt(smoothFocusAlt);
+        earth_renderer->setCenterOffset((int)smoothOffsetX, (int)smoothOffsetY);
+        earth_renderer->setCameraAttitude(smoothPitch, smoothRoll, smoothYaw);
+        
+        double viewLat = smoothViewLat;
+        double viewLon = smoothViewLon;
 
         // Update Sun Position
         if (sun_calc) {
@@ -1404,22 +1538,22 @@ void loop() {
             };
 
             int ty = y + 20;
-            drawHotKey("WiFi", 'w', x + 5, ty); 
-            drawHotKey("Satellites", 's', x + 105, ty); ty += 12;
+            drawHotKey("Bright[ ]", '[', x + 5, ty);
+            drawHotKey("GNSS", 'g', x + 105, ty); ty += 12;
             
-            drawHotKey("Config(Loc&Alt[])", 'c', x + 5, ty); 
-            drawHotKey("Time( , / . )", ',', x + 105, ty); ty += 12;
-            
-            drawHotKey("Help", 'h', x + 5, ty); 
-            drawHotKey("PassList[Ent]", 'e', x + 105, ty); ty += 12;
-            
-            drawHotKey("GNSS", 'g', x + 5, ty); 
-            drawHotKey("View(Sat)", 'v', x + 105, ty); ty += 12;
-            
-            drawHotKey("Lock[Spc]", 'l', x + 5, ty); 
+            drawHotKey("Help", 'h', x + 5, ty);
             drawHotKey("HUD[Del]", 'd', x + 105, ty); ty += 12;
             
-            drawHotKey("Bright[ ]", '[', x + 5, ty); ty += 12;
+            drawHotKey("Lock[Spc]", 'l', x + 5, ty);
+            drawHotKey("PassList[Ent]", 'e', x + 105, ty); ty += 12;
+            
+            drawHotKey("Satellites", 's', x + 5, ty);
+            drawHotKey("Time( , / . )", ',', x + 105, ty); ty += 12;
+            
+            drawHotKey("View(Sat)", 'v', x + 5, ty);
+            drawHotKey("WiFi", 'w', x + 105, ty); ty += 12;
+            
+            drawHotKey("Config(Loc&Alt[])", 'c', x + 5, ty); ty += 12;
         }
         
         if (showRecommendations) {
