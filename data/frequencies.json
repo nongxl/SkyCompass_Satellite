@@ -1,7 +1,9 @@
 {
   "25544": {
     "freq": "145.800",
-    "mode": "FM/SSTV"
+    "mode": "FM/SSTV",
+    "uplink": "145.990",
+    "tone": "67.0"
   },
   "33591": {
     "freq": "137.100",
@@ -14,9 +16,5 @@
   "57165": {
     "freq": "137.100",
     "mode": "LRPT"
-  },
-  "_metadata": {
-    "last_updated": 1781574506,
-    "source": "GitHub Actions Auto Update"
   }
 }

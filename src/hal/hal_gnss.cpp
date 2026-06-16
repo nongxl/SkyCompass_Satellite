@@ -150,6 +150,23 @@ public:
 
         _gps->updateGPS();
         
+        static unsigned long lastDebugLog = 0;
+        if (millis() - lastDebugLog > 5000) {
+            lastDebugLog = millis();
+            if (!_isInStandby) {
+                LOG_I("GNSS", "[DEBUG] UART: %u chars, %u good, %u bad checksum. Sats: %d, HDOP: %.1f, Fix: %s",
+                      _gps->charsProcessed(), _gps->passedChecksum(), _gps->failedChecksum(),
+                      _gps->satellites.value(), _gps->hdop.hdop(), _gps->location.isValid() ? "YES" : "NO");
+                
+                if (_gps->charsProcessed() < 50) {
+                    LOG_I("GNSS", "[DEBUG] WARNING: Very little UART data received. Is the module wired correctly? (Baud: %d, RX: %d, TX: %d)",
+                          _config.baudRate, _config.rxPin, _config.txPin);
+                } else if (_gps->satellites.value() == 0) {
+                    LOG_I("GNSS", "[DEBUG] Module is communicating but sees 0 satellites. Keep it under open sky.");
+                }
+            }
+        }
+        
         bool updated = false;
         
         if (_gps->location.isUpdated()) {

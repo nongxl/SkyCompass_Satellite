@@ -73,6 +73,8 @@ struct SatProfile {
     const char* description;
     String downlinkFreq;
     String radioMode;
+    String uplinkFreq;
+    String tone;
     TLEData tle;
     SGP4Calc calc;
     OrbitCache cache;
@@ -111,6 +113,7 @@ bool gnssTimedOut = false;
 bool isSatViewMode = false;
 int focusSatIndex = -1;
 float currentZoom = 1.0f;
+uint8_t currentBrightness = 128;
 
 // Default GNSS location (Beijing for public release)
 // double baseUserLat = 22.85; // Nanning (test location)
@@ -203,6 +206,7 @@ float lockedYaw = 0;
 
 unsigned long bootTime = 0;
 bool showHelp = false;
+bool showHud = true;
 bool isManualLocationMode = false;
 // removed duplicate isSatViewMode
 float basePitch = 0.0f; // Stores initial pitch for relative view
@@ -436,6 +440,7 @@ void setup() {
 
     auto cfg = M5.config();
     M5Cardputer.begin(cfg, true);
+    M5Cardputer.Display.setBrightness(currentBrightness);
     
     earth_renderer = new EarthRenderer(&M5Cardputer.Display);
     earth_renderer->begin();
@@ -808,6 +813,15 @@ void loop() {
                 } else if (isSatViewMode || (!isManualLocationMode)) {
                     if (key == ',') current_unix -= 60;
                     else if (key == '/') current_unix += 60;
+                    else if (key == '[') {
+                        if (currentBrightness >= 32) currentBrightness -= 16;
+                        else currentBrightness = 16;
+                        M5Cardputer.Display.setBrightness(currentBrightness);
+                    } else if (key == ']') {
+                        if (currentBrightness <= 239) currentBrightness += 16;
+                        else currentBrightness = 255;
+                        M5Cardputer.Display.setBrightness(currentBrightness);
+                    }
                 } else if (isManualLocationMode) {
                     // Step size based on zoom level, finer control when zoomed in
                     float step = 1.0f / currentZoom;
@@ -871,13 +885,21 @@ void loop() {
                         predictionsReady = false;
                         portEXIT_CRITICAL(&passMutex);
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
+                } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+                    showHud = !showHud;
+                } else if (M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
                     if (showRecommendations) {
                         if (selectedPassIndex != -1) {
                             selectedPassIndex = -1; // Back to tree
                         } else {
                             showRecommendations = false; // Close panel
                         }
+                    } else if (showHelp) {
+                        showHelp = false;
+                    } else if (isManualLocationMode) {
+                        isManualLocationMode = false;
+                    } else if (isSatViewMode) {
+                        isSatViewMode = false;
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
                     if (appState == STATE_MAIN && !showRecommendations) {
@@ -1330,7 +1352,7 @@ void loop() {
         earth_renderer->render(viewLat, viewLon, renderUserLat, baseUserLon, sats);
         
         // Draw coordinate overlay
-        if (!showRecommendations && !showHelp && appState == STATE_MAIN) {
+        if (!showRecommendations && !showHelp && appState == STATE_MAIN && showHud) {
             earth_renderer->getCanvas()->setTextSize(1);
             earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
             
@@ -1354,7 +1376,7 @@ void loop() {
         
         if (showHelp && appState == STATE_MAIN) {
             auto canvas = earth_renderer->getCanvas();
-            uint16_t w = 200, h = 144;
+            uint16_t w = 200, h = 108;
             int x = (canvas->width() - w) / 2;
             int y = (canvas->height() - h) / 2;
             
@@ -1365,25 +1387,39 @@ void loop() {
             canvas->setTextSize(1);
             canvas->drawString("--- Help & Shortcuts ---", x + 25, y + 5);
             
-            canvas->setTextColor(TFT_CYAN);
+            auto drawHotKey = [&](const char* word, char keyChar, int dx, int dy) {
+                int cx = dx;
+                bool highlighted = false;
+                for (int i = 0; word[i] != '\0'; i++) {
+                    if (!highlighted && tolower(word[i]) == tolower(keyChar) && keyChar != '\0') {
+                        canvas->setTextColor(TFT_YELLOW);
+                        highlighted = true;
+                    } else {
+                        canvas->setTextColor(TFT_LIGHTGRAY);
+                    }
+                    char cstr[2] = {word[i], '\0'};
+                    canvas->drawString(cstr, cx, dy);
+                    cx += canvas->textWidth(cstr);
+                }
+            };
+
             int ty = y + 20;
-            canvas->drawString("[w]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("WiFi Toggle", x + 30, ty); ty += 12;
-            canvas->setTextColor(TFT_CYAN);
-            canvas->drawString("[S]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Satellites", x + 35, ty); ty += 12;
-            canvas->setTextColor(TFT_CYAN);
-            canvas->drawString("[C]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Manual Loc/Alt (; . , / [])", x + 35, ty); ty += 12;
-            canvas->setTextColor(TFT_CYAN);
-            canvas->drawString("[,][/]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Time Machine", x + 45, ty); ty += 12;
-            canvas->setTextColor(TFT_CYAN);
-            canvas->drawString("[Enter]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Toggle Pass List", x + 50, ty); ty += 12;
-            canvas->setTextColor(TFT_CYAN);
-            canvas->drawString("[H]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Toggle Help", x + 35, ty); ty += 12;
-            canvas->setTextColor(TFT_CYAN);
-            canvas->drawString("[g/G]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("GNSS Toggle", x + 40, ty); ty += 12;
-            canvas->setTextColor(TFT_CYAN);
-            canvas->drawString("[v/V]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Sat View (; .)", x + 40, ty); ty += 12;
-            canvas->setTextColor(TFT_CYAN);
-            canvas->drawString("[Space]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Lock/Unlock View", x + 45, ty); ty += 12;
+            drawHotKey("WiFi", 'w', x + 5, ty); 
+            drawHotKey("Satellites", 's', x + 105, ty); ty += 12;
+            
+            drawHotKey("Config(Loc&Alt[])", 'c', x + 5, ty); 
+            drawHotKey("Time( , / . )", ',', x + 105, ty); ty += 12;
+            
+            drawHotKey("Help", 'h', x + 5, ty); 
+            drawHotKey("PassList[Ent]", 'e', x + 105, ty); ty += 12;
+            
+            drawHotKey("GNSS", 'g', x + 5, ty); 
+            drawHotKey("View(Sat)", 'v', x + 105, ty); ty += 12;
+            
+            drawHotKey("Lock[Spc]", 'l', x + 5, ty); 
+            drawHotKey("HUD[Del]", 'd', x + 105, ty); ty += 12;
+            
+            drawHotKey("Bright[ ]", '[', x + 5, ty); ty += 12;
         }
         
         if (showRecommendations) {
@@ -1478,9 +1514,47 @@ void loop() {
                     for (int i = 0; i < NUM_SATELLITES; i++) {
                         if (g_satellites[i].name == p.satName) { sIdx = i; break; }
                     }
-                    if (sIdx != -1 && g_satellites[sIdx].downlinkFreq.length() > 0) {
-                        earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                        earth_renderer->getCanvas()->drawString("Rx:" + g_satellites[sIdx].downlinkFreq + "MHz " + g_satellites[sIdx].radioMode, 5, 97);
+                    if (sIdx != -1) {
+                        double tx, ty, tz;
+                        if (g_satellites[sIdx].calc.getTEME(current_unix, tx, ty, tz)) {
+                            double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix));
+                            ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                            GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                            GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                            TopocentricCoord topo = CoordTransform::ecefToTopocentric(obsGeo, ecef);
+                            double az = topo.az;
+                            double el = topo.el;
+                            double dist = topo.range;
+                            
+                            double tx_prev, ty_prev, tz_prev;
+                            double dist_prev = dist;
+                            if (g_satellites[sIdx].calc.getTEME(current_unix - 1, tx_prev, ty_prev, tz_prev)) {
+                                double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix - 1));
+                                ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
+                                TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
+                                dist_prev = topo_prev.range;
+                            }
+                            double range_rate = dist - dist_prev;
+                            
+                            earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
+                            char azaltBuf[32];
+                            sprintf(azaltBuf, "Az:%03d Alt:%02d", (int)az, (int)el);
+                            earth_renderer->getCanvas()->drawString(azaltBuf, 5, 97);
+                            
+                            if (g_satellites[sIdx].downlinkFreq.length() > 0) {
+                                double freq_mhz = g_satellites[sIdx].downlinkFreq.toDouble();
+                                double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
+                                char rxBuf[32];
+                                sprintf(rxBuf, "Rx:%s (%+.1f)", g_satellites[sIdx].downlinkFreq.c_str(), shift_khz);
+                                earth_renderer->getCanvas()->drawString(rxBuf, 5, 109);
+                            }
+                            if (g_satellites[sIdx].uplinkFreq.length() > 0) {
+                                earth_renderer->getCanvas()->setTextColor(TFT_ORANGE);
+                                String txStr = "Tx:" + g_satellites[sIdx].uplinkFreq;
+                                if (g_satellites[sIdx].tone.length() > 0) txStr += " T:" + g_satellites[sIdx].tone;
+                                earth_renderer->getCanvas()->drawString(txStr.c_str(), 5, 121);
+                            }
+                        }
                     }
                     
                 } else {
@@ -1591,7 +1665,7 @@ void loop() {
         }
         
         // Draw Time Machine at bottom right
-        if (appState == STATE_MAIN) {
+        if (appState == STATE_MAIN && showHud && !showHelp && !showRecommendations) {
             char timeStr[32];
             int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
             time_t local_t = current_unix + tzOffsetSec;
@@ -1606,6 +1680,49 @@ void loop() {
             if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES) {
                 earth_renderer->getCanvas()->setTextColor(g_satellites[focusSatIndex].color);
                 earth_renderer->getCanvas()->drawString("Sat View", 180, 5);
+                
+                // Add calculation for Az/Alt and Doppler Shift
+                double tx, ty, tz;
+                if (g_satellites[focusSatIndex].calc.getTEME(current_unix, tx, ty, tz)) {
+                    double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix));
+                    ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                    GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                    GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                    TopocentricCoord topo = CoordTransform::ecefToTopocentric(obsGeo, ecef);
+                    double az = topo.az;
+                    double el = topo.el;
+                    double dist = topo.range;
+                    
+                    double tx_prev, ty_prev, tz_prev;
+                    double dist_prev = dist;
+                    if (g_satellites[focusSatIndex].calc.getTEME(current_unix - 1, tx_prev, ty_prev, tz_prev)) {
+                        double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix - 1));
+                        ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
+                        TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
+                        dist_prev = topo_prev.range;
+                    }
+                    
+                    double range_rate = dist - dist_prev;
+                    
+                    uint16_t satColor = g_satellites[focusSatIndex].color;
+                    earth_renderer->getCanvas()->setTextColor(satColor);
+                    
+                    char azBuf[32];
+                    char elBuf[32];
+                    sprintf(azBuf, "Az : %03d", (int)az);
+                    sprintf(elBuf, "Alt: %02d", (int)el);
+                    earth_renderer->getCanvas()->drawString(azBuf, 5, 105);
+                    earth_renderer->getCanvas()->drawString(elBuf, 5, 115);
+                    
+                    String freq = g_satellites[focusSatIndex].downlinkFreq;
+                    if (freq.length() > 0) {
+                        double freq_mhz = freq.toDouble();
+                        double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
+                        char freqBuf[32];
+                        sprintf(freqBuf, "Rx : %s (%+.1f)", freq.c_str(), shift_khz);
+                        earth_renderer->getCanvas()->drawString(freqBuf, 5, 125);
+                    }
+                }
             }
         }
         
