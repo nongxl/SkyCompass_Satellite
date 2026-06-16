@@ -114,7 +114,6 @@ bool EarthRenderer::projectOrthographic(double lat, double lon, double alt, doub
     }
 
     float cos_c = sinf(cLatRad) * sinf(latRad) + cosf(cLatRad) * cosf(latRad) * cosf(lonRad - cLonRad);
-    if (cos_c < 0) return false; // Behind the Earth
 
     float x = r * cosf(latRad) * sinf(lonRad - cLonRad);
     float y = r * (cosf(cLatRad) * sinf(latRad) - sinf(cLatRad) * cosf(latRad) * cosf(lonRad - cLonRad));
@@ -122,19 +121,22 @@ bool EarthRenderer::projectOrthographic(double lat, double lon, double alt, doub
 
     // AR Camera Effect: True 3D Pitch and Roll
     float pitchRad = _cameraPitch * DEG_TO_RAD;
+    
+    float z_pitched = y * sinf(pitchRad) + z * cosf(pitchRad);
     float y_pitched = y * cosf(pitchRad) - z * sinf(pitchRad);
     
-    // Option A: Lock focus point to screen center.
-    // Blend the anchor from Earth's center (at zoom=1) to the Surface/Satellite (at zoom>=2.5).
-    // Ramps up quickly to prevent the target from drifting off-screen during intermediate zoom.
-    float anchorBlend = (_zoom - 1.0f) / 1.5f;
-    if (anchorBlend < 0.0f) anchorBlend = 0.0f;
-    if (anchorBlend > 1.0f) anchorBlend = 1.0f;
+    if (z_pitched < 0) {
+        if (alt <= 0) return false; // On or below surface, strictly occluded
+        // For altitude > 0, check if it's occluded by the Earth body
+        float distSq = x * x + y_pitched * y_pitched;
+        if (distSq < _earthRadius * _earthRadius) {
+            return false;
+        }
+    }
     
-    float focusOffset = _cameraFocusR * sinf(pitchRad) * anchorBlend;
-    y_pitched += focusOffset;
-
+    // AR Camera Effect: True 3D Roll (rotating the camera around the forward axis)
     float rollRad = -_cameraRoll * DEG_TO_RAD; // Negative to match natural tilt direction
+    
     float rotatedX = x * cosf(rollRad) - y_pitched * sinf(rollRad);
     float rotatedY = x * sinf(rollRad) + y_pitched * cosf(rollRad);
 
@@ -176,20 +178,16 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
             
             float cos_c = sin_cLat * sin_lat + cos_cLat * cos_lat * cos_dLon;
             
-            if (cos_c >= 0) {
-                float r = (float)_earthRadius;
-                float x = r * cos_lat * sin_dLon;
-                float y = r * (cos_cLat * sin_lat - sin_cLat * cos_lat * cos_dLon);
-                float z = r * cos_c;
-                
-                float pitchRad = _cameraPitch * DEG_TO_RAD;
+            float r = (float)_earthRadius;
+            float x = r * cos_lat * sin_dLon;
+            float y = r * (cos_cLat * sin_lat - sin_cLat * cos_lat * cos_dLon);
+            float z = r * cos_c;
+            
+            float pitchRad = _cameraPitch * DEG_TO_RAD;
+            float z_pitched = y * sinf(pitchRad) + z * cosf(pitchRad);
+            
+            if (z_pitched >= 0) {
                 float y_pitched = y * cosf(pitchRad) - z * sinf(pitchRad);
-                
-                float anchorBlend = (_zoom - 1.0f) / 1.5f;
-                if (anchorBlend < 0.0f) anchorBlend = 0.0f;
-                if (anchorBlend > 1.0f) anchorBlend = 1.0f;
-                float focusOffset = _cameraFocusR * sinf(pitchRad) * anchorBlend;
-                y_pitched += focusOffset;
                 
                 float rotatedX = x * cos_roll - y_pitched * sin_roll;
                 float rotatedY = x * sin_roll + y_pitched * cos_roll;
@@ -262,11 +260,6 @@ void EarthRenderer::drawStars(double centerLat, double centerLon) {
     float sin_roll = sinf(rollRad);
     float cos_roll = cosf(rollRad);
     
-    float anchorBlend = (_zoom - 1.0f) / 1.5f;
-    if (anchorBlend < 0.0f) anchorBlend = 0.0f;
-    if (anchorBlend > 1.0f) anchorBlend = 1.0f;
-    float focusOffset = _cameraFocusR * sin_pitch * anchorBlend;
-    
     // Radius of the virtual celestial sphere
     float R_sky = 250.0f; 
     
@@ -283,20 +276,21 @@ void EarthRenderer::drawStars(double centerLat, double centerLon) {
         float cos_lat = cosf(dec_rad);
         float dLon = star_lon_rad - cLonRad;
         
-        // Dot product with camera view direction.
-        // If cos_c < 0, it means it's behind the Earth on the celestial sphere,
-        // which is exactly the hemisphere visible to our outside-in camera.
+        // Calculate unpitched coordinates
         float cos_c = sin_cLat * sin_lat + cos_cLat * cos_lat * cosf(dLon);
+        float x = R_sky * cos_lat * sinf(dLon);
+        float y = R_sky * (cos_cLat * sin_lat - sin_cLat * cos_lat * cosf(dLon));
+        float z = R_sky * cos_c;
         
-        if (cos_c < -0.1f) { // Slightly behind the edge
-            // Map to the virtual sky sphere
-            float x = R_sky * cos_lat * sinf(dLon);
-            float y = R_sky * (cos_cLat * sin_lat - sin_cLat * cos_lat * cosf(dLon));
-            float z = R_sky * cos_c; // This is negative
-            
-            // Apply Camera Pitch
-            float y_pitched = y * cos_pitch - z * sin_pitch;
-            y_pitched += focusOffset;
+        // Apply Camera Pitch
+        float y_pitched = y * cos_pitch - z * sin_pitch;
+        
+        // Star is visible if it's not blocked by the Earth sphere.
+        // Earth is at (0,0).
+        float distSq = x * x + y_pitched * y_pitched;
+        float earthR = _earthRadius + 1.0f;
+        
+        if (distSq > earthR * earthR) {
             
             // Apply Camera Roll
             float rotatedX = x * cos_roll - y_pitched * sin_roll;
@@ -307,10 +301,8 @@ void EarthRenderer::drawStars(double centerLat, double centerLon) {
             
             // Avoid drawing over the Earth's body itself
             // Calculate distance from screen center of the Earth projection
-            float cx_rot = -focusOffset * sin_roll;
-            float cy_rot = focusOffset * cos_roll;
-            int circleX = _centerX + _centerOffsetX + (int)cx_rot;
-            int circleY = _centerY + _centerOffsetY - (int)cy_rot;
+            int circleX = _centerX + _centerOffsetX;
+            int circleY = _centerY + _centerOffsetY;
             
             float dist_sq = (outX - circleX) * (outX - circleX) + (outY - circleY) * (outY - circleY);
             if (dist_sq > (_earthRadius + 2) * (_earthRadius + 2)) {
@@ -334,23 +326,12 @@ void EarthRenderer::drawStars(double centerLat, double centerLon) {
 
 void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat, double userLon) {
     // The center of the earth is at (0, 0, 0) relative to projection.
-    // Apply pitch and roll to find its screen position.
-    float pitchRad = _cameraPitch * DEG_TO_RAD;
-    float rollRad = -_cameraRoll * DEG_TO_RAD;
     
-    float anchorBlend = (_zoom - 1.0f) / 1.5f;
-    if (anchorBlend < 0.0f) anchorBlend = 0.0f;
-    if (anchorBlend > 1.0f) anchorBlend = 1.0f;
-    float focusOffset = _cameraFocusR * sinf(pitchRad) * anchorBlend;
+    int circleX = _centerX + _centerOffsetX;
+    int circleY = _centerY + _centerOffsetY;
     
-    float cx_rot = -focusOffset * sinf(rollRad);
-    float cy_rot = focusOffset * cosf(rollRad);
-    
-    int circleX = _centerX + _centerOffsetX + (int)cx_rot;
-    int circleY = _centerY + _centerOffsetY - (int)cy_rot;
-
-    // Draw Earth circle (darker base for night side feeling)
-    _canvas->fillCircle(circleX, circleY, _earthRadius, _display->color565(5, 15, 30));
+    // Fill earth background
+    _canvas->fillCircle(circleX, circleY, _earthRadius, _display->color565(10, 20, 30));
     _canvas->drawCircle(circleX, circleY, _earthRadius, _display->color565(30, 60, 100));
     
     // Draw continents
@@ -427,22 +408,18 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
                 // Direct cartesian projection bypassing expensive asin/atan2
                 float term2 = P_x * cos_cLon + P_y * sin_cLon;
                 float cos_c = sin_cLat * P_z + cos_cLat * term2;
-                bool visible = cos_c >= 0;
+                
+                float proj_x = r * (P_y * cos_cLon - P_x * sin_cLon);
+                float proj_y = r * (cos_cLat * P_z - sin_cLat * term2);
+                float proj_z = r * cos_c;
+                
+                float pitchRad = _cameraPitch * DEG_TO_RAD;
+                float z_pitched = proj_y * sinf(pitchRad) + proj_z * cosf(pitchRad);
+                bool visible = z_pitched >= 0;
                 
                 int x = -1, y = -1;
                 if (visible) {
-                    float proj_x = r * (P_y * cos_cLon - P_x * sin_cLon);
-                    float proj_y = r * (cos_cLat * P_z - sin_cLat * term2);
-                    float proj_z = r * cos_c;
-                    
-                    float pitchRad = _cameraPitch * DEG_TO_RAD;
                     float y_pitched = proj_y * cosf(pitchRad) - proj_z * sinf(pitchRad);
-                    
-                    float anchorBlend = (_zoom - 1.0f) / 1.5f;
-                    if (anchorBlend < 0.0f) anchorBlend = 0.0f;
-                    if (anchorBlend > 1.0f) anchorBlend = 1.0f;
-                    float focusOffset = _cameraFocusR * sinf(pitchRad) * anchorBlend;
-                    y_pitched += focusOffset;
                     
                     float rotatedX = proj_x * cos_roll - y_pitched * sin_roll;
                     float rotatedY = proj_x * sin_roll + y_pitched * cos_roll;

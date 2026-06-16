@@ -28,6 +28,7 @@ uint32_t convertGNSSDateToUnix(int year, int month, int day, int hour, int min, 
 #include "core/position_manager.h"
 #include "core/sun_calculator.h"
 #include <HTTPClient.h>
+#include <ArduinoJson.h>
 
 extern HalImu* imu;
 extern HalGnss* gnss;
@@ -203,6 +204,9 @@ float lockedYaw = 0;
 unsigned long bootTime = 0;
 bool showHelp = false;
 bool isManualLocationMode = false;
+// removed duplicate isSatViewMode
+float basePitch = 0.0f; // Stores initial pitch for relative view
+float baseRoll = 0.0f;  // Stores initial roll for relative view
 bool predictionsReady = false;
 int predictionProgress = 0;
 bool manualWifiToggle = false;
@@ -287,6 +291,41 @@ struct NetworkParams {
     bool shouldSave;
 };
 
+
+void fetchFrequencies() {
+    WiFiClientSecure *client = new WiFiClientSecure;
+    if (!client) return;
+    client->setInsecure();
+    
+    HTTPClient http;
+    http.begin(*client, "https://raw.githubusercontent.com/nongxl/SkyCompass_Satellite/main/data/frequencies.json");
+    int httpCode = http.GET();
+    if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+        if (httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+            String newUrl = http.getLocation();
+            http.end();
+            http.begin(*client, newUrl);
+            httpCode = http.GET();
+        }
+    }
+    if (httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, payload);
+        if (!error) {
+            for (int i = 0; i < NUM_SATELLITES; i++) {
+                String idStr = String(g_satellites[i].noradId);
+                if (doc.containsKey(idStr)) {
+                    g_satellites[i].downlinkFreq = doc[idStr]["freq"].as<String>();
+                    g_satellites[i].radioMode = doc[idStr]["mode"].as<String>();
+                }
+            }
+        }
+    }
+    http.end();
+    delete client;
+}
+
 void networkTask(void* parameter) {
     String ssid = "";
     String pass = "";
@@ -341,6 +380,9 @@ void networkTask(void* parameter) {
         }
 
         // IP Geolocation removed per user request (relies on GNSS/cache instead)
+
+        // 3.5 Fetch Frequencies
+        fetchFrequencies();
 
         // 4. Fetch TLEs
         bool updated = false;
@@ -758,10 +800,16 @@ void loop() {
             else if (M5Cardputer.Keyboard.isKeyPressed(']')) currentKey = ']';
             
             auto handleContinuousKey = [&](char key) {
-                if (isSatViewMode || (!isManualLocationMode && !showRecommendations)) {
+                if (showRecommendations) {
+                    if (selectedPassIndex == -1) {
+                        if (key == ';') { if (passScrollIndex > 0) passScrollIndex--; }
+                        else if (key == '.') { if (passScrollIndex < (int)displayTree.size() - 1) passScrollIndex++; }
+                    }
+                } else if (isSatViewMode || (!isManualLocationMode)) {
                     if (key == ',') current_unix -= 60;
                     else if (key == '/') current_unix += 60;
                 } else if (isManualLocationMode) {
+                    // Step size based on zoom level, finer control when zoomed in
                     float step = 1.0f / currentZoom;
                     if (key == ';') { baseUserLat += step; if (baseUserLat > 90) baseUserLat = 90; }
                     else if (key == '.') { baseUserLat -= step; if (baseUserLat < -90) baseUserLat = -90; }
@@ -769,9 +817,6 @@ void loop() {
                     else if (key == '/') { baseUserLon += step; if (baseUserLon > 180) baseUserLon -= 360; }
                     else if (key == '[') { baseUserAlt -= 10.0; if (baseUserAlt < -500) baseUserAlt = -500; }
                     else if (key == ']') { baseUserAlt += 10.0; if (baseUserAlt > 9000) baseUserAlt = 9000; }
-                } else if (showRecommendations && selectedPassIndex == -1) {
-                    if (key == ';') { if (passScrollIndex > 0) passScrollIndex--; }
-                    else if (key == '.') { if (passScrollIndex < (int)displayTree.size() - 1) passScrollIndex++; }
                 }
                 
                 if (key == ' ') {
@@ -898,7 +943,15 @@ void loop() {
                                 }
                             }
                         }
-                        if (!found) isSatViewMode = false;
+                        if (!found) {
+                            isSatViewMode = false;
+                        } else {
+                            if (attitude && imu) {
+                                AttitudeData att = attitude->getAttitude();
+                                basePitch = att.pitch;
+                                baseRoll = att.roll;
+                            }
+                        }
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
                     if (isSatViewMode) {
@@ -1163,8 +1216,8 @@ void loop() {
             if (attitude && imu) {
                 if (!isImuLocked) {
                     AttitudeData att = attitude->getAttitude();
-                    lockedPitch = att.pitch;
-                    lockedRoll = att.roll;
+                    lockedPitch = att.pitch - basePitch;
+                    lockedRoll = att.roll - baseRoll;
                 }
                 // Option A: Pass real pitch and roll to camera (inverted as requested by user)
                 earth_renderer->setCameraAttitude(-lockedPitch, -lockedRoll, 0);
@@ -1330,7 +1383,7 @@ void loop() {
             canvas->setTextColor(TFT_CYAN);
             canvas->drawString("[v/V]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Sat View (; .)", x + 40, ty); ty += 12;
             canvas->setTextColor(TFT_CYAN);
-            canvas->drawString("[Space]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("IMU Lock", x + 45, ty); ty += 12;
+            canvas->drawString("[Space]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Lock/Unlock View", x + 45, ty); ty += 12;
         }
         
         if (showRecommendations) {
