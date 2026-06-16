@@ -1,0 +1,32 @@
+name: Update Satellite Frequencies
+
+on:
+  schedule:
+    # Run at 00:00 every Sunday
+    - cron: '0 0 * * 0'
+  workflow_dispatch: # Allows you to manually trigger the update from GitHub Actions UI
+
+jobs:
+  update-frequencies:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Run update script
+        run: |
+          python scripts/update_frequencies.py
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/frequencies.json
+          git commit -m "Auto-update satellite frequencies via GitHub Actions" || echo "No changes to commit"
+          git push
