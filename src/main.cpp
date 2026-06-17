@@ -1540,10 +1540,7 @@ void loop() {
                 data.currentPos = geo;
                 data.color = g_satellites[i].color;
                 
-                // Skip expensive orbit path recalculation if user is holding the fast-forward button
-                if (!isFastForwarding) {
-                    calculateOrbit(g_satellites[i].calc, current_unix, g_satellites[i].cache, orbitsCalculatedThisFrame);
-                }
+                calculateOrbit(g_satellites[i].calc, current_unix, g_satellites[i].cache, orbitsCalculatedThisFrame);
                 
                 data.pastOrbit = &(g_satellites[i].cache.past);
                 data.futureOrbit = &(g_satellites[i].cache.future);
