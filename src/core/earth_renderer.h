@@ -13,7 +13,7 @@ enum SatIconType {
 };
 
 struct SatRenderData {
-    String name;
+    const char* name;
     SatIconType iconType;
     GeodeticCoord currentPos;
     const std::vector<GeodeticCoord>* pastOrbit;
@@ -39,6 +39,9 @@ public:
 
     // Set whether satellite color is constrained by ground observer visibility (default: true)
     void setObserverConstrained(bool constrained) { _observerConstrained = constrained; }
+    
+    // Set whether time machine is fast forwarding to optimize rendering load
+    void setFastForwarding(bool ff) { _isFastForwarding = ff; }
 
     void setZoom(float zoom) {
         _zoom = zoom;
@@ -101,6 +104,7 @@ private:
     
     // Rendering configs
     bool _observerConstrained = true;
+    bool _isFastForwarding = false;
 
     // Helper functions for orthographic projection
     bool projectOrthographic(double lat, double lon, double alt, double centerLat, double centerLon, int& outX, int& outY);
@@ -108,5 +112,6 @@ private:
     void drawStars(double centerLat, double centerLon);
     void drawEarth(double centerLat, double centerLon, double userLat, double userLon);
     void drawContinents(double centerLat, double centerLon);
+    void drawLightPollution(double centerLat, double centerLon);
     void drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon);
 };

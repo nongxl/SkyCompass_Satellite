@@ -1503,7 +1503,8 @@ void loop() {
                   ti->tm_year + 1900, ti->tm_mon + 1, ti->tm_mday, ti->tm_hour, ti->tm_min, ti->tm_sec);
         }
 
-        std::vector<SatRenderData> sats;
+        static std::vector<SatRenderData> sats;
+        sats.clear();
         sats.reserve(NUM_SATELLITES);
         int orbitsCalculatedThisFrame = 0;
         for (int i = 0; i < NUM_SATELLITES; i++) {
@@ -1534,7 +1535,7 @@ void loop() {
                 }
                 
                 SatRenderData data;
-                data.name = g_satellites[i].name;
+                data.name = g_satellites[i].name.c_str();
                 data.iconType = g_satellites[i].iconType;
                 data.currentPos = geo;
                 data.color = g_satellites[i].color;
@@ -1557,6 +1558,7 @@ void loop() {
             renderUserLat = 999.0; // Blink marker by putting it off-planet
         }
         earth_renderer->setObserverConstrained(!isSatViewMode);
+        earth_renderer->setFastForwarding(isFastForwarding);
         earth_renderer->setUnixTime(current_unix);
         earth_renderer->render(viewLat, viewLon, renderUserLat, baseUserLon, sats);
         

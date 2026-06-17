@@ -1,5 +1,6 @@
 #include "earth_renderer.h"
 #include "earth_data.h"
+#include "light_points_data.h"
 #include <math.h>
 
 #define DEG_TO_RAD 0.017453292519943295769236907684886
@@ -337,6 +338,9 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
     // Draw continents
     drawContinents(centerLat, centerLon);
     
+    // Draw city light pollution on the dark side
+    drawLightPollution(centerLat, centerLon);
+    
     // Draw user location as a map pin 📍
     int ux, uy;
     if (userLat <= 90.0 && projectOrthographic(userLat, userLon, 0, centerLat, centerLon, ux, uy)) {
@@ -609,7 +613,7 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
         
         _canvas->setTextColor(drawColor);
         _canvas->setTextSize(1);
-        _canvas->drawString(sat.name.c_str(), sx + 8, sy - 4);
+        _canvas->drawString(sat.name, sx + 8, sy - 4);
     }
 }
 
@@ -635,3 +639,72 @@ void EarthRenderer::render(double centerLat, double centerLon, double userLat, d
         lastTime = now;
     }
 }
+
+void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
+    if (!_hasSunData) return;
+    
+    float subLatR = (float)_subsolarLat * DEG_TO_RAD;
+    float subLonR = (float)_subsolarLon * DEG_TO_RAD;
+    float sin_subLat = sinf(subLatR);
+    float cos_subLat = cosf(subLatR);
+    
+    float cLatRad = (float)centerLat * DEG_TO_RAD;
+    float cLonRad = (float)centerLon * DEG_TO_RAD;
+    float sin_cLat = sinf(cLatRad);
+    float cos_cLat = cosf(cLatRad);
+    float rollRad = -_cameraRoll * DEG_TO_RAD;
+    float sin_roll = sinf(rollRad);
+    float cos_roll = cosf(rollRad);
+    float pitchRad = _cameraPitch * DEG_TO_RAD;
+    float sin_pitch = sinf(pitchRad);
+    float cos_pitch = cosf(pitchRad);
+    
+    float r = (float)_earthRadius;
+    
+    for (int i = 0; i < light_points_count; i++) {
+        float latRad = light_points[i].latRad;
+        float lonRad = light_points[i].lonRad;
+        float sin_lat = light_points[i].sinLat;
+        float cos_lat = light_points[i].cosLat;
+        
+        // 1. Determine if the point is in darkness (cos_dist <= 0.05f)
+        float cos_dist = sin_subLat * sin_lat + cos_subLat * cos_lat * cosf(lonRad - subLonR);
+        
+        if (cos_dist <= 0.05f) {
+            // 2. Inline orthographic projection to maximize loop execution performance
+            float deltaLon = lonRad - cLonRad;
+            float cos_dLon = cosf(deltaLon);
+            float sin_dLon = sinf(deltaLon);
+            
+            float cos_c = sin_cLat * sin_lat + cos_cLat * cos_lat * cos_dLon;
+            
+            float x = r * cos_lat * sin_dLon;
+            float y = r * (cos_cLat * sin_lat - sin_cLat * cos_lat * cos_dLon);
+            float z = r * cos_c;
+            
+            float z_pitched = y * sin_pitch + z * cos_pitch;
+            
+            if (z_pitched >= 0) {
+                float y_pitched = y * cos_pitch - z * sin_pitch;
+                float rotatedX = x * cos_roll - y_pitched * sin_roll;
+                float rotatedY = x * sin_roll + y_pitched * cos_roll;
+                
+                int outX = _centerX + _centerOffsetX + (int)rotatedX;
+                int outY = _centerY + _centerOffsetY - (int)rotatedY;
+                
+                // 3. Smooth fade-in from dusk to midnight (cos_dist from 0.05 to -0.15)
+                float factor = (0.05f - cos_dist) / 0.20f;
+                if (factor > 1.0f) factor = 1.0f;
+                if (factor < 0.0f) factor = 0.0f;
+                
+                // 4. Warm light pollution color (R=255, G=200, B=90) scaled by dusk factor
+                uint8_t pr = (uint8_t)(255 * factor);
+                uint8_t pg = (uint8_t)(200 * factor);
+                uint8_t pb = (uint8_t)(90 * factor);
+                
+                _canvas->drawPixel(outX, outY, _display->color565(pr, pg, pb));
+            }
+        }
+    }
+}
+
