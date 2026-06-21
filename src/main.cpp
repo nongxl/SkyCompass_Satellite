@@ -1150,9 +1150,11 @@ void loop() {
         doScreenshot();
     }
 
-    // CRITICAL: IMU and Attitude filter must update as fast as possible!
+    // CRITICAL: IMU and Attitude filter must update as fast as possible, but limited to 100Hz (10ms) to prevent I2C polling from starving the CPU.
     // Otherwise the AHRS filter will diverge and cause freezing/lag.
-    if (imu && attitude) {
+    static unsigned long lastImuUpdate = 0;
+    if (imu && attitude && (millis() - lastImuUpdate >= 10)) {
+        lastImuUpdate = millis();
         imu->update();
         attitude->update();
     }
