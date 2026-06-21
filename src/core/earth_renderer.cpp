@@ -221,7 +221,7 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
                             cb = (uint8_t)(50 * (1 - factor) + 150 * factor);
                         }
                         
-                        if (!_isFastForwarding && _hasSunData) {
+                        if (_hasSunData) {
                             float cos_lon_subLon = cos_lon * cos_subLon + sin_lon * sin_subLon;
                             float cos_dist = sin_subLat * sin_lat + cos_subLat * cos_lat * cos_lon_subLon;
                             float illum = (cos_dist + 0.2f) / 0.4f;
@@ -230,10 +230,6 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
                             cr = (uint8_t)(cr * illum);
                             cg = (uint8_t)(cg * illum);
                             cb = (uint8_t)(cb * illum);
-                        } else if (_isFastForwarding) {
-                            cr = (uint8_t)(cr * 0.7f);
-                            cg = (uint8_t)(cg * 0.7f);
-                            cb = (uint8_t)(cb * 0.7f);
                         }
                         
                         uint16_t color = _display->color565(cr, cg, cb);
@@ -692,8 +688,8 @@ void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
     std::uint16_t* buffer = (std::uint16_t*)_canvas->getBuffer();
     if (!buffer) return;
     
-    // Draw 1/12 of the light points during fast-forwarding to maintain 30 FPS, full 3000 points when static.
-    int step = _isFastForwarding ? 12 : 1;
+    // Draw 1/4 of the light points during fast-forwarding to maintain 30 FPS, full 3000 points when static.
+    int step = _isFastForwarding ? 4 : 1;
     
     for (int i = 0; i < light_points_count; i += step) {
         float sin_lat = light_points[i].sinLat;
