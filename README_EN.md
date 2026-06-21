@@ -128,6 +128,8 @@ To intercept and save screenshots on your PC:
 ## Data Sources & Acknowledgments
 
 - **TLE Orbital Data**: Special thanks to [CelesTrak](https://celestrak.org/) for providing high-precision, real-time Two-Line Element (TLE) datasets for satellite tracking and propagation.
+- **Model Calibration & Reference**: Special thanks to [Tianwentong](https://tianwentong.com/) and [Heavens-Above](https://www.heavens-above.com/) for their simulated prediction results which served as essential references during model calibration and verification.
+
 
 ## License
 
