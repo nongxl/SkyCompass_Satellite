@@ -19,6 +19,7 @@ struct SatRenderData {
     const std::vector<GeodeticCoord>* pastOrbit;
     const std::vector<GeodeticCoord>* futureOrbit;
     uint16_t color;
+    bool isVisible;
 };
 
 class EarthRenderer {

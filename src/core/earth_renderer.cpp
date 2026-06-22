@@ -526,39 +526,8 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
         return;
     }
     
-    // Check observer visibility
-    bool isVisibleToObserver = false;
-    bool isEclipsed = false;
-    
-    if (_hasSunData) {
-        float uLatR = userLat * DEG_TO_RAD;
-        float uLonR = userLon * DEG_TO_RAD;
-        float sLatR = sat.currentPos.lat * DEG_TO_RAD;
-        float sLonR = sat.currentPos.lon * DEG_TO_RAD;
-        float subLatR = _subsolarLat * DEG_TO_RAD;
-        float subLonR = _subsolarLon * DEG_TO_RAD;
-        
-        // Satellite elevation from observer
-        float cos_dist = sinf(uLatR)*sinf(sLatR) + cosf(uLatR)*cosf(sLatR)*cosf(uLonR - sLonR);
-        float cos_horizon = 6371.0f / (6371.0f + (float)sat.currentPos.alt);
-        bool isAboveHorizon = cos_dist > cos_horizon;
-        
-        // Observer sun altitude
-        float sun_cos_dist = sinf(uLatR)*sinf(subLatR) + cosf(uLatR)*cosf(subLatR)*cosf(uLonR - subLonR);
-        float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
-        
-        // Heavens-Above uses a strict -5.0 degrees sun altitude threshold to cut off visible passes in the morning.
-        bool isNight = sun_alt < -5.0f;
-        
-        isEclipsed = isSatelliteInShadow(sat.currentPos.lat, sat.currentPos.lon, sat.currentPos.alt, _subsolarLat, _subsolarLon, _hasSunData);
-        
-        if (_observerConstrained) {
-            isVisibleToObserver = (isNight && isAboveHorizon && !isEclipsed);
-        } else {
-            // In Sat View Mode, satellite is bright as long as it is illuminated by the sun
-            isVisibleToObserver = !isEclipsed;
-        }
-    }
+    // Check observer visibility (reused from pre-calculated state)
+    bool isVisibleToObserver = sat.isVisible;
 
     // Draw Orbit
     auto drawOrbit = [&](const std::vector<GeodeticCoord>& orbit, uint16_t baseColor) {

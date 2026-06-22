@@ -102,7 +102,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
             if (el >= 10.0 && stepSeconds <= 10) {
                 // AOS at 10 degrees threshold
                 inPass = true;
-                stepSeconds = 60; // Speed up scanning while inside the pass
+                stepSeconds = 10; // Keep fine step for high precision
                 currentPass.satName = tle.name;
                 currentPass.aosTime = t;
                 currentPass.startAz = topo.az;
@@ -190,6 +190,13 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                 if (term < 0.001) term = 0.001; // prevent log of 0
                 
                 double mag = stdMag + 5.0 * log10(topo.range / 1000.0) - 2.5 * log10(term);
+                
+                // Atmospheric extinction correction (kv = 0.18 for typical clear night sky)
+                if (el > 0.0) {
+                    double sinEl = sin(el * DEG_TO_RAD);
+                    double airMass = 1.0 / (sinEl + 0.15 * pow(el + 3.825, -1.253));
+                    mag += 0.18 * airMass;
+                }
                 
                 if (mag < currentPass.maxBrightness) {
                     currentPass.maxBrightness = mag;

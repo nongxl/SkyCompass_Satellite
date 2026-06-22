@@ -59,6 +59,114 @@ SkyCompass Satellite 是 SkyCompass 项目的扩展演化版本，运行在 M5St
   - 维护本仓库中的 `data/frequencies.json`，并利用自带的 `.github/workflows/update_frequencies.yml` 自动化流水线。
   - GitHub 会定期在云端执行庞大的 API 过滤任务，生成轻量级 JSON 喂给设备。设备连网后自动拉取，实现无缝的 HAM 通联频率与自定义卫星配置自动同步！
 
+
+## 轨道推演与可见性预测技术细节
+
+为了保证与专业天文软件的预测结果高精度对齐，本项目在嵌入式端（ESP32）实现了一套完整的空间坐标转换、天体力学与光学可视度推演算法。以下是各项计算的核心物理模型和数学细节：
+
+### 1. 时间系统与恒星时转换
+* **儒略日 (Julian Date)**
+  系统利用本地获取的 GPS/NTP 高精度 UTC 时间戳 $t_{unix}$ 转换为儒略日：
+  $$\text{JD} = \frac{t_{unix}}{86400.0} + 2440587.5$$
+* **格林尼治平恒星时 (GMST)**
+  由于地球自转，在进行惯性坐标系到地球固定坐标系的转换时，必须计算格林尼治平恒星时角。算法基于 IAU 天文学常用公式计算：
+  $$T_0 = \frac{\text{JD}_0 - 2451545.0}{36525.0}$$
+  $$\theta_{GMST} = \text{gmst\_0h\_sec} + \Delta t \times 1.002737909350795$$
+  其中 $\text{gmst\_0h\_sec}$ 是当前儒略日 $0$ 时刻的恒星时秒数，$\Delta t$ 为当天内的累计秒数。最终转换并取模为 $[0, 2\pi]$ 的弧度值。
+
+### 2. 空间坐标系变换 (TEME -> ECEF -> ENU)
+* **TEME 惯性坐标系到地固坐标系 (ECEF)**
+  SGP4 轨道模型输出的卫星位置矢量 $(X_{TEME}, Y_{TEME}, Z_{TEME})$ 处于 TEME (True Equator Mean Equinox) 惯性系中。项目使用 GMST 旋转矩阵将其投影到地球固定坐标系 (Earth-Centered, Earth-Fixed, ECEF)：
+  $$\begin{pmatrix} X_{ECEF} \\ Y_{ECEF} \\ Z_{ECEF} \end{pmatrix} = \begin{pmatrix} \cos\theta_{GMST} & \sin\theta_{GMST} & 0 \\ -\sin\theta_{GMST} & \cos\theta_{GMST} & 0 \\ 0 & 0 & 1 \end{pmatrix} \begin{pmatrix} X_{TEME} \\ Y_{TEME} \\ Z_{TEME} \end{pmatrix}$$
+* **WGS-84 地球椭球体参数**
+  考虑地球并非完美球体，算法采用 WGS-84 地球模型（赤道半径 $a = 6378.137\text{ km}$，第一偏心率平方 $e^2 = 0.00669437999014$）。
+  * **大地坐标转换为 ECEF**：
+    观测者（用户）的经度 $\lambda$、纬度 $\phi$ 及海拔高度 $h$（这里将用户所在地海拔 `baseUserAlt` 的 ECEF 至站心坐标完全对齐，从 GPS 或网络定位中自动获取）被转换为三维 ECEF 坐标 $(X_{obs}, Y_{obs}, Z_{obs})$：
+    $$N(\phi) = \frac{a}{\sqrt{1 - e^2 \sin^2\phi}}$$
+    $$X_{obs} = (N(\phi) + h) \cos\phi \cos\lambda, \quad Y_{obs} = (N(\phi) + h) \cos\phi \sin\lambda, \quad Z_{obs} = (N(\phi)(1 - e^2) + h) \sin\phi$$
+  * **ECEF 转换为大地坐标 (星下点高度与经纬度)**：
+    使用带有五次循环的高精度迭代计算，以修正椭球体形状带来的纬度/海拔畸变。
+* **站心坐标系 (Topocentric ENU, East-North-Up)**
+  为了得到卫星相对于观测者的视角，将相对距离矢量 $\mathbf{d} = \mathbf{r}_{sat} - \mathbf{r}_{obs}$ 经观测者局部切平面旋转，映射为东北天 (ENU) 坐标分量 $(E, N, U)$。并依此计算实时方位角 (Azimuth)、几何仰角 (Elevation) 及视距 (Range)：
+  $$Range = \sqrt{E^2 + N^2 + U^2}$$
+  $$Az = \text{atan2}(E, N) \pmod{360^\circ}, \quad El = \arcsin\left(\frac{U}{Range}\right)$$
+
+### 3. 大气折射修正 (Atmospheric Refraction)
+当卫星仰角较低时，地球大气层会对光线产生折射作用，使其物理仰角看似偏高。本项目在仰角 $-5^\circ < El < 15^\circ$ 区间内引入折射修正公式：
+$$R = \frac{1.02}{\tan\left(El + \frac{10.3}{El + 5.11}\right)} \quad (\text{角分})$$
+$$El_{corrected} = El + \frac{R}{60^\circ}$$
+此项修正使低仰角的出地平 (AOS) 和入地平 (LOS) 时间预测与 Heavens-Above 等成熟软件保持高度吻合。
+
+### 4. 严格光学可视性三要素
+满足“肉眼可见”的人造天体必须严格同时满足以下三个物理条件：
+1. **仰角阈值限制**：卫星高度角满足 $El_{corrected} \ge 10.0^\circ$（以避开地面建筑物与低空大气的遮挡）。
+2. **观测者夜间环境**：计算当前时刻太阳相对于观测者的局部仰角 $\theta_{sun}$。只有当 $\theta_{sun} < -6.0^\circ$（即民用暮光结束，天空已变暗）时才判定为黑夜。
+3. **本影锥阴影判定 (Earth Umbra Check)**：
+   卫星本身必须被阳光照射。算法采用球体本影近似模型，判断卫星是否没入地球阴影。
+   计算太阳直射点与卫星的夹角余弦值 $\cos\theta$：
+   $$\cos\theta = \sin(subLat_R)\sin(lat_R) + \cos(subLat_R)\cos(lat_R)\cos(lon_R - subLon_R)$$
+   当 $\cos\theta < 0$ 时，若卫星到阴影轴线的垂直距离满足：
+   $$d_{shadow} = d_{sat} \times \sqrt{1 - \cos^2\theta} < 6378.137\text{ km}$$
+   则判定卫星落入地球本影区（Eclipsed），阳光无法照射，处于不可见状态。
+
+### 5. 视星等、漫反射相函数与大气消光修正 (Magnitude, Phase Angle & Atmospheric Extinction)
+为了评估卫星过境时的真实肉眼可视亮度，算法结合了卫星标准星等 $M_{std}$（在 1000km 且满相角时的基准星等）、实时视距、太阳光照相位角以及大气消光项：
+* **相位角 ($\psi$)**：即“太阳-卫星-观测者”的三维夹角。
+* **漫反射球体相函数 ($\Phi(\psi)$)**：描述了阳光在卫星表面发生弥散漫反射的强度分布：
+  $$\Phi(\psi) = \sin(\psi) + (\pi - \psi)\cos(\psi)$$
+* **大气消光项 ($\Delta M_{ext}$)**：
+  为了对齐天文通等专业软件在低高度角时的消光衰减，项目引入了 Kasten-Young 大气质量（Air Mass, $AM$）模型与清澈夜空视觉波段消光系数 $k_v = 0.18$：
+  $$AM \approx \frac{1}{\sin(El_{corrected}) + 0.15(El_{corrected} + 3.825)^{-1.253}}$$
+  $$\Delta M_{ext} = 0.18 \times AM$$
+* **最终视星等计算**：
+  $$M = M_{std} + 5.0 \log_{10}\left(\frac{Range}{1000\text{ km}}\right) - 2.5 \log_{10}\left(\Phi(\psi)\right) + \Delta M_{ext}$$
+  该模型在考虑阴影和逆光变化的同时，加入了低仰角的大气吸收与散射修正，使视星等预测精准度与主流天文预测结果高度吻合。
+
+### 6. 高能效双重推演步长机制
+针对 ESP32 运算性能受限的痛点，推荐系统采用了一种**双重步长推演算法**：
+* 预推演阶段先采用 120 秒（2分钟）的大步长快速越过无过境的漫长时间段。
+* 一旦检测到卫星仰角跨越地平线，推演引擎立刻**将时间轴向后回滚 120 秒**，并切换为 **10 秒精细步长**进行高精度轨道求解，以锁定最精确的 AOS/最大仰角时刻/可视亮度及 LOS 时刻。
+* 过境事件结束后重新恢复大步长，完美兼顾了高计算精度与极低的单片机 CPU 开销。
+
+## 辅助工具与构建脚本
+
+为了减轻 ESP32 在受限硬件资源下的运行时开销，以及方便用户进行数据交互，本项目在 `scripts` 目录下配备了多个离线数据预处理及电脑端配套工具：
+
+1. **[gen_light_points.py](scripts/gen_light_points.py)** (光污染点云生成脚本)
+   * **用途**：从 NASA GIBS 官方服务中下载最新的 VIIRS Black Marble 全球夜景瓦片地图并拼合为大图，通过分层重要性采样（Stratified Importance Sampling）提取出 3000 个高对比度的夜景光害地标点。
+   * **输出**：自动计算出各坐标的球面三角函数并生成 [light_points_data.h](src/core/light_points_data.h)，供设备端直接免计算进行内联 3D 快速渲染。
+
+2. **[generate_timezone_grid.py](scripts/generate_timezone_grid.py)** (离线时区网格生成脚本)
+   * **用途**：生成全球 $1^\circ \times 1^\circ$ 精度的离线时区映射网格（180 行 × 360 列）。针对没有国家时区覆盖的公海等地区，采用航海时区自动兜底计算。
+   * **输出**：生成 [timezone_grid.h](src/core/timezone_grid.h)，使设备在仅有 GPS 信号无网环境下，也能在秒级内获取当前所在位置的正确本地时间偏移量（UTC Offset）。
+
+3. **[get_screenshot.py](scripts/get_screenshot.py)** (PC 端高保真截图监听脚本)
+   * **用途**：电脑端运行的 Python 串口监听服务。自动扫描并绑定 Cardputer 的串口通道。在不破坏、不占用正常日志输出的前提下，利用正则和数据帧拦截技术，实时提取设备发回的 Base64 分段像素流。
+   * **效果**：将 16 位大端 RGB565 原始帧缓冲区数据无损重构并保存为 24 位高保真的 BMP 图片，绕过了单片机内存不足以进行 PNG/JPG 压缩的硬件缺陷。
+
+4. **[optimize_earth_data.py](scripts/optimize_earth_data.py)** (地表大陆线条离线优化脚本)
+   * **用途**：将项目原版的浮点大陆轮廓经纬度线段数据进行离线三角函数预计算（计算 $\sin Lat, \cos Lat, \sin Lon, \cos Lon$ 等）。
+   * **输出**：优化重构 [earth_data.h](src/core/earth_data.h)，省去单片机在 3D 转换矩阵中对每个地表点重复调用 `sin`/`cos` 的巨大计算开销，使地球线框旋转渲染流畅度稳定在 30 FPS。
+
+5. **[update_frequencies.py](scripts/update_frequencies.py)** (业余无线电频率自动获取脚本)
+   * **用途**：用于 GitHub Actions 自动化流水线。定期或在触发时从卫星通联数据库中拉取最新的 NORAD 卫星下行通联频率和调制模式，过滤并保持轻量化。
+   * **输出**：更新生成本仓库的 `data/frequencies.json`，并通过 GitHub Pages 发布，供设备联网时一键更新。
+
+6. **[scratch/](scratch)** 目录 (开发调试与仿真演练脚本)
+   除了最终部署的辅助工具，本项目在开发过程中，于 `scratch/` 目录下编写并沉淀了大量用于算法原型验证、数值仿真校准以及代码合并过程中的临时辅助脚本。按用途分类梳理如下：
+   * **轨道力学与坐标校验类**：
+     * [test_sgp4_2024.py](scratch/test_sgp4_2024.py) / [test_sgp4_2026.py](scratch/test_sgp4_2026.py)：用于在 PC 端调用 Python `sgp4` 库计算卫星的 TEME 矢量，作为标准真值用以和单片机 C++ SGP4 推算结果进行精度比对，防止单精度或双精度计算溢出。
+     * [test_gmst.py](scratch/test_gmst.py) / [verify_coord.py](scratch/verify_coord.py)：验证格林尼治平恒星时计算及 ECEF 到站心坐标 ENU 转换的正确性，对齐天文学计算精度。
+   * **光照、本影与可视性仿真类**：
+     * [test_shadow4.py](scratch/test_shadow4.py) / [test_shadow5.py](scratch/test_shadow5.py)：地球本影圆锥与球体阴影模型的 Python 算法验证原型，用来仿真并调试卫星入影与出影的临界判定边界。
+     * [test_sun_alt.py](scratch/test_sun_alt.py) / [test_sun_alt_exact.py](scratch/test_sun_alt_exact.py)：校准并仿真太阳直射点和太阳相对高度角的计算，确保昼夜圈判定无视觉畸变。
+   * **点云与天表特征生成类**：
+     * [generate_stars.py](scratch/generate_stars.py)：从标准耶鲁亮星目录中过滤并生成天空中高亮度导航星体的 3D 天球坐标并输出为设备端的头文件。
+     * [test_star_proj.py](scratch/test_star_proj.py)：用于验证和测试天球恒星到地球正交投影视图的映射效果。
+   * **开发重构与自动化补丁类**：
+     * [update_main.py](scratch/update_main.py) / [patch_main.py](scratch/patch_main.py) / [modify.py](scratch/modify.py)：用于在向单片机添加复杂屏幕布局、状态同步和按键映射等功能时，由于 `src/main.cpp` 代码逻辑非常庞大，编写的自动化文本解析、校验及代码行合并修改工具。
+     * [benchmark.cpp](scratch/benchmark.cpp) / [test5.cpp](scratch/test5.cpp)：对浮点数矩阵乘法、三角函数公式等关键渲染逻辑在单片机上进行局部跑分与开销评估 of 的源码。
+
 ## 与 SkyCompass 的关系
 
 **共享底层基础：**

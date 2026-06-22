@@ -93,14 +93,14 @@ const uint8_t mono_icon_telescope[8] = {
 };
 
 const uint8_t mono_icon_rocket[8] = {
+    0b00000000, //  . . . . . . . .
     0b00011000, //  . . . ■ ■ . . . (三角形尖头)
     0b00111100, //  . . ■ ■ ■ ■ . . (箭体)
     0b00111100, //  . . ■ ■ ■ ■ . .
     0b00111100, //  . . ■ ■ ■ ■ . .
-    0b00111100, //  . . ■ ■ ■ ■ . .
-    0b00111100, //  . . ■ ■ ■ ■ . .
     0b01111110, //  . ■ ■ ■ ■ ■ ■ . (尾翼扩展)
-    0b00100100  //  . . ■ . . ■ . . (双发动机喷口)
+    0b00100100, //  . . ■ . . ■ . . (双发动机喷口)
+    0b00000000  //  . . . . . . . .
 };
 
 const uint8_t mono_icon_deepspace[8] = {
@@ -1893,30 +1893,33 @@ void loop() {
             if (g_satCaches[i].lastGeoValid) {
                 bool isVisible = false;
                 if (sun_calc) {
-                    float uLatR = baseUserLat * DEG_TO_RAD;
-                    float uLonR = baseUserLon * DEG_TO_RAD;
-                    float sLatR = g_satCaches[i].lastGeo.lat * DEG_TO_RAD;
-                    float sLonR = g_satCaches[i].lastGeo.lon * DEG_TO_RAD;
+                    GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                    ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_satCaches[i].lastGeo);
+                    TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
+                    float el = topo.el;
                     
-                    // 1. 卫星相对于观测点的高度角
-                    float cos_dist = sinf(uLatR)*sinf(sLatR) + cosf(uLatR)*cosf(sLatR)*cosf(uLonR - sLonR);
-                    float cos_horizon = 6371.0f / (6371.0f + (float)g_satCaches[i].lastGeo.alt);
-                    bool isAboveHorizon = cos_dist > cos_horizon;
+                    // 同样引入大气折射补偿（与 predictor 一致）
+                    if (el > -5.0f && el < 15.0f) {
+                        float r = 1.02f / tanf((el + 10.3f / (el + 5.11f)) * DEG_TO_RAD);
+                        el += r / 60.0f;
+                    }
                     
                     // 2. 观测点是否是晚上
                     SunPositionData sPos = sun_calc->calculatePosition(simTime, baseUserLat, baseUserLon);
+                    float uLatR = baseUserLat * DEG_TO_RAD;
+                    float uLonR = baseUserLon * DEG_TO_RAD;
                     float subLatR = sPos.subsolarLat * DEG_TO_RAD;
                     float subLonR = sPos.subsolarLon * DEG_TO_RAD;
                     float sun_cos_dist = sinf(uLatR)*sinf(subLatR) + cosf(uLatR)*cosf(subLatR)*cosf(uLonR - subLonR);
                     float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
-                    bool isNight = sun_alt < -5.0f;
+                    bool isNight = sun_alt < -6.0f; // 改为 -6.0f，与过境预测完全一致
                     
                     if (isSatViewMode) {
                         // 卫星视角下，只要不被地球遮挡即亮起
                         isVisible = !g_satCaches[i].lastInShadow;
                     } else {
-                        // 观测者视角下，必须是晚上、在地平线以上、且没被地球遮挡
-                        isVisible = (isNight && isAboveHorizon && !g_satCaches[i].lastInShadow);
+                        // 观测者视角下，必须是晚上、高度角满足过境要求（以 10 度高度角为阈值）、且没被地球遮挡
+                        isVisible = (isNight && (el >= 10.0f) && !g_satCaches[i].lastInShadow);
                     }
                 }
                 g_satCaches[i].isVisible = isVisible;
@@ -1936,6 +1939,7 @@ void loop() {
                 data.iconType = g_satellites[i].iconType;
                 data.currentPos = g_satCaches[i].lastGeo;
                 data.color = g_satellites[i].color;
+                data.isVisible = g_satCaches[i].isVisible;
                 
                 calculateOrbit(g_satellites[i].calc, simTime, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding);
                 
@@ -2479,26 +2483,23 @@ void loop() {
                     
                     uint8_t temp[8] = {0};
                     for (int r = 0; r < 5; r++) {
-                        temp[r + 1] = (font_3x5[D1][r] << 5) | (font_3x5[D2][r] << 1);
+                        temp[r + 2] = (font_3x5[D1][r] << 5) | font_3x5[D2][r];
                     }
                     M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
                 }
             } else {
-                // 分钟阶段：10分到1分静止显示，不闪烁
+                // 分钟阶段：10分到1分静止显示，不闪烁。采用两位数显示（如 05），使其完全对称
                 int minutes = (timeDiff == 600) ? 10 : (timeDiff / 60);
                 if (minutes != lastDispMinutes) {
                     lastDispMinutes = minutes;
                     lastDispSeconds = -1;
                     
+                    uint8_t D1 = minutes / 10;
+                    uint8_t D2 = minutes % 10;
+                    
                     uint8_t temp[8] = {0};
-                    if (minutes == 10) {
-                        for (int r = 0; r < 5; r++) {
-                            temp[r + 1] = (font_3x5[1][r] << 5) | (font_3x5[0][r] << 1);
-                        }
-                    } else {
-                        for (int r = 0; r < 5; r++) {
-                            temp[r + 1] = font_3x5[minutes][r] << 3; // 居中
-                        }
+                    for (int r = 0; r < 5; r++) {
+                        temp[r + 2] = (font_3x5[D1][r] << 5) | font_3x5[D2][r];
                     }
                     M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
                 }
