@@ -121,11 +121,10 @@ To estimate the satellite's brightness, the visual magnitude ($M$) is calculated
   $$M = M_{std} + 5.0 \log_{10}\left(\frac{Range}{1000\text{ km}}\right) - 2.5 \log_{10}\left(\Phi(\psi)\right) + \Delta M_{ext}$$
   This refined model accounts for both solar geometry and low-elevation atmospheric absorption/scattering, ensuring high-fidelity correlation with mainstream astronomical tools.
 
-### 6. Power-Efficient Dual-Step Prediction Engine
-To bypass ESP32's processing limits during 24-hour pass searches, a dual-step propagation technique is employed:
-* The propagator sweeps forward using a coarse **120-second (2-minute)** step size to quickly bypass long periods of invisibility.
-* Once the elevation rises above the horizon, the engine **rewinds the timeline by 120 seconds** and switches to a fine **10-second** step size for precise calculations (determining the exact AOS, peak elevation time, magnitude, and LOS).
-* Once the satellite sets, the engine resumes the coarse 120-second steps, optimizing precision and CPU cycle consumption.
+### 6. Power-Efficient Dual-Step Prediction Engine & Time Machine Optimization
+To bypass ESP32's processing limits during 24-hour pass searches, several energy-efficiency algorithms are implemented:
+* **Dual-Step Propagation**: The propagator sweeps forward using a coarse **120-second (2-minute)** step size to quickly bypass long periods of invisibility. Once the elevation rises above the horizon, the engine **rewinds the timeline by 120 seconds** and switches to a fine **10-second** step size for precise calculations (determining the exact AOS, peak elevation time, magnitude, and LOS). Once the satellite sets, the engine resumes the coarse 120-second steps, optimizing precision and CPU cycle consumption.
+* **Scrubbing Cooldown Gate**: Since shortening the prediction step to 10 seconds increases the pass calculator load, rapid time axis scrubbing (such as holding keys `,`/`/` or fast-tapping in Time Machine) could trigger high-frequency recalculations of full 3D orbit paths for all selected satellites (each requiring SGP4 coordinates propagation and geodetic coordinate iterations for 30 steps). To maintain smooth inputs, a **120ms physical cooldown gate** is implemented in `calculateOrbit`. During active scrubbing, any heavy path recalculation is blocked within a 120ms window, rendering only the core spacecraft real-time position. The orbital paths instantly redraw once keys are released or scrolling stops, completely eliminating lag spikes and maintaining a locked **60 FPS** frame rate.
 
 ## Helper Utilities & Build Scripts
 
@@ -207,7 +206,7 @@ The `scratch/` folder hosts development tools, math verifications, and refactori
 The project uses a zero-memory, uncompressed RGB565 serial stream screenshot system to bypass the lack of PSRAM on the Cardputer.
 
 ### 1. Device Trigger
-- On any screen, press the physical **BtnA button (GPIO0, located on the side right above the reset switch)**.
+- On any screen, press the physical **BtnA button (GPIO0, located on the right side of the switch)**.
 - The TFT screen will overlay a yellow `Capturing screen...` warning, and dump the Base64-encoded frame stream to the serial output.
 
 ### 2. PC Listener Setup

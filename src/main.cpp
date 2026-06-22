@@ -327,8 +327,15 @@ void doScreenshot() {
 }
 // Helper to pre-calculate orbits with caching
 void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& calcCount, bool isFastForwarding) {
+    static uint32_t lastGlobalCalcMs = 0;
     if (isFastForwarding && cache.lastCalcTime != 0) {
         // Fast forwarding: DO NOT recalculate heavy orbit paths to ensure smooth input.
+        return;
+    }
+    
+    // 限制物理时间上的计算频率。如果上一帧刚刚重算过轨道，那么在物理时间 120 毫秒内，
+    // 任何卫星都不能进行轨道线重算（除非是首次计算），确保在任何高速按键或滑动操作下的丝滑帧率。
+    if (cache.lastCalcTime != 0 && millis() - lastGlobalCalcMs < 120) {
         return;
     }
     
@@ -337,6 +344,7 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
         if (calcCount >= 1) { // Max 1 expensive calculation per frame to prevent lag spikes
             return;
         }
+        lastGlobalCalcMs = millis();
         calcCount++;
         
         cache.past.clear();
