@@ -147,7 +147,8 @@ struct SatRealtimeCache {
 
 const int MAX_SATELLITES = 50;
 SatRealtimeCache g_satCaches[MAX_SATELLITES];
-int NUM_SATELLITES = 20;
+const int NUM_BUILTIN_SATELLITES = 20;
+int NUM_SATELLITES = NUM_BUILTIN_SATELLITES;
 
 SatProfile g_satellites[MAX_SATELLITES] = {
     {25544, "ISS", TFT_YELLOW, 2, -1.8, true, ICON_STATION, "International Space Station. The largest human-made structure in space, visible as a very bright moving star.", "145.800", "FM/SSTV", "", "", {}, {}, {}, SAT_TYPE_SPACE_STATION},
@@ -509,6 +510,9 @@ void networkTask(void* parameter) {
     
     if (!HalWifi::isConnected()) {
         LOG_I("APP", "WiFi connection failed. Falling back to WiFi Setup.");
+        if (appState == STATE_SAT_SELECT) {
+            downloadErrorMsg = "WiFi Connection Failed!";
+        }
         appState = STATE_WIFI_SETUP;
         wifiIsScanning = true;
         wifiIsInputtingPassword = false;
@@ -521,6 +525,10 @@ void networkTask(void* parameter) {
     }
     
     if (HalWifi::isConnected()) {
+        if (appState == STATE_SAT_SELECT) {
+            downloadErrorMsg = "WiFi Connected! Syncing time...";
+        }
+        
         // Online timezone removed per user request (relies on offline grid)
         
         // 2. Fetch NTP
@@ -533,10 +541,16 @@ void networkTask(void* parameter) {
             LOG_I("APP", "Time synced to UTC: %u", current_unix);
         }
 
-        // IP Geolocation removed per user request (relies on GNSS/cache instead)
+        if (appState == STATE_SAT_SELECT) {
+            downloadErrorMsg = "WiFi Connected! Syncing frequencies...";
+        }
 
         // 3.5 Fetch Frequencies
         fetchFrequencies();
+
+        if (appState == STATE_SAT_SELECT) {
+            downloadErrorMsg = "WiFi Connected! Syncing TLEs...";
+        }
 
         // 4. Fetch TLEs
         bool updated = false;
@@ -560,6 +574,14 @@ void networkTask(void* parameter) {
             predictionsReady = false;
             portEXIT_CRITICAL(&passMutex);
             triggerPrediction = true;
+            
+            if (appState == STATE_SAT_SELECT) {
+                downloadErrorMsg = "TLEs & Frequencies Updated!";
+            }
+        } else {
+            if (appState == STATE_SAT_SELECT) {
+                downloadErrorMsg = "Frequencies Updated! TLEs are fresh.";
+            }
         }
         if (!manualWifiToggle) {
             LOG_I("APP", "Network tasks complete. Turning off WiFi to save power.");
@@ -575,7 +597,7 @@ void saveCustomSatellites() {
     Preferences prefs;
     prefs.begin("satellites", false);
     String idList = "";
-    for (int i = 14; i < NUM_SATELLITES; i++) {
+    for (int i = NUM_BUILTIN_SATELLITES; i < NUM_SATELLITES; i++) {
         idList += String(g_satellites[i].noradId);
         if (i < NUM_SATELLITES - 1) idList += ",";
     }
@@ -663,6 +685,15 @@ void setup() {
             
             int id = idStr.toInt();
             if (id > 0) {
+                bool isPreset = false;
+                for (int pIdx = 0; pIdx < NUM_BUILTIN_SATELLITES; pIdx++) {
+                    if (g_satellites[pIdx].noradId == id) {
+                        isPreset = true;
+                        break;
+                    }
+                }
+                if (isPreset) continue;
+                
                 LOG_I("APP", "Loading Custom: %d", id);
                 TLEData loaded_tle;
                 if (TLEUpdater::getTLE(id, loaded_tle)) {
@@ -673,7 +704,7 @@ void setup() {
                     p.baseScore = 0;
                     p.selected = true;
                     p.iconType = ICON_SATELLITE;
-                    p.description = "Custom added satellite.";
+                    p.description = "Custom added satellite.\n\nPress 'd' to delete this satellite.";
                     p.tle = loaded_tle;
                     p.calc.init(p.tle);
                     p.type = SAT_TYPE_VISUAL;
@@ -1614,7 +1645,7 @@ void loop() {
             } else if (appState == STATE_SAT_SELECT) {
                 if (deleteConfirmIndex >= 0) {
                     if (M5Cardputer.Keyboard.isKeyPressed('y')) {
-                        if (deleteConfirmIndex >= 14 && deleteConfirmIndex < NUM_SATELLITES) {
+                        if (deleteConfirmIndex >= NUM_BUILTIN_SATELLITES && deleteConfirmIndex < NUM_SATELLITES) {
                             for (int i = deleteConfirmIndex; i < NUM_SATELLITES - 1; i++) {
                                 g_satellites[i] = g_satellites[i + 1];
                             }
@@ -1633,6 +1664,18 @@ void loop() {
                         deleteConfirmIndex = -1;
                     } else if (M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed(27)) {
                         deleteConfirmIndex = -1;
+                    }
+                } else if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) {
+                    if (!HalWifi::isConnected()) {
+                        manualWifiToggle = true;
+                        downloadErrorMsg = "Connecting to WiFi...";
+                        drawSatSelectPage();
+                        earth_renderer->getCanvas()->pushSprite(0, 0);
+                        xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+                    } else {
+                        WiFi.disconnect(true);
+                        WiFi.mode(WIFI_OFF);
+                        downloadErrorMsg = "WiFi Disconnected.";
                     }
                 } else if (satSelectedIndex == NUM_SATELLITES) {
                     // Inputting NORAD ID
@@ -1664,6 +1707,7 @@ void loop() {
                                 p.iconType = ICON_SATELLITE;
                                 p.tle = loaded_tle;
                                 p.calc.init(p.tle);
+                                p.description = "Custom added satellite.\n\nPress 'd' to delete this satellite.";
                                 p.type = SAT_TYPE_VISUAL;
                                 if (NUM_SATELLITES < MAX_SATELLITES) {
                                     g_satellites[NUM_SATELLITES++] = p;
@@ -1703,7 +1747,7 @@ void loop() {
                         triggerPrediction = true;
                     } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
                         g_satellites[satSelectedIndex].selected = !g_satellites[satSelectedIndex].selected;
-                    } else if (M5Cardputer.Keyboard.isKeyPressed('d') && satSelectedIndex >= 14) {
+                    } else if (M5Cardputer.Keyboard.isKeyPressed('d') && satSelectedIndex >= NUM_BUILTIN_SATELLITES && satSelectedIndex < NUM_SATELLITES) {
                         deleteConfirmIndex = satSelectedIndex;
                     } else if (M5Cardputer.Keyboard.isKeyPressed(';')) { // UP arrow
                         if (satSelectedIndex > 0) satSelectedIndex--;

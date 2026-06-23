@@ -10,6 +10,10 @@ public:
     SGP4Calc();
     ~SGP4Calc();
 
+    // Copy constructor and assignment operator for deep copying and preventing double-free crashes
+    SGP4Calc(const SGP4Calc& other);
+    SGP4Calc& operator=(const SGP4Calc& other);
+
     // Initialize with TLE data
     bool init(const TLEData& tle);
 

@@ -8,6 +8,22 @@ SGP4Calc::~SGP4Calc() {
     delete sat;
 }
 
+SGP4Calc::SGP4Calc(const SGP4Calc& other) {
+    sat = new Sgp4();
+    if (other.sat) {
+        sat->satrec = other.sat->satrec;
+    }
+}
+
+SGP4Calc& SGP4Calc::operator=(const SGP4Calc& other) {
+    if (this != &other) {
+        if (sat && other.sat) {
+            sat->satrec = other.sat->satrec;
+        }
+    }
+    return *this;
+}
+
 bool SGP4Calc::init(const TLEData& tle) {
     char name[30];
     char line1[80];
