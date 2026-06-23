@@ -58,13 +58,14 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
     GeodeticCoord observerPos = {_userLat, _userLon, _userAlt / 1000.0};
     
     extern volatile bool triggerPrediction;
+    extern volatile bool cancelPrediction;
     
     int iterations = 0;
     uint32_t t = startTime;
     bool isRewinding = false;
     
     while (t <= endTime) {
-        if (triggerPrediction) return passes;
+        if (triggerPrediction || cancelPrediction) return passes;
         
         iterations++;
         // Reset Watchdog Timer periodically and yield to Idle Task to prevent starvation

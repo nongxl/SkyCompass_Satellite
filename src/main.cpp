@@ -40,6 +40,8 @@ enum MonoState {
     MONO_STATE_PASSING     // 正在过境像素闪烁状态
 };
 
+#include "core/mono_animator.h"
+
 // Set to 1 if you have an external M5Chain Mono 8x8 screen module attached to Grove Port.
 // Set to 0 (default) to keep Grove port free, which prevents keyboard I2C/UART sharing conflicts on Cardputer.
 #define ENABLE_CHAIN_MONO 1
@@ -51,30 +53,7 @@ uint8_t operation_status = 0;
 #include "core/mono_icons.h"
 
 void drawCortanaCircle(uint8_t* buffer) {
-    memset(buffer, 0, 8);
-    float t = millis() * 0.003f;
-    for (int r = 0; r < 8; r++) {
-        float dy = r - 3.5f;
-        for (int c = 0; c < 8; c++) {
-            float dx = c - 3.5f;
-            float dist = sqrtf(dx*dx + dy*dy);
-            float angle = atan2f(dy, dx);
-            
-            // 基础呼吸半径 2.9 ~ 3.3
-            float baseR = 3.1f + 0.3f * sinf(t * 0.8f);
-            // 三瓣波纹旋转
-            float wave = 0.25f * sinf(3.0f * angle + t * 1.5f);
-            float targetR = baseR + wave;
-            
-            // 距离判定
-            if (fabsf(dist - targetR) < 0.65f) {
-                // 角度判定：双弧线旋转追逐
-                if (sinf(2.0f * angle - t * 2.2f) > -0.4f) {
-                    buffer[r] |= (1 << (7 - c));
-                }
-            }
-        }
-    }
+    drawMonoVisualAnimation(buffer);
 }
 
 
@@ -355,7 +334,10 @@ float basePitch = 0.0f; // Stores initial pitch for relative view
 float baseRoll = 0.0f;  // Stores initial roll for relative view
 bool predictionsReady = false;
 int predictionProgress = 0;
+volatile bool cancelPrediction = false;
+uint32_t lastPredictionBaseTime = 0;
 bool manualWifiToggle = false;
+std::vector<int> entrySelectedSatellites;
 
 // Custom Satellite Input State
 String noradInput = "";
@@ -374,6 +356,8 @@ void predictorTask(void* parameter) {
         }
         
         triggerPrediction = false;
+        cancelPrediction = false; // 重置取消状态
+        g_orbitCalculating = true;
         
         ObservationPredictor predictor(baseUserLat, baseUserLon, baseUserAlt / 1000.0);
         std::vector<PassEvent> allPasses;
@@ -389,7 +373,7 @@ void predictorTask(void* parameter) {
         predictionProgress = 0;
         int completedCount = 0;
         for (int i = 0; i < NUM_SATELLITES; i++) {
-            if (triggerPrediction) break;
+            if (triggerPrediction || cancelPrediction) break;
             
             if (g_satellites[i].selected) {
                 auto passes = predictor.predictPasses(g_satellites[i].tle, g_satellites[i].stdMag, startTime, 7);
@@ -400,7 +384,13 @@ void predictorTask(void* parameter) {
             predictionProgress = (completedCount * 100) / (totalSelected > 0 ? totalSelected : 1);
         }
         
-        if (triggerPrediction) continue;
+        if (triggerPrediction || cancelPrediction) {
+            if (cancelPrediction) {
+                cancelPrediction = false;
+                g_orbitCalculating = false; // 强行熄灭 Chain Mono 的计算动画
+            }
+            continue;
+        }
         
         // Filter out past passes relative to the simulated time
         std::vector<PassEvent> upcomingPasses;
@@ -419,6 +409,7 @@ void predictorTask(void* parameter) {
         portENTER_CRITICAL(&passMutex);
         recommendedPasses = upcomingPasses;
         predictionsReady = true;
+        lastPredictionBaseTime = startTime; // 写入本次成功的基准时间缓存
         
         // Auto-expand first category on finish
         catExpanded[0] = true;
@@ -428,6 +419,11 @@ void predictorTask(void* parameter) {
         
         rebuildTree(current_unix + timeMachineOffset);
         portEXIT_CRITICAL(&passMutex);
+        
+        if (g_orbitCalculating) {
+            g_orbitCalculating = false;
+            g_readyStartTime = millis(); // Trigger 2-second READY effect
+        }
     }
 }
 
@@ -482,6 +478,9 @@ void fetchFrequencies() {
 }
 
 void networkTask(void* parameter) {
+    g_wifiConnecting = true;
+    g_dataUpdating = false;
+    
     String ssid = "";
     String pass = "";
     bool shouldSave = false;
@@ -501,6 +500,8 @@ void networkTask(void* parameter) {
         appState = STATE_WIFI_SETUP;
         wifiIsScanning = true;
         wifiIsInputtingPassword = false;
+        g_wifiConnecting = false;
+        g_dataUpdating = false;
         vTaskDelete(NULL);
         return;
     }
@@ -516,6 +517,8 @@ void networkTask(void* parameter) {
         appState = STATE_WIFI_SETUP;
         wifiIsScanning = true;
         wifiIsInputtingPassword = false;
+        g_wifiConnecting = false;
+        g_dataUpdating = false;
         vTaskDelete(NULL);
         return;
     }
@@ -525,6 +528,9 @@ void networkTask(void* parameter) {
     }
     
     if (HalWifi::isConnected()) {
+        g_wifiConnecting = false;
+        g_dataUpdating = true;
+        
         if (appState == STATE_SAT_SELECT) {
             downloadErrorMsg = "WiFi Connected! Syncing time...";
         }
@@ -572,6 +578,7 @@ void networkTask(void* parameter) {
             // Rerun predictor with new data
             portENTER_CRITICAL(&passMutex);
             predictionsReady = false;
+            lastPredictionBaseTime = 0; // 缓存失效
             portEXIT_CRITICAL(&passMutex);
             triggerPrediction = true;
             
@@ -590,6 +597,12 @@ void networkTask(void* parameter) {
             LOG_I("APP", "Network tasks complete. WiFi remains connected.");
         }
     }
+    
+    if (g_dataUpdating) {
+        g_dataUpdating = false;
+        g_readyStartTime = millis(); // Trigger 2-second READY effect
+    }
+    g_wifiConnecting = false;
     vTaskDelete(NULL);
 }
 
@@ -669,6 +682,7 @@ void setup() {
     String customIds = prefs.getString("customIds", "");
     prefs.end();
     
+    bool needsSaveCleanup = false;
     if (customIds.length() > 0) {
         int start = 0;
         int end = customIds.indexOf(',');
@@ -692,7 +706,10 @@ void setup() {
                         break;
                     }
                 }
-                if (isPreset) continue;
+                if (isPreset) {
+                    needsSaveCleanup = true;
+                    continue;
+                }
                 
                 LOG_I("APP", "Loading Custom: %d", id);
                 TLEData loaded_tle;
@@ -714,6 +731,11 @@ void setup() {
                 }
             }
         }
+    }
+    
+    if (needsSaveCleanup) {
+        LOG_I("APP", "Built-in satellites found in custom list. Performing Preferences cleanup.");
+        saveCustomSatellites();
     }
     
     // Start predictor task on Core 0 for offline data (UI runs on Core 1)
@@ -1161,6 +1183,12 @@ void drawSatSelectPage() {
             canvas->drawString("No description.", rightX, descY);
         }
         
+        // Draw fixed 'Press d to delete' prompt for custom satellites when there is no radio block to overlay
+        if (satSelectedIndex >= NUM_BUILTIN_SATELLITES && requiredLines == 0) {
+            canvas->setTextColor(TFT_YELLOW);
+            canvas->drawString("Press 'd' to delete", rightX, 123);
+        }
+        
         // Draw Radio Info Block
         if (requiredLines > 0) {
             canvas->fillRect(rightX - 2, radioY - 2, width - rightX - 2, requiredLines * 11 + 2, canvas->color565(30, 40, 50));
@@ -1314,7 +1342,7 @@ void drawSatSelectPage() {
     }
     
     // Draw Delete Confirm Popup
-    if (deleteConfirmIndex >= 0 && deleteConfirmIndex < NUM_SATELLITES) {
+    if (deleteConfirmIndex >= NUM_BUILTIN_SATELLITES && deleteConfirmIndex < NUM_SATELLITES) {
         canvas->fillRect(40, height/2 - 20, width - 80, 40, TFT_RED);
         canvas->drawRect(40, height/2 - 20, width - 80, 40, TFT_WHITE);
         canvas->setTextColor(TFT_WHITE);
@@ -1388,12 +1416,20 @@ void loop() {
                 } else if (isManualLocationMode) {
                     // Step size based on zoom level, finer control when zoomed in
                     float step = 1.0f / currentZoom;
-                    if (key == ';') { baseUserLat += step; if (baseUserLat > 90) baseUserLat = 90; }
-                    else if (key == '.') { baseUserLat -= step; if (baseUserLat < -90) baseUserLat = -90; }
-                    else if (key == ',') { baseUserLon -= step; if (baseUserLon < -180) baseUserLon += 360; }
-                    else if (key == '/') { baseUserLon += step; if (baseUserLon > 180) baseUserLon -= 360; }
-                    else if (key == '[') { baseUserAlt -= 10.0; if (baseUserAlt < -500) baseUserAlt = -500; }
-                    else if (key == ']') { baseUserAlt += 10.0; if (baseUserAlt > 9000) baseUserAlt = 9000; }
+                    bool locChanged = false;
+                    if (key == ';') { baseUserLat += step; if (baseUserLat > 90) baseUserLat = 90; locChanged = true; }
+                    else if (key == '.') { baseUserLat -= step; if (baseUserLat < -90) baseUserLat = -90; locChanged = true; }
+                    else if (key == ',') { baseUserLon -= step; if (baseUserLon < -180) baseUserLon += 360; locChanged = true; }
+                    else if (key == '/') { baseUserLon += step; if (baseUserLon > 180) baseUserLon -= 360; locChanged = true; }
+                    else if (key == '[') { baseUserAlt -= 10.0; if (baseUserAlt < -500) baseUserAlt = -500; locChanged = true; }
+                    else if (key == ']') { baseUserAlt += 10.0; if (baseUserAlt > 9000) baseUserAlt = 9000; locChanged = true; }
+                    
+                    if (locChanged) {
+                        portENTER_CRITICAL(&passMutex);
+                        lastPredictionBaseTime = 0; // 缓存失效
+                        predictionsReady = false;
+                        portEXIT_CRITICAL(&passMutex);
+                    }
                 }
                 
                 if (key == ' ') {
@@ -1432,12 +1468,6 @@ void loop() {
                 if (lastKey != 0) {
                     if (keyReleaseTime == 0) keyReleaseTime = millis();
                     if (millis() - keyReleaseTime > 150) { // 150ms debounce for I2C drops
-                        if (lastKey == ',' || lastKey == '/') {
-                            triggerPrediction = true;
-                            portENTER_CRITICAL(&passMutex);
-                            predictionsReady = false;
-                            portEXIT_CRITICAL(&passMutex);
-                        }
                         lastKey = 0;
                     } else if (millis() - keyHoldStartTime > 400) {
                         // Keep fast forwarding flag alive during debounce
@@ -1459,18 +1489,25 @@ void loop() {
                     }
                     isManualLocationMode = !isManualLocationMode;
                     if (!isManualLocationMode) {
-                        triggerPrediction = true;
                         portENTER_CRITICAL(&passMutex);
                         predictionsReady = false;
+                        lastPredictionBaseTime = 0; // 缓存失效
                         portEXIT_CRITICAL(&passMutex);
+                        triggerPrediction = true;
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed('r') || M5Cardputer.Keyboard.isKeyPressed('R')) {
-                    if (!showRecommendations && !showHelp && !isManualLocationMode) {
+                    if (!showRecommendations && !showHelp) {
                         timeMachineOffset = 0;
-                        triggerPrediction = true;
+                        if (isManualLocationMode) {
+                            baseUserLat = 39.90; // Beijing default
+                            baseUserLon = 116.40;
+                            baseUserAlt = 0.0;
+                        }
                         portENTER_CRITICAL(&passMutex);
+                        lastPredictionBaseTime = 0; // 按 r 重置时，缓存失效，强制重新计算
                         predictionsReady = false;
                         portEXIT_CRITICAL(&passMutex);
+                        triggerPrediction = true;
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
                     showHud = !showHud;
@@ -1480,6 +1517,7 @@ void loop() {
                             selectedPassIndex = -1; // Back to tree
                         } else {
                             showRecommendations = false; // Close panel
+                            cancelPrediction = true;     // 中止后台可能正在进行的计算
                         }
                     } else if (showHelp) {
                         showHelp = false;
@@ -1492,11 +1530,28 @@ void loop() {
                     if (appState == STATE_MAIN && !showRecommendations) {
                         showRecommendations = true;
                         passScrollIndex = 0;
-                        triggerPrediction = true;
+                        
+                        uint32_t targetTime = current_unix + timeMachineOffset;
+                        bool isCacheValid = false;
                         portENTER_CRITICAL(&passMutex);
-                        predictionsReady = false;
+                        if (predictionsReady && lastPredictionBaseTime != 0) {
+                            // 获取时区秒数
+                            int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
+                            uint32_t day1 = (lastPredictionBaseTime + tzOffsetSec) / 86400;
+                            uint32_t day2 = (targetTime + tzOffsetSec) / 86400;
+                            if (day1 == day2) {
+                                isCacheValid = true;
+                            }
+                        }
                         portEXIT_CRITICAL(&passMutex);
-                        rebuildTree(current_unix);
+                        
+                        if (!isCacheValid) {
+                            triggerPrediction = true;
+                            portENTER_CRITICAL(&passMutex);
+                            predictionsReady = false;
+                            portEXIT_CRITICAL(&passMutex);
+                        }
+                        rebuildTree(current_unix + timeMachineOffset);
                     } else if (showRecommendations) {
                         if (selectedPassIndex != -1) {
                             selectedPassIndex = -1; // Back to tree
@@ -1523,6 +1578,12 @@ void loop() {
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed('s')) {
                     appState = STATE_SAT_SELECT;
+                    entrySelectedSatellites.clear();
+                    for (int i = 0; i < NUM_SATELLITES; i++) {
+                        if (g_satellites[i].selected) {
+                            entrySelectedSatellites.push_back(g_satellites[i].noradId);
+                        }
+                    }
                 } else if (M5Cardputer.Keyboard.isKeyPressed('h')) {
                     showHelp = !showHelp;
                 } else if (M5Cardputer.Keyboard.isKeyPressed('g') || M5Cardputer.Keyboard.isKeyPressed('G')) {
@@ -1644,7 +1705,9 @@ void loop() {
                 }
             } else if (appState == STATE_SAT_SELECT) {
                 if (deleteConfirmIndex >= 0) {
-                    if (M5Cardputer.Keyboard.isKeyPressed('y')) {
+                    if (deleteConfirmIndex < NUM_BUILTIN_SATELLITES) {
+                        deleteConfirmIndex = -1; // Force reset to protect built-in satellites
+                    } else if (M5Cardputer.Keyboard.isKeyPressed('y')) {
                         if (deleteConfirmIndex >= NUM_BUILTIN_SATELLITES && deleteConfirmIndex < NUM_SATELLITES) {
                             for (int i = deleteConfirmIndex; i < NUM_SATELLITES - 1; i++) {
                                 g_satellites[i] = g_satellites[i + 1];
@@ -1654,12 +1717,6 @@ void loop() {
                             else if (focusSatIndex > deleteConfirmIndex) focusSatIndex--;
                             if (satSelectedIndex >= NUM_SATELLITES) satSelectedIndex = NUM_SATELLITES;
                             saveCustomSatellites();
-                            
-                            // Retrigger prediction
-                            triggerPrediction = true;
-                            portENTER_CRITICAL(&passMutex);
-                            predictionsReady = false;
-                            portEXIT_CRITICAL(&passMutex);
                         }
                         deleteConfirmIndex = -1;
                     } else if (M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed(27)) {
@@ -1715,11 +1772,6 @@ void loop() {
                                 }
                                 noradInput = "";
                                 
-                                // Retrigger prediction
-                                triggerPrediction = true;
-                                portENTER_CRITICAL(&passMutex);
-                                predictionsReady = false;
-                                portEXIT_CRITICAL(&passMutex);
                             } else {
                                 if (WiFi.status() != WL_CONNECTED) {
                                     downloadErrorMsg = "Error: WiFi not connected! Press 'w' on main screen.";
@@ -1740,11 +1792,32 @@ void loop() {
                 } else {
                     if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
                         appState = STATE_MAIN;
-                        // Trigger predictor to rerun since selection might have changed
-                        portENTER_CRITICAL(&passMutex);
-                        predictionsReady = false;
-                        portEXIT_CRITICAL(&passMutex);
-                        triggerPrediction = true;
+                        // 检查选中的卫星是否发生变化
+                        bool selectionChanged = false;
+                        std::vector<int> currentSelected;
+                        for (int i = 0; i < NUM_SATELLITES; i++) {
+                            if (g_satellites[i].selected) {
+                                currentSelected.push_back(g_satellites[i].noradId);
+                            }
+                        }
+                        if (currentSelected.size() != entrySelectedSatellites.size()) {
+                            selectionChanged = true;
+                        } else {
+                            for (size_t i = 0; i < currentSelected.size(); i++) {
+                                if (currentSelected[i] != entrySelectedSatellites[i]) {
+                                    selectionChanged = true;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (selectionChanged) {
+                            portENTER_CRITICAL(&passMutex);
+                            predictionsReady = false;
+                            lastPredictionBaseTime = 0; // 缓存失效
+                            portEXIT_CRITICAL(&passMutex);
+                            triggerPrediction = true;
+                        }
                     } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
                         g_satellites[satSelectedIndex].selected = !g_satellites[satSelectedIndex].selected;
                     } else if (M5Cardputer.Keyboard.isKeyPressed('d') && satSelectedIndex >= NUM_BUILTIN_SATELLITES && satSelectedIndex < NUM_SATELLITES) {
@@ -1788,9 +1861,17 @@ void loop() {
             if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
                 GnssData gData = gnss->getData();
                 if (gData.isValid) {
+                    double oldLat = baseUserLat;
+                    double oldLon = baseUserLon;
                     baseUserLat = gData.latitude;
                     baseUserLon = gData.longitude;
                     gnssLocationFixed = true; // Mark that we have a real location
+                    if (abs(baseUserLat - oldLat) > 0.0001 || abs(baseUserLon - oldLon) > 0.0001) {
+                        portENTER_CRITICAL(&passMutex);
+                        lastPredictionBaseTime = 0; // 缓存失效
+                        predictionsReady = false;
+                        portEXIT_CRITICAL(&passMutex);
+                    }
                 }
                 
                 static bool gnssTimeSynced = false;
@@ -1802,6 +1883,7 @@ void loop() {
                     // Trigger predictor again with correct time
                     portENTER_CRITICAL(&passMutex);
                     predictionsReady = false;
+                    lastPredictionBaseTime = 0; // 缓存失效
                     portEXIT_CRITICAL(&passMutex);
                     triggerPrediction = true;
                 }
@@ -2583,12 +2665,18 @@ void loop() {
         String visibleSatName = "";
         SatIconType visibleSatIconType = ICON_SATELLITE;
         
-        for (int i = 0; i < NUM_SATELLITES; i++) {
-            if (g_satellites[i].selected && g_satCaches[i].lastGeoValid && g_satCaches[i].isVisible) {
-                anyVisibleNow = true;
-                visibleSatName = g_satellites[i].name;
-                visibleSatIconType = g_satellites[i].iconType;
-                break;
+        if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES) {
+            anyVisibleNow = true;
+            visibleSatName = g_satellites[focusSatIndex].name;
+            visibleSatIconType = g_satellites[focusSatIndex].iconType;
+        } else {
+            for (int i = 0; i < NUM_SATELLITES; i++) {
+                if (g_satellites[i].selected && g_satCaches[i].lastGeoValid && g_satCaches[i].isVisible) {
+                    anyVisibleNow = true;
+                    visibleSatName = g_satellites[i].name;
+                    visibleSatIconType = g_satellites[i].iconType;
+                    break;
+                }
             }
         }
         
