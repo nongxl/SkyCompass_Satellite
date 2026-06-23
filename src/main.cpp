@@ -197,6 +197,14 @@ struct OrbitCache {
     std::vector<GeodeticCoord> future;
 };
 
+enum SatelliteType {
+    SAT_TYPE_VISUAL,
+    SAT_TYPE_HAM,
+    SAT_TYPE_WEATHER,
+    SAT_TYPE_SPACE_STATION,
+    SAT_TYPE_HISTORICAL
+};
+
 struct SatProfile {
     int noradId;
     String name;
@@ -213,6 +221,7 @@ struct SatProfile {
     TLEData tle;
     SGP4Calc calc;
     OrbitCache cache;
+    SatelliteType type;
 };
 
 struct SatRealtimeCache {
@@ -224,27 +233,29 @@ struct SatRealtimeCache {
 
 const int MAX_SATELLITES = 50;
 SatRealtimeCache g_satCaches[MAX_SATELLITES];
-int NUM_SATELLITES = 18;
+int NUM_SATELLITES = 20;
 
 SatProfile g_satellites[MAX_SATELLITES] = {
-    {25544, "ISS", TFT_YELLOW, 2, -1.8, true, ICON_STATION, "International Space Station. The largest human-made structure in space, visible as a very bright moving star.", "145.800", "FM/SSTV"},
-    {48274, "Tiangong", TFT_GREEN, 1, -0.5, true, ICON_STATION, "China's Tiangong Space Station. A permanent modular space station in LEO.", "", ""},
-    {20580, "Hubble", TFT_CYAN, 0, 1.5, true, ICON_TELESCOPE, "Hubble Space Telescope. A vital observatory that revolutionized our understanding of the universe.", "", ""},
-    {33591, "NOAA 19", TFT_ORANGE, 0, 3.5, false, ICON_SATELLITE, "NOAA weather satellite. Known for transmitting APT weather images back to Earth.", "137.100", "APT"},
-    {50463, "JWST", TFT_GOLD, 0, 10.0, false, ICON_DEEPSPACE, "James Webb Space Telescope. Located at L2 point 1.5 million km away, observing in infrared.", "", ""},
-    {53807, "BlueWalker 3", TFT_WHITE, 0, 1.0, false, ICON_SATELLITE, "AST SpaceMobile's prototype. Features a massive 64 sqm array, very bright and controversial.", "", ""},
-    {118, "Ablestar R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ablestar rocket body.", "", ""},
-    {25732, "CZ-4B R/B", TFT_ORANGE, 0, 4.0, true, ICON_ROCKET, "Long March 4B rocket body.", "", ""},
-    {6155, "Centaur R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Centaur rocket body.", "", ""},
-    {28499, "Ariane 5 R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ariane 5 rocket body.", "", ""},
-    {41882, "Fengyun-4A", TFT_BLUE, 0, 10.0, false, ICON_SATELLITE, "Chinese geostationary meteorological satellite, located 35,786 km above the equator.", "", ""},
-    {43539, "BeiDou-3", TFT_RED, 0, 10.0, false, ICON_SATELLITE, "Medium Earth Orbit navigation satellite part of the BeiDou system (BDS).", "", ""},
-    {27386, "Envisat", TFT_LIGHTGRAY, 0, 2.5, false, ICON_SATELLITE, "A huge 8-ton inactive Earth observation satellite. Now one of the largest pieces of space debris.", "", ""},
-    {4382, "DFH-1", TFT_RED, 0, 6.0, false, ICON_SATELLITE, "Dong Fang Hong I. China's first satellite launched in 1970, still orbiting today as a silent monument.", "20.009", "Beacon"},
-    {25994, "Terra", TFT_PINK, 0, 3.0, false, ICON_SATELLITE, "NASA's flagship Earth Observing System satellite.", "", ""},
-    {27424, "Aqua", TFT_MAGENTA, 0, 3.0, false, ICON_SATELLITE, "NASA Earth observation satellite focusing on the water cycle.", "", ""},
-    {43166, "Iridium 127", TFT_WHITE, 0, 4.0, false, ICON_SATELLITE, "Iridium NEXT network. The original 1st-gen Iridium satellites produced legendary 'flares' up to mag -8.", "", ""},
-    {57165, "Meteor-M2", TFT_WHITE, 0, 3.5, false, ICON_SATELLITE, "Russian meteorological satellite transmitting LRPT weather images.", "137.100", "LRPT"}
+    {25544, "ISS", TFT_YELLOW, 2, -1.8, true, ICON_STATION, "International Space Station. The largest human-made structure in space, visible as a very bright moving star.", "145.800", "FM/SSTV", "", "", {}, {}, {}, SAT_TYPE_SPACE_STATION},
+    {48274, "Tiangong", TFT_GREEN, 1, -0.5, true, ICON_STATION, "China's Tiangong Space Station. A permanent modular space station in LEO.", "", "", "", "", {}, {}, {}, SAT_TYPE_SPACE_STATION},
+    {20580, "Hubble", TFT_CYAN, 0, 1.5, true, ICON_TELESCOPE, "Hubble Space Telescope. A vital observatory that revolutionized our understanding of the universe.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {33591, "NOAA 19", TFT_ORANGE, 0, 3.5, false, ICON_SATELLITE, "NOAA weather satellite. Known for transmitting APT weather images back to Earth.", "137.100", "APT", "", "", {}, {}, {}, SAT_TYPE_WEATHER},
+    {50463, "JWST", TFT_GOLD, 0, 10.0, false, ICON_DEEPSPACE, "James Webb Space Telescope. Located at L2 point 1.5 million km away, observing in infrared.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {53807, "BlueWalker 3", TFT_WHITE, 0, 1.0, false, ICON_SATELLITE, "AST SpaceMobile's prototype. Features a massive 64 sqm array, very bright and controversial.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {118, "Ablestar R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ablestar rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {25732, "CZ-4B R/B", TFT_ORANGE, 0, 4.0, true, ICON_ROCKET, "Long March 4B rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {6155, "Centaur R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Centaur rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {28499, "Ariane 5 R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ariane 5 rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {41882, "Fengyun-4A", TFT_BLUE, 0, 10.0, false, ICON_SATELLITE, "Chinese geostationary meteorological satellite, located 35,786 km above the equator.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {43539, "BeiDou-3", TFT_RED, 0, 10.0, false, ICON_SATELLITE, "Medium Earth Orbit navigation satellite part of the BeiDou system (BDS).", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {27386, "Envisat", TFT_LIGHTGRAY, 0, 2.5, false, ICON_SATELLITE, "A huge 8-ton inactive Earth observation satellite. Now one of the largest pieces of space debris.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {4382, "DFH-1", TFT_RED, 0, 6.0, true, ICON_SATELLITE, "Dong Fang Hong I. China's first satellite launched in 1970, still orbiting today as a silent monument.\n\nLaunch: 1970-04-24\nStatus: Inactive\nComms: Unavailable\nHAM: Not Supported", "20.009", "Beacon", "", "", {}, {}, {}, SAT_TYPE_HISTORICAL},
+    {25994, "Terra", TFT_PINK, 0, 3.0, false, ICON_SATELLITE, "NASA's flagship Earth Observing System satellite.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {27424, "Aqua", TFT_MAGENTA, 0, 3.0, false, ICON_SATELLITE, "NASA Earth observation satellite focusing on the water cycle.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {43166, "Iridium 127", TFT_WHITE, 0, 4.0, false, ICON_SATELLITE, "Iridium NEXT network. The original 1st-gen Iridium satellites produced legendary 'flares' up to mag -8.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {57165, "Meteor-M2", TFT_WHITE, 0, 3.5, false, ICON_SATELLITE, "Russian meteorological satellite transmitting LRPT weather images.", "137.100", "LRPT", "", "", {}, {}, {}, SAT_TYPE_WEATHER},
+    {27607, "SO-50", TFT_GREEN, 0, 6.5, false, ICON_SATELLITE, "SaudiSat 1C (SO-50). A long-lived, highly active FM voice repeater amateur satellite, very popular for quick handheld contacts.", "145.850", "FM", "436.795", "67.0", {}, {}, {}, SAT_TYPE_HAM},
+    {43017, "AO-91", TFT_MAGENTA, 0, 6.0, true, ICON_SATELLITE, "RadFxSat (AO-91). A Fox-1B series amateur radio satellite carrying a U/V FM voice repeater.", "145.960", "FM", "435.250", "67.0", {}, {}, {}, SAT_TYPE_HAM}
 };
 
 // We use a simulated time starting near the TLE epoch for Phase 3 offline testing
@@ -538,6 +549,15 @@ void fetchFrequencies() {
                 if (doc.containsKey(idStr)) {
                     g_satellites[i].downlinkFreq = doc[idStr]["freq"].as<String>();
                     g_satellites[i].radioMode = doc[idStr]["mode"].as<String>();
+                    if (doc[idStr].containsKey("uplink")) {
+                        g_satellites[i].uplinkFreq = doc[idStr]["uplink"].as<String>();
+                    }
+                    if (doc[idStr].containsKey("tone")) {
+                        g_satellites[i].tone = doc[idStr]["tone"].as<String>();
+                    }
+                    if (g_satellites[i].type == SAT_TYPE_VISUAL) {
+                        g_satellites[i].type = SAT_TYPE_HAM;
+                    }
                 }
             }
         }
@@ -694,6 +714,8 @@ void setup() {
             else if (i == 1) g_satellites[i].tle = TLEManager::getTiangong_TLE();
             else if (i == 2) g_satellites[i].tle = TLEManager::getHubble_TLE();
             else if (g_satellites[i].noradId == 50463) g_satellites[i].tle = TLEManager::getJWST_TLE();
+            else if (g_satellites[i].noradId == 27607) g_satellites[i].tle = TLEManager::getSO50_TLE();
+            else if (g_satellites[i].noradId == 43017) g_satellites[i].tle = TLEManager::getAO91_TLE();
         }
         
         if (g_satellites[i].tle.line1.length() > 0) {
@@ -740,6 +762,7 @@ void setup() {
                     p.description = "Custom added satellite.";
                     p.tle = loaded_tle;
                     p.calc.init(p.tle);
+                    p.type = SAT_TYPE_VISUAL;
                     if (NUM_SATELLITES < MAX_SATELLITES) {
                         g_satellites[NUM_SATELLITES++] = p;
                     }
@@ -1086,7 +1109,51 @@ void drawSatSelectPage() {
             if (el > 0) isTracking = true;
         }
         
-        int radioY = isTracking ? 90 : (selSat.downlinkFreq.length() > 0 ? 101 : height);
+        int radioY = 135;
+        int requiredLines = 0;
+        
+        if (isTracking) {
+            requiredLines = 1; // Az/El
+            if (selSat.type == SAT_TYPE_WEATHER) {
+                requiredLines = 3; // Az/El, Rx, Mode
+            } else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
+                requiredLines = 4; // Az/El, APRS, SSTV, Mode
+            } else if (selSat.type == SAT_TYPE_HAM) {
+                if (selSat.uplinkFreq.length() > 0) {
+                    requiredLines = 4; // Az/El, Rx, Tx, Mode
+                } else {
+                    requiredLines = 3; // Az/El, Rx, Mode
+                }
+            }
+        } else {
+            if (selSat.type == SAT_TYPE_WEATHER) {
+                requiredLines = 3; // Rx, Mode, Weather Imaging
+            } else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
+                requiredLines = 3; // APRS, SSTV, Mode
+            } else if (selSat.type == SAT_TYPE_HAM) {
+                PassEvent nextPass;
+                bool foundNext = false;
+                for (const auto& pass : recommendedPasses) {
+                    if (pass.satName == selSat.name && pass.aosTime >= current_unix + timeMachineOffset) {
+                        nextPass = pass;
+                        foundNext = true;
+                        break;
+                    }
+                }
+                int baseLines = (selSat.uplinkFreq.length() > 0) ? 3 : 2; // Rx, [Tx], Mode
+                if (foundNext) {
+                    requiredLines = baseLines + 2; // AOS, LOS
+                } else {
+                    requiredLines = baseLines;
+                }
+            }
+        }
+        
+        if (requiredLines > 0) {
+            radioY = 135 - (requiredLines * 11 + 2);
+        } else {
+            radioY = 135;
+        }
         
         // Draw Description with Auto-Scroll
         canvas->setTextColor(TFT_LIGHTGRAY);
@@ -1113,65 +1180,150 @@ void drawSatSelectPage() {
         }
         
         // Draw Radio Info Block
-        if (isTracking) {
-            double tx_prev, ty_prev, tz_prev;
-            double dist_prev = dist;
-            if (selSat.calc.getTEME(current_unix + timeMachineOffset - 1, tx_prev, ty_prev, tz_prev)) {
-                double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset - 1));
-                ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
-                GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
-                dist_prev = topo_prev.range;
-            }
-            double radialVel = dist - dist_prev;
+        if (requiredLines > 0) {
+            canvas->fillRect(rightX - 2, radioY - 2, width - rightX - 2, requiredLines * 11 + 2, canvas->color565(30, 40, 50));
             
-            double dlFreq = selSat.downlinkFreq.toDouble();
-            double dopplerShiftHz = 0;
-            if (dlFreq > 0) {
-                dopplerShiftHz = -(radialVel / 299792.458) * (dlFreq * 1e6);
-            }
-            
-            canvas->fillRect(rightX - 2, radioY - 2, width - rightX - 2, 47, canvas->color565(30, 40, 50));
-            
-            canvas->setTextColor(TFT_YELLOW);
-            char posBuf[32];
-            sprintf(posBuf, "Az:%03.0f El:%02.0f", az, el);
-            canvas->drawString(posBuf, rightX, radioY);
-            
-            if (dlFreq > 0) {
-                canvas->setTextColor(TFT_GREEN);
-                char freqBuf[32];
-                sprintf(freqBuf, "Rx:%s", selSat.downlinkFreq.c_str());
-                canvas->drawString(freqBuf, rightX, radioY + 11);
+            if (isTracking) {
+                double tx_prev, ty_prev, tz_prev;
+                double dist_prev = dist;
+                if (selSat.calc.getTEME(current_unix + timeMachineOffset - 1, tx_prev, ty_prev, tz_prev)) {
+                    double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset - 1));
+                    ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
+                    GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                    TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
+                    dist_prev = topo_prev.range;
+                }
+                double radialVel = dist - dist_prev;
                 
-                canvas->setTextColor(dopplerShiftHz > 0 ? TFT_CYAN : TFT_ORANGE);
-                char dopBuf[32];
-                sprintf(dopBuf, "%+dHz", (int)dopplerShiftHz);
-                canvas->drawString(dopBuf, rightX + canvas->textWidth(freqBuf) + 2, radioY + 11);
+                double dlFreq = selSat.downlinkFreq.toDouble();
+                double dopplerShiftHz = 0;
+                if (dlFreq > 0) {
+                    dopplerShiftHz = -(radialVel / 299792.458) * (dlFreq * 1e6);
+                }
+
+                canvas->setTextColor(TFT_YELLOW);
+                char posBuf[32];
+                sprintf(posBuf, "Az:%03.0f El:%02.0f", az, el);
+                canvas->drawString(posBuf, rightX, radioY);
+                
+                if (selSat.type == SAT_TYPE_WEATHER) {
+                    canvas->setTextColor(TFT_GREEN);
+                    char freqBuf[32];
+                    sprintf(freqBuf, "Rx:%s", selSat.downlinkFreq.c_str());
+                    canvas->drawString(freqBuf, rightX, radioY + 11);
+                    
+                    canvas->setTextColor(dopplerShiftHz > 0 ? TFT_CYAN : TFT_ORANGE);
+                    char dopBuf[32];
+                    sprintf(dopBuf, "%+dHz", (int)dopplerShiftHz);
+                    canvas->drawString(dopBuf, rightX + canvas->textWidth(freqBuf) + 2, radioY + 11);
+                    
+                    canvas->setTextColor(TFT_LIGHTGRAY);
+                    canvas->drawString("Mode: " + selSat.radioMode, rightX, radioY + 22);
+                }
+                else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
+                    double dlFreq2 = 145.825; // APRS frequency
+                    double dopplerShiftHz2 = -(radialVel / 299792.458) * (dlFreq2 * 1e6);
+                    
+                    canvas->setTextColor(TFT_GREEN);
+                    char f1[32];
+                    sprintf(f1, "APRS:%07.3f", dlFreq2 + dopplerShiftHz2/1e6);
+                    canvas->drawString(f1, rightX, radioY + 11);
+                    
+                    char f2[32];
+                    sprintf(f2, "SSTV:%07.3f", dlFreq + dopplerShiftHz/1e6);
+                    canvas->drawString(f2, rightX, radioY + 22);
+                    
+                    canvas->setTextColor(TFT_LIGHTGRAY);
+                    canvas->drawString("Mode: FM/Packet", rightX, radioY + 33);
+                }
+                else if (selSat.type == SAT_TYPE_HAM) {
+                    canvas->setTextColor(TFT_GREEN);
+                    char freqBuf[32];
+                    sprintf(freqBuf, "Rx:%s", selSat.downlinkFreq.c_str());
+                    canvas->drawString(freqBuf, rightX, radioY + 11);
+                    
+                    canvas->setTextColor(dopplerShiftHz > 0 ? TFT_CYAN : TFT_ORANGE);
+                    char dopBuf[32];
+                    sprintf(dopBuf, "%+dHz", (int)dopplerShiftHz);
+                    canvas->drawString(dopBuf, rightX + canvas->textWidth(freqBuf) + 2, radioY + 11);
+                    
+                    int nextLineY = radioY + 22;
+                    if (selSat.uplinkFreq.length() > 0) {
+                        canvas->setTextColor(TFT_RED);
+                        String txStr = "Tx:" + selSat.uplinkFreq;
+                        if (selSat.tone.length() > 0) txStr += " T:" + selSat.tone;
+                        canvas->drawString(txStr.c_str(), rightX, nextLineY);
+                        nextLineY += 11;
+                    }
+                    
+                    canvas->setTextColor(TFT_LIGHTGRAY);
+                    canvas->drawString("Mode: " + selSat.radioMode, rightX, nextLineY);
+                }
+            } else {
+                if (selSat.type == SAT_TYPE_WEATHER) {
+                    canvas->setTextColor(TFT_GREEN);
+                    canvas->drawString("Rx: " + selSat.downlinkFreq + " MHz", rightX, radioY);
+                    canvas->setTextColor(TFT_CYAN);
+                    canvas->drawString("Mode: " + selSat.radioMode, rightX, radioY + 11);
+                    canvas->setTextColor(TFT_LIGHTGRAY);
+                    canvas->drawString("Weather Imaging", rightX, radioY + 22);
+                }
+                else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
+                    canvas->setTextColor(TFT_GREEN);
+                    canvas->drawString("APRS: 145.825 MHz", rightX, radioY);
+                    canvas->drawString("SSTV: 145.800 MHz", rightX, radioY + 11);
+                    canvas->setTextColor(TFT_CYAN);
+                    canvas->drawString("Mode: FM/Packet", rightX, radioY + 22);
+                }
+                else if (selSat.type == SAT_TYPE_HAM) {
+                    canvas->setTextColor(TFT_GREEN);
+                    canvas->drawString("Rx: " + selSat.downlinkFreq + " MHz", rightX, radioY);
+                    
+                    int nextLineY = radioY + 11;
+                    if (selSat.uplinkFreq.length() > 0) {
+                        canvas->setTextColor(TFT_RED);
+                        String txStr = "Tx:" + selSat.uplinkFreq;
+                        if (selSat.tone.length() > 0) txStr += " T:" + selSat.tone;
+                        canvas->drawString(txStr.c_str(), rightX, nextLineY);
+                        nextLineY += 11;
+                    }
+                    
+                    canvas->setTextColor(TFT_CYAN);
+                    canvas->drawString("Mode: " + selSat.radioMode, rightX, nextLineY);
+                    nextLineY += 11;
+                    
+                    PassEvent nextPass;
+                    bool foundNext = false;
+                    for (const auto& pass : recommendedPasses) {
+                        if (pass.satName == selSat.name && pass.aosTime >= current_unix + timeMachineOffset) {
+                            nextPass = pass;
+                            foundNext = true;
+                            break;
+                        }
+                    }
+                    if (foundNext) {
+                        canvas->setTextColor(TFT_YELLOW);
+                        time_t aosTime = nextPass.aosTime;
+                        time_t losTime = nextPass.losTime;
+                        
+                        struct tm* aos_info = localtime(&aosTime);
+                        char aosBuf[16];
+                        strftime(aosBuf, sizeof(aosBuf), "%H:%M:%S", aos_info);
+                        
+                        struct tm* los_info = localtime(&losTime);
+                        char losBuf[16];
+                        strftime(losBuf, sizeof(losBuf), "%H:%M:%S", los_info);
+                        
+                        char aosStr[32];
+                        char losStr[32];
+                        sprintf(aosStr, "AOS: %s", aosBuf);
+                        sprintf(losStr, "LOS: %s El:%02d", losBuf, (int)nextPass.maxElevation);
+                        
+                        canvas->drawString(aosStr, rightX, nextLineY);
+                        canvas->drawString(losStr, rightX, nextLineY + 11);
+                    }
+                }
             }
-            
-            if (selSat.uplinkFreq.length() > 0) {
-                canvas->setTextColor(TFT_RED);
-                String txStr = "Tx:" + selSat.uplinkFreq;
-                if (selSat.tone.length() > 0) txStr += " T:" + selSat.tone;
-                canvas->drawString(txStr.c_str(), rightX, radioY + 22);
-            }
-            
-            canvas->setTextColor(TFT_LIGHTGRAY);
-            canvas->drawString("Mode: " + selSat.radioMode, rightX, radioY + 33);
-        } else if (selSat.downlinkFreq.length() > 0) {
-            // Draw a subtle background for the radio info (static)
-            canvas->fillRect(rightX - 2, radioY - 2, width - rightX - 2, 36, canvas->color565(30, 40, 50));
-            canvas->setTextColor(TFT_GREEN);
-            canvas->drawString("Rx: " + selSat.downlinkFreq + " MHz", rightX, radioY);
-            if (selSat.uplinkFreq.length() > 0) {
-                canvas->setTextColor(TFT_RED);
-                String txStr = "Tx:" + selSat.uplinkFreq;
-                if (selSat.tone.length() > 0) txStr += " T:" + selSat.tone;
-                canvas->drawString(txStr.c_str(), rightX, radioY + 11);
-            }
-            canvas->setTextColor(TFT_CYAN);
-            canvas->drawString("Mode: " + selSat.radioMode, rightX, radioY + 22);
         }
     } else {
         canvas->setTextColor(downloadErrorMsg.length() > 0 ? TFT_RED : TFT_LIGHTGRAY);
@@ -1540,6 +1692,8 @@ void loop() {
                         appState = STATE_MAIN;
                     } else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
                         if (satSelectedIndex > 0) satSelectedIndex--;
+                    } else if (M5Cardputer.Keyboard.isKeyPressed('.')) {
+                        satSelectedIndex = 0;
                     } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
                         if (noradInput.length() == 5 && !isDownloadingCustom) {
                             isDownloadingCustom = true;
@@ -1559,6 +1713,7 @@ void loop() {
                                 p.iconType = ICON_SATELLITE;
                                 p.tle = loaded_tle;
                                 p.calc.init(p.tle);
+                                p.type = SAT_TYPE_VISUAL;
                                 if (NUM_SATELLITES < MAX_SATELLITES) {
                                     g_satellites[NUM_SATELLITES++] = p;
                                     saveCustomSatellites();
@@ -2175,18 +2330,43 @@ void loop() {
                             sprintf(azaltBuf, "Az:%03d Alt:%02d", (int)az, (int)el);
                             earth_renderer->getCanvas()->drawString(azaltBuf, 5, 97);
                             
-                            if (g_satellites[sIdx].downlinkFreq.length() > 0) {
-                                double freq_mhz = g_satellites[sIdx].downlinkFreq.toDouble();
-                                double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
-                                char rxBuf[32];
-                                sprintf(rxBuf, "Rx:%s (%+.1f)", g_satellites[sIdx].downlinkFreq.c_str(), shift_khz);
-                                earth_renderer->getCanvas()->drawString(rxBuf, 5, 109);
+                            if (g_satellites[sIdx].type == SAT_TYPE_SPACE_STATION && g_satellites[sIdx].noradId == 25544) {
+                                double freq_aprs = 145.825;
+                                double freq_sstv = 145.800;
+                                double shift_aprs = (freq_aprs * -range_rate / 299792.458) * 1000.0;
+                                double shift_sstv = (freq_sstv * -range_rate / 299792.458) * 1000.0;
+                                
+                                char rx1Buf[32];
+                                char rx2Buf[32];
+                                sprintf(rx1Buf, "Rx1:%07.3f", freq_aprs + shift_aprs/1000.0);
+                                sprintf(rx2Buf, "Rx2:%07.3f", freq_sstv + shift_sstv/1000.0);
+                                earth_renderer->getCanvas()->drawString(rx1Buf, 5, 109);
+                                earth_renderer->getCanvas()->drawString(rx2Buf, 5, 121);
                             }
-                            if (g_satellites[sIdx].uplinkFreq.length() > 0) {
-                                earth_renderer->getCanvas()->setTextColor(TFT_ORANGE);
-                                String txStr = "Tx:" + g_satellites[sIdx].uplinkFreq;
-                                if (g_satellites[sIdx].tone.length() > 0) txStr += " T:" + g_satellites[sIdx].tone;
-                                earth_renderer->getCanvas()->drawString(txStr.c_str(), 5, 121);
+                            else if (g_satellites[sIdx].type == SAT_TYPE_WEATHER) {
+                                String freq = g_satellites[sIdx].downlinkFreq;
+                                if (freq.length() > 0) {
+                                    double freq_mhz = freq.toDouble();
+                                    double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
+                                    char rxBuf[32];
+                                    sprintf(rxBuf, "Rx:%s (%+.1f)", freq.c_str(), shift_khz);
+                                    earth_renderer->getCanvas()->drawString(rxBuf, 5, 109);
+                                }
+                            }
+                            else if (g_satellites[sIdx].type == SAT_TYPE_HAM) {
+                                if (g_satellites[sIdx].downlinkFreq.length() > 0) {
+                                    double freq_mhz = g_satellites[sIdx].downlinkFreq.toDouble();
+                                    double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
+                                    char rxBuf[32];
+                                    sprintf(rxBuf, "Rx:%s (%+.1f)", g_satellites[sIdx].downlinkFreq.c_str(), shift_khz);
+                                    earth_renderer->getCanvas()->drawString(rxBuf, 5, 109);
+                                }
+                                if (g_satellites[sIdx].uplinkFreq.length() > 0) {
+                                    earth_renderer->getCanvas()->setTextColor(TFT_ORANGE);
+                                    String txStr = "Tx:" + g_satellites[sIdx].uplinkFreq;
+                                    if (g_satellites[sIdx].tone.length() > 0) txStr += " T:" + g_satellites[sIdx].tone;
+                                    earth_renderer->getCanvas()->drawString(txStr.c_str(), 5, 121);
+                                }
                             }
                         }
                     }
@@ -2360,16 +2540,37 @@ void loop() {
                     char elBuf[32];
                     sprintf(azBuf, "Az : %03d", (int)az);
                     sprintf(elBuf, "Alt: %02d", (int)el);
-                    earth_renderer->getCanvas()->drawString(azBuf, 5, 105);
-                    earth_renderer->getCanvas()->drawString(elBuf, 5, 115);
                     
-                    String freq = g_satellites[focusSatIndex].downlinkFreq;
-                    if (freq.length() > 0) {
-                        double freq_mhz = freq.toDouble();
-                        double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
-                        char freqBuf[32];
-                        sprintf(freqBuf, "Rx : %s (%+.1f)", freq.c_str(), shift_khz);
-                        earth_renderer->getCanvas()->drawString(freqBuf, 5, 125);
+                    if (g_satellites[focusSatIndex].type == SAT_TYPE_SPACE_STATION && g_satellites[focusSatIndex].noradId == 25544) {
+                        double freq_aprs = 145.825;
+                        double freq_sstv = 145.800;
+                        double shift_aprs = (freq_aprs * -range_rate / 299792.458) * 1000.0;
+                        double shift_sstv = (freq_sstv * -range_rate / 299792.458) * 1000.0;
+                        
+                        earth_renderer->getCanvas()->drawString(azBuf, 5, 95);
+                        earth_renderer->getCanvas()->drawString(elBuf, 5, 105);
+                        
+                        char rx1Buf[32];
+                        char rx2Buf[32];
+                        sprintf(rx1Buf, "Rx1: %07.3f", freq_aprs + shift_aprs/1000.0);
+                        sprintf(rx2Buf, "Rx2: %07.3f", freq_sstv + shift_sstv/1000.0);
+                        earth_renderer->getCanvas()->drawString(rx1Buf, 5, 115);
+                        earth_renderer->getCanvas()->drawString(rx2Buf, 5, 125);
+                    } 
+                    else {
+                        earth_renderer->getCanvas()->drawString(azBuf, 5, 105);
+                        earth_renderer->getCanvas()->drawString(elBuf, 5, 115);
+                        
+                        if (g_satellites[focusSatIndex].type == SAT_TYPE_HAM || g_satellites[focusSatIndex].type == SAT_TYPE_WEATHER) {
+                            String freq = g_satellites[focusSatIndex].downlinkFreq;
+                            if (freq.length() > 0) {
+                                double freq_mhz = freq.toDouble();
+                                double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
+                                char freqBuf[32];
+                                sprintf(freqBuf, "Rx : %s (%+.1f)", freq.c_str(), shift_khz);
+                                earth_renderer->getCanvas()->drawString(freqBuf, 5, 125);
+                            }
+                        }
                     }
                 }
             }

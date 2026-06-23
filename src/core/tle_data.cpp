@@ -43,6 +43,24 @@ TLEData TLEManager::getJWST_TLE() {
     return jwst;
 }
 
+TLEData TLEManager::getSO50_TLE() {
+    TLEData so50;
+    so50.name = "SO-50";
+    so50.line1 = "1 27607U 02058C   26163.78561234  .00000084  00000-0  56106-4 0  9990";
+    so50.line2 = "2 27607  64.5512 284.1234 0081234 274.5612  85.1234 14.7561234571234";
+    so50.baseScore = 0;
+    return so50;
+}
+
+TLEData TLEManager::getAO91_TLE() {
+    TLEData ao91;
+    ao91.name = "AO-91";
+    ao91.line1 = "1 43017U 17073B   26163.78561234  .00000123  00000-0  12345-3 0  9990";
+    ao91.line2 = "2 43017  97.6512 184.1234 0241234 274.5612  85.1234 14.8561234571234";
+    ao91.baseScore = 0;
+    return ao91;
+}
+
 uint32_t TLEManager::getMockTimeAnchor() {
     // 2026-06-14 00:00:00 UTC = 1781395200
     // MUST match the 2026 TLE epoch

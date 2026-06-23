@@ -57,6 +57,13 @@
 - **Cloud Frequency Synchronization (GitHub Action API Gateway)**:
   - Automatically runs a GitHub workflow `.github/workflows/update_frequencies.yml` to filter the massive official frequencies list into a lightweight `data/frequencies.json` file.
   - The Cardputer pulls this lightweight JSON when online to display the real-time downlink frequencies and modulation modes (e.g., ISS SSTV, NOAA APT) for Amateur Radio (HAM)通联 (contacts).
+- **Tailored Satellite Type UI (Customized Radio & Observation Layouts)**:
+  Satellites are divided into 5 distinct categories according to their physical properties and radio payloads. Customized UI layouts are dynamically rendered in the Encyclopedia Panel, Tracking HUD, and Sidebar List HUD, preventing guess-work or fabrication of radio frequencies:
+  - **HAM (Amateur Radio Satellites)**: Displays real-time Doppler-compensated Rx frequency, Tx uplink frequency with CTCSS sub-tones (Tone), and modulation mode. When not tracking, it dynamically calculates and displays the upcoming AOS, LOS, and Peak Elevation (Max El).
+  - **WEATHER (Meteorological Satellites)**: Such as NOAA or Meteor series. Renders only the Doppler-compensated Rx frequency and weather imaging mode (e.g. APT/LRPT), hiding unused Tx uplink parameters.
+  - **SPACE_STATION (Space Stations)**: For the complex multi-radio payloads of the ISS, it custom-renders dual-channel Doppler shift frequencies for APRS (145.825 MHz) and SSTV (145.800 MHz) simultaneously. For space stations without active HAM operations (e.g. Tiangong), it displays no amateur radio capability.
+  - **VISUAL (Visual-only Spacecrafts)**: Such as the Hubble Space Telescope, JWST, and rocket bodies. Displays `No Amateur Radio Capability` explicitly, without generating fake radio data.
+  - **HISTORICAL (Inactive Monuments)**: Such as China's first satellite Dong Fang Hong I (DFH-1). Shows the launch date (1970) and inactive status. It hides the radio frequency panel completely in both tracking and non-tracking screens.
 
 
 ## Technical Details: Orbital Propagations & Visibility Predictions
@@ -125,6 +132,25 @@ To estimate the satellite's brightness, the visual magnitude ($M$) is calculated
 To bypass ESP32's processing limits during 24-hour pass searches, several energy-efficiency algorithms are implemented:
 * **Dual-Step Propagation**: The propagator sweeps forward using a coarse **120-second (2-minute)** step size to quickly bypass long periods of invisibility. Once the elevation rises above the horizon, the engine **rewinds the timeline by 120 seconds** and switches to a fine **10-second** step size for precise calculations (determining the exact AOS, peak elevation time, magnitude, and LOS). Once the satellite sets, the engine resumes the coarse 120-second steps, optimizing precision and CPU cycle consumption.
 * **Scrubbing Cooldown Gate**: Since shortening the prediction step to 10 seconds increases the pass calculator load, rapid time axis scrubbing (such as holding keys `,`/`/` or fast-tapping in Time Machine) could trigger high-frequency recalculations of full 3D orbit paths for all selected satellites (each requiring SGP4 coordinates propagation and geodetic coordinate iterations for 30 steps). To maintain smooth inputs, a **120ms physical cooldown gate** is implemented in `calculateOrbit`. During active scrubbing, any heavy path recalculation is blocked within a 120ms window, rendering only the core spacecraft real-time position. The orbital paths instantly redraw once keys are released or scrolling stops, completely eliminating lag spikes and maintaining a locked **60 FPS** frame rate.
+
+### 7. Amateur Radio (HAM) Parameters & Doppler Shift Calculations
+For satellites supporting Amateur Radio (HAM) payloads (such as FM transponder satellites SO-50, AO-91, or the International Space Station ISS which carries multiple radio setups), the system displays real-time radio tuning parameters in the Encyclopedia and Tracking HUDs. The physical meanings and mathematical definitions are as follows:
+
+* **RX (Receive - Downlink Frequency)**: The frequency on which the satellite transmits and the ground station receives. The RX value displayed in the UI is the **real-time Doppler-compensated frequency**, indicating the actual frequency to tune your receiver to.
+* **TX (Transmit - Uplink Frequency)**: The frequency on which the ground station transmits to the satellite. The UI displays the static center frequency (in practice, the operator needs to manually apply reverse Doppler compensation on their transmitter).
+* **T (Tone - CTCSS Sub-tone)**: Continuous Tone-Coded Squelch System. Displayed in the UI as `T: [Hz]` (e.g., `T:67.0`). This sub-audible tone is required to open the squelch of the satellite's FM repeater. If your transmitter does not inject this specific sub-tone, the satellite will not relay your voice. A value of `None` indicates no sub-tone is required.
+* **Doppler Deviation (The bracketed number)**: Shown to the right of the RX frequency (e.g., `(+1.5k)` or `(-3.2k)`), this indicates the **real-time Doppler frequency shift $\Delta f$ in kHz**.
+  * **Physical Model of Doppler Shift**:
+    Because the satellite moves at high orbital velocity (approx. $7.8\text{ km/s}$) relative to the observer, the received radio frequency shifts. The Doppler shift $\Delta f$ is computed as:
+    $$\Delta f = -f_0 \times \frac{v_{radial}}{c}$$
+    Where $f_0$ is the satellite's nominal center frequency, $c$ is the speed of light (approx. $299792.458\text{ km/s}$), and $v_{radial}$ is the **radial velocity** of the satellite relative to the observer (negative when approaching, positive when receding).
+  * **Operational Meaning for Operators**:
+    * **Acquisition of Signal (AOS)**: The satellite approaches rapidly. The Doppler shift reaches its positive maximum (e.g., `+3.5k`). Operators must tune their receivers higher.
+    * **Time of Closest Approach (TCA / Max El)**: The radial velocity is zero, yielding $\Delta f = 0$. The received frequency matches the nominal center frequency.
+    * **Loss of Signal (LOS)**: The satellite recedes rapidly. The Doppler shift reaches its negative maximum (e.g., `-3.5k`). Operators must tune their receivers lower.
+* **Difference Between RX1/RX2 and U/D**:
+  * In standard amateur satellite operations, **U (Uplink)** refers to the transmission frequency, and **D (Downlink)** refers to the reception frequency.
+  * For complex platforms like the ISS, multiple downlink channels can be active simultaneously (e.g., APRS packet radio at 145.825 MHz, and SSTV image downlink at 145.800 MHz). To optimize screen real estate and deliver maximum situational awareness, the system designates these dual channels as **RX1** and **RX2** side-by-side. This allows operators to track Doppler shifts for both downlinks simultaneously, rather than showing a generic single uplink/downlink (U/D) layout.
 
 ## Helper Utilities & Build Scripts
 
