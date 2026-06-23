@@ -9,7 +9,12 @@ enum SatIconType {
     ICON_STATION,
     ICON_TELESCOPE,
     ICON_DEEPSPACE,
-    ICON_ROCKET
+    ICON_ROCKET,
+    ICON_DFH1,
+    ICON_BLUEWALKER3,
+    ICON_WEATHER,
+    ICON_NAVIGATION,
+    ICON_COMMUNICATION
 };
 
 struct SatRenderData {

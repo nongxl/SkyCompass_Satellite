@@ -48,82 +48,7 @@ bool isMonoInitialized = false;
 uint8_t mono_id = 0;
 uint8_t operation_status = 0;
 
-const uint8_t sat_icon_8x8[8] = {
-    0b00011000, //     ■■
-    0b00111100, //   ■■■■
-    0b01011010, //  ■ ■■ ■
-    0b11111111, // ■■■■■■■■
-    0b01011010, //  ■ ■■ ■
-    0b00111100, //   ■■■■
-    0b00011000, //     ■■
-    0b00011000  //     ■■
-};
-
-const uint8_t mono_icon_satellite[8] = {
-    0b00000000, //  . . . . . . . .
-    0b11011110, //  ■ ■ . ■ ■ ■ ■ . (左侧太阳板，右侧舱体)
-    0b11011110, //  ■ ■ . ■ ■ ■ ■ .
-    0b11111110, //  ■ ■ ■ ■ ■ ■ ■ . (中间连接杆)
-    0b11111110, //  ■ ■ ■ ■ ■ ■ ■ .
-    0b11011110, //  ■ ■ . ■ ■ ■ ■ .
-    0b11011110, //  ■ ■ . ■ ■ ■ ■ .
-    0b00000000  //  . . . . . . . .
-};
-
-const uint8_t mono_icon_station[8] = {
-    0b10000001, //  ■ . . . . . . ■ (两侧高电池板)
-    0b10000001, //  ■ . . . . . . ■
-    0b10111101, //  ■ . ■ ■ ■ ■ . ■ (中间连通舱体)
-    0b10111101, //  ■ . ■ ■ ■ ■ . ■
-    0b10111101, //  ■ . ■ ■ ■ ■ . ■
-    0b10000001, //  ■ . . . . . . ■
-    0b10000001, //  ■ . . . . . . ■
-    0b10000001  //  ■ . . . . . . ■
-};
-
-const uint8_t mono_icon_telescope[8] = {
-    0b01111110, //  . ■ ■ ■ ■ ■ ■ . (顶部宽遮光罩)
-    0b00111100, //  . . ■ ■ ■ ■ . . (筒身)
-    0b00111100, //  . . ■ ■ ■ ■ . .
-    0b00111100, //  . . ■ ■ ■ ■ . .
-    0b11111111, //  ■ ■ ■ ■ ■ ■ ■ ■ (中部横帆板突出)
-    0b11111111, //  ■ ■ ■ ■ ■ ■ ■ ■
-    0b00111100, //  . . ■ ■ ■ ■ . .
-    0b00111100  //  . . ■ ■ ■ ■ . .
-};
-
-const uint8_t mono_icon_rocket[8] = {
-    0b00000000, //  . . . . . . . .
-    0b00011000, //  . . . ■ ■ . . . (三角形尖头)
-    0b00111100, //  . . ■ ■ ■ ■ . . (箭体)
-    0b00111100, //  . . ■ ■ ■ ■ . .
-    0b00111100, //  . . ■ ■ ■ ■ . .
-    0b01111110, //  . ■ ■ ■ ■ ■ ■ . (尾翼扩展)
-    0b00100100, //  . . ■ . . ■ . . (双发动机喷口)
-    0b00000000  //  . . . . . . . .
-};
-
-const uint8_t mono_icon_deepspace[8] = {
-    0b10011001, //  ■ . . ■ ■ . . ■ (十字轴 + 斜对角线端点)
-    0b01011010, //  . ■ . ■ ■ . ■ .
-    0b00111100, //  . . ■ ■ ■ ■ . .
-    0b11111111, //  ■ ■ ■ ■ ■ ■ ■ ■ (大十字连通)
-    0b11111111, //  ■ ■ ■ ■ ■ ■ ■ ■
-    0b00111100, //  . . ■ ■ ■ ■ . .
-    0b01011010, //  . ■ . ■ ■ . ■ .
-    0b10011001  //  ■ . . ■ ■ . . ■
-};
-
-const uint8_t circle_icon_8x8[8] = {
-    0b00111100, //   ■■■■
-    0b01000010, //  ■    ■
-    0b10000001, // ■      ■
-    0b10000001, // ■      ■
-    0b10000001, // ■      ■
-    0b10000001, // ■      ■
-    0b01000010, //  ■    ■
-    0b00111100  //   ■■■■
-};
+#include "core/mono_icons.h"
 
 void drawCortanaCircle(uint8_t* buffer) {
     memset(buffer, 0, 8);
@@ -152,18 +77,7 @@ void drawCortanaCircle(uint8_t* buffer) {
     }
 }
 
-const uint8_t font_3x5[10][5] = {
-    {0b111, 0b101, 0b101, 0b101, 0b111}, // 0
-    {0b010, 0b110, 0b010, 0b010, 0b111}, // 1
-    {0b111, 0b001, 0b111, 0b100, 0b111}, // 2
-    {0b111, 0b001, 0b111, 0b001, 0b111}, // 3
-    {0b101, 0b101, 0b111, 0b001, 0b001}, // 4
-    {0b111, 0b100, 0b111, 0b001, 0b111}, // 5
-    {0b111, 0b100, 0b111, 0b101, 0b111}, // 6
-    {0b111, 0b001, 0b001, 0b001, 0b001}, // 7
-    {0b111, 0b101, 0b111, 0b101, 0b111}, // 8
-    {0b111, 0b101, 0b111, 0b001, 0b111}  // 9
-};
+
 
 extern HalImu* imu;
 extern HalGnss* gnss;
@@ -239,23 +153,23 @@ SatProfile g_satellites[MAX_SATELLITES] = {
     {25544, "ISS", TFT_YELLOW, 2, -1.8, true, ICON_STATION, "International Space Station. The largest human-made structure in space, visible as a very bright moving star.", "145.800", "FM/SSTV", "", "", {}, {}, {}, SAT_TYPE_SPACE_STATION},
     {48274, "Tiangong", TFT_GREEN, 1, -0.5, true, ICON_STATION, "China's Tiangong Space Station. A permanent modular space station in LEO.", "", "", "", "", {}, {}, {}, SAT_TYPE_SPACE_STATION},
     {20580, "Hubble", TFT_CYAN, 0, 1.5, true, ICON_TELESCOPE, "Hubble Space Telescope. A vital observatory that revolutionized our understanding of the universe.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {33591, "NOAA 19", TFT_ORANGE, 0, 3.5, false, ICON_SATELLITE, "NOAA weather satellite. Known for transmitting APT weather images back to Earth.", "137.100", "APT", "", "", {}, {}, {}, SAT_TYPE_WEATHER},
+    {33591, "NOAA 19", TFT_ORANGE, 0, 3.5, false, ICON_WEATHER, "NOAA weather satellite. Known for transmitting APT weather images back to Earth.", "137.100", "APT", "", "", {}, {}, {}, SAT_TYPE_WEATHER},
     {50463, "JWST", TFT_GOLD, 0, 10.0, false, ICON_DEEPSPACE, "James Webb Space Telescope. Located at L2 point 1.5 million km away, observing in infrared.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {53807, "BlueWalker 3", TFT_WHITE, 0, 1.0, false, ICON_SATELLITE, "AST SpaceMobile's prototype. Features a massive 64 sqm array, very bright and controversial.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {53807, "BlueWalker 3", TFT_WHITE, 0, 1.0, false, ICON_BLUEWALKER3, "AST SpaceMobile's prototype. Features a massive 64 sqm array, very bright and controversial.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {118, "Ablestar R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ablestar rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {25732, "CZ-4B R/B", TFT_ORANGE, 0, 4.0, true, ICON_ROCKET, "Long March 4B rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {6155, "Centaur R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Centaur rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {28499, "Ariane 5 R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ariane 5 rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {41882, "Fengyun-4A", TFT_BLUE, 0, 10.0, false, ICON_SATELLITE, "Chinese geostationary meteorological satellite, located 35,786 km above the equator.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {43539, "BeiDou-3", TFT_RED, 0, 10.0, false, ICON_SATELLITE, "Medium Earth Orbit navigation satellite part of the BeiDou system (BDS).", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {41882, "Fengyun-4A", TFT_BLUE, 0, 10.0, false, ICON_WEATHER, "Chinese geostationary meteorological satellite, located 35,786 km above the equator.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {43539, "BeiDou-3", TFT_RED, 0, 10.0, false, ICON_NAVIGATION, "Medium Earth Orbit navigation satellite part of the BeiDou system (BDS).", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {27386, "Envisat", TFT_LIGHTGRAY, 0, 2.5, false, ICON_SATELLITE, "A huge 8-ton inactive Earth observation satellite. Now one of the largest pieces of space debris.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {4382, "DFH-1", TFT_RED, 0, 6.0, true, ICON_SATELLITE, "Dong Fang Hong I. China's first satellite launched in 1970, still orbiting today as a silent monument.\n\nLaunch: 1970-04-24\nStatus: Inactive\nComms: Unavailable\nHAM: Not Supported", "20.009", "Beacon", "", "", {}, {}, {}, SAT_TYPE_HISTORICAL},
+    {4382, "DFH-1", TFT_RED, 0, 6.0, true, ICON_DFH1, "Dong Fang Hong I. China's first satellite launched in 1970, still orbiting today as a silent monument.\n\nLaunch: 1970-04-24\nStatus: Inactive\nComms: Unavailable\nHAM: Not Supported", "20.009", "Beacon", "", "", {}, {}, {}, SAT_TYPE_HISTORICAL},
     {25994, "Terra", TFT_PINK, 0, 3.0, false, ICON_SATELLITE, "NASA's flagship Earth Observing System satellite.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {27424, "Aqua", TFT_MAGENTA, 0, 3.0, false, ICON_SATELLITE, "NASA Earth observation satellite focusing on the water cycle.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {43166, "Iridium 127", TFT_WHITE, 0, 4.0, false, ICON_SATELLITE, "Iridium NEXT network. The original 1st-gen Iridium satellites produced legendary 'flares' up to mag -8.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {57165, "Meteor-M2", TFT_WHITE, 0, 3.5, false, ICON_SATELLITE, "Russian meteorological satellite transmitting LRPT weather images.", "137.100", "LRPT", "", "", {}, {}, {}, SAT_TYPE_WEATHER},
-    {27607, "SO-50", TFT_GREEN, 0, 6.5, false, ICON_SATELLITE, "SaudiSat 1C (SO-50). A long-lived, highly active FM voice repeater amateur satellite, very popular for quick handheld contacts.", "145.850", "FM", "436.795", "67.0", {}, {}, {}, SAT_TYPE_HAM},
-    {43017, "AO-91", TFT_MAGENTA, 0, 6.0, true, ICON_SATELLITE, "RadFxSat (AO-91). A Fox-1B series amateur radio satellite carrying a U/V FM voice repeater.", "145.960", "FM", "435.250", "67.0", {}, {}, {}, SAT_TYPE_HAM}
+    {43166, "Iridium 127", TFT_WHITE, 0, 4.0, false, ICON_COMMUNICATION, "Iridium NEXT network. The original 1st-gen Iridium satellites produced legendary 'flares' up to mag -8.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {57165, "Meteor-M2", TFT_WHITE, 0, 3.5, false, ICON_WEATHER, "Russian meteorological satellite transmitting LRPT weather images.", "137.100", "LRPT", "", "", {}, {}, {}, SAT_TYPE_WEATHER},
+    {27607, "SO-50", TFT_GREEN, 0, 6.5, false, ICON_COMMUNICATION, "SaudiSat 1C (SO-50). A long-lived, highly active FM voice repeater amateur satellite, very popular for quick handheld contacts.", "145.850", "FM", "436.795", "67.0", {}, {}, {}, SAT_TYPE_HAM},
+    {43017, "AO-91", TFT_MAGENTA, 0, 6.0, true, ICON_COMMUNICATION, "RadFxSat (AO-91). A Fox-1B series amateur radio satellite carrying a U/V FM voice repeater.", "145.960", "FM", "435.250", "67.0", {}, {}, {}, SAT_TYPE_HAM}
 };
 
 // We use a simulated time starting near the TLE epoch for Phase 3 offline testing
@@ -1084,6 +998,43 @@ void drawSatSelectPage() {
             canvas->fillTriangle(iconX - 5, iconY - 8, iconX + 5, iconY - 8, iconX, iconY - 15, satColor);
             canvas->fillRect(iconX - 5, iconY + 8, 4, 4, TFT_ORANGE); // Engine 1
             canvas->fillRect(iconX + 2, iconY + 8, 4, 4, TFT_ORANGE); // Engine 2
+        } else if (t == ICON_DFH1) {
+            canvas->fillCircle(iconX, iconY, 9, TFT_WHITE);
+            canvas->drawLine(iconX - 6, iconY - 6, iconX - 18, iconY - 18, satColor);
+            canvas->drawLine(iconX + 6, iconY - 6, iconX + 18, iconY - 18, satColor);
+            canvas->drawLine(iconX - 6, iconY + 6, iconX - 18, iconY + 18, satColor);
+            canvas->drawLine(iconX + 6, iconY + 6, iconX + 18, iconY + 18, satColor);
+        } else if (t == ICON_BLUEWALKER3) {
+            canvas->fillRect(iconX - 3, iconY - 3, 9, 9, TFT_WHITE);
+            canvas->fillRect(iconX - 21, iconY - 9, 15, 21, satColor);
+            canvas->fillRect(iconX + 9, iconY - 9, 15, 21, satColor);
+            canvas->drawFastVLine(iconX - 15, iconY - 9, 21, TFT_BLACK);
+            canvas->drawFastVLine(iconX - 9, iconY - 9, 21, TFT_BLACK);
+            canvas->drawFastVLine(iconX + 15, iconY - 9, 21, TFT_BLACK);
+            canvas->drawFastVLine(iconX + 21, iconY - 9, 21, TFT_BLACK);
+            canvas->drawFastHLine(iconX - 21, iconY, 15, TFT_BLACK);
+            canvas->drawFastHLine(iconX + 9, iconY, 15, TFT_BLACK);
+        } else if (t == ICON_WEATHER) {
+            canvas->fillRect(iconX - 3, iconY - 6, 9, 15, TFT_WHITE);
+            canvas->drawLine(iconX - 6, iconY, iconX - 18, iconY - 6, satColor);
+            canvas->fillRect(iconX - 24, iconY - 12, 9, 9, satColor);
+            canvas->fillRect(iconX + 6, iconY - 3, 6, 3, satColor);
+            canvas->fillRect(iconX + 9, iconY - 6, 3, 3, satColor);
+        } else if (t == ICON_NAVIGATION) {
+            canvas->fillRect(iconX - 3, iconY - 6, 9, 15, TFT_WHITE);
+            canvas->fillRect(iconX - 24, iconY - 3, 9, 9, satColor);
+            canvas->fillRect(iconX + 15, iconY - 3, 9, 9, satColor);
+            canvas->drawFastHLine(iconX - 15, iconY + 1, 12, TFT_LIGHTGRAY);
+            canvas->drawFastHLine(iconX + 6, iconY + 1, 9, TFT_LIGHTGRAY);
+            canvas->fillRect(iconX - 1, iconY + 9, 3, 6, satColor);
+            canvas->fillCircle(iconX, iconY + 15, 3, satColor);
+        } else if (t == ICON_COMMUNICATION) {
+            canvas->fillCircle(iconX, iconY, 6, TFT_WHITE);
+            canvas->drawLine(iconX, iconY - 6, iconX - 9, iconY - 18, satColor);
+            canvas->drawLine(iconX, iconY - 6, iconX + 9, iconY - 18, satColor);
+            canvas->drawFastVLine(iconX, iconY + 6, 6, satColor);
+            canvas->drawFastHLine(iconX - 6, iconY + 12, 13, satColor);
+            canvas->drawFastHLine(iconX - 3, iconY + 13, 7, satColor);
         } else { // SATELLITE
             canvas->fillRect(iconX - 3, iconY - 3, 9, 9, TFT_WHITE);
             canvas->fillRect(iconX - 15, iconY - 3, 9, 9, satColor);
@@ -2657,6 +2608,11 @@ void loop() {
             else if (visibleSatIconType == ICON_TELESCOPE) icon = mono_icon_telescope;
             else if (visibleSatIconType == ICON_ROCKET) icon = mono_icon_rocket;
             else if (visibleSatIconType == ICON_DEEPSPACE) icon = mono_icon_deepspace;
+            else if (visibleSatIconType == ICON_DFH1) icon = mono_icon_dfh1;
+            else if (visibleSatIconType == ICON_BLUEWALKER3) icon = mono_icon_bw3;
+            else if (visibleSatIconType == ICON_WEATHER) icon = mono_icon_weather;
+            else if (visibleSatIconType == ICON_NAVIGATION) icon = mono_icon_navi;
+            else if (visibleSatIconType == ICON_COMMUNICATION) icon = mono_icon_comm;
             
             // 缓慢呼吸效果 design：正在过境 2.5 秒一个周期
             float theta = millis() * 0.00251f;

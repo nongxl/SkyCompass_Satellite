@@ -589,6 +589,45 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
             _canvas->drawLine(sx - 5, sy, sx + 5, sy, drawColor);
             _canvas->drawLine(sx - 2, sy - 2, sx + 2, sy + 2, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
             _canvas->drawLine(sx - 2, sy + 2, sx + 2, sy - 2, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
+        } else if (sat.iconType == ICON_DFH1) {
+            // 东方红一号 (圆形舱体+4根斜天线)
+            _canvas->fillCircle(sx, sy, 3, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
+            _canvas->drawLine(sx - 2, sy - 2, sx - 6, sy - 6, drawColor);
+            _canvas->drawLine(sx + 2, sy - 2, sx + 6, sy - 6, drawColor);
+            _canvas->drawLine(sx - 2, sy + 2, sx - 6, sy + 6, drawColor);
+            _canvas->drawLine(sx + 2, sy + 2, sx + 6, sy + 6, drawColor);
+        } else if (sat.iconType == ICON_BLUEWALKER3) {
+            // BlueWalker 3 (中间核心+左右超大平板天线)
+            _canvas->fillRect(sx - 1, sy - 1, 3, 3, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
+            _canvas->fillRect(sx - 7, sy - 3, 5, 7, drawColor);
+            _canvas->fillRect(sx + 3, sy - 3, 5, 7, drawColor);
+            _canvas->drawFastVLine(sx - 5, sy - 3, 7, TFT_BLACK);
+            _canvas->drawFastVLine(sx + 5, sy - 3, 7, TFT_BLACK);
+            _canvas->drawFastHLine(sx - 7, sy, 5, TFT_BLACK);
+            _canvas->drawFastHLine(sx + 3, sy, 5, TFT_BLACK);
+        } else if (sat.iconType == ICON_WEATHER) {
+            // 气象卫星 (舱体+左大帆板+右红外/光学扫描突起)
+            _canvas->fillRect(sx - 1, sy - 2, 3, 5, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
+            _canvas->drawLine(sx - 2, sy, sx - 6, sy - 2, drawColor);
+            _canvas->fillRect(sx - 8, sy - 4, 3, 3, drawColor);
+            _canvas->drawFastHLine(sx + 2, sy, 2, drawColor);
+            _canvas->drawPixel(sx + 3, sy - 1, drawColor);
+        } else if (sat.iconType == ICON_NAVIGATION) {
+            // 导航卫星 (舱体+对称长条帆板+下部螺旋天线)
+            _canvas->fillRect(sx - 1, sy - 2, 3, 5, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
+            _canvas->drawFastHLine(sx - 6, sy, 5, TFT_LIGHTGRAY);
+            _canvas->drawFastHLine(sx + 2, sy, 5, TFT_LIGHTGRAY);
+            _canvas->fillRect(sx - 8, sy - 1, 3, 3, drawColor);
+            _canvas->fillRect(sx + 6, sy - 1, 3, 3, drawColor);
+            _canvas->drawFastVLine(sx, sy + 3, 2, drawColor);
+            _canvas->drawPixel(sx, sy + 5, drawColor);
+        } else if (sat.iconType == ICON_COMMUNICATION) {
+            // 通信卫星 (圆/多面体舱体+顶部V形天线+底部碟形锅天线)
+            _canvas->fillCircle(sx, sy, 2, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
+            _canvas->drawLine(sx, sy - 2, sx - 3, sy - 6, drawColor);
+            _canvas->drawLine(sx, sy - 2, sx + 3, sy - 6, drawColor);
+            _canvas->drawFastVLine(sx, sy + 2, 2, drawColor);
+            _canvas->drawFastHLine(sx - 2, sy + 4, 5, drawColor);
         } else {
             // 普通卫星 (小盒子+单侧或不对称帆板)
             _canvas->fillRect(sx - 1, sy - 1, 3, 3, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
