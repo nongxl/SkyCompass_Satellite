@@ -68,65 +68,39 @@
 
 ## Technical Details: Orbital Propagations & Visibility Predictions
 
-To match the orbital predictions of professional astronomy software, a comprehensive astronomical coordinate transformation, orbital propagation, and optical visibility calculation system is implemented on the ESP32 chip. The key physical models and mathematical formulas are described below:
+To match the orbital predictions of professional astronomy software, a comprehensive astronomical coordinate transformation, orbital propagation, and optical visibility calculation system is implemented on the ESP32 chip. The key physical models and technical summaries are described below:
 
 ### 1. Time System and Sidereal Time Conversions
 * **Julian Date (JD)**
-  The high-precision UTC timestamp $t_{unix}$ acquired from GNSS/NTP is converted to the Julian Date:
-  $$\text{JD} = \frac{t_{unix}}{86400.0} + 2440587.5$$
+  The system converts the high-precision UTC timestamp acquired from GNSS/NTP to the Julian Date (JD), providing a precise time baseline for subsequent SGP4 model computations.
 * **Greenwich Mean Sidereal Time (GMST)**
-  Due to Earth's rotation, transformations between inertial and terrestrial coordinate systems require calculating the Greenwich Mean Sidereal Time. This is computed using IAU astronomical formulas:
-  $$T_0 = \frac{\text{JD}_0 - 2451545.0}{36525.0}$$
-  $$\theta_{GMST} = \text{gmst\_0h\_sec} + \Delta t \times 1.002737909350795$$
-  Where $\text{gmst\_0h\_sec}$ is the sidereal time at $0^h$ UT, and $\Delta t$ is the elapsed seconds of the day. The result is normalized to the range $[0, 2\pi]$ in radians.
+  Due to Earth's rotation, transformations between inertial and terrestrial coordinate systems require calculating the Greenwich Mean Sidereal Time (GMST). This is computed using standard astronomical formulas to determine the Earth's current rotation angle, which is normalized to the range [0, 2π] in radians.
 
 ### 2. Coordinate Transformations (TEME -> ECEF -> ENU)
 * **TEME Inertial to Terrestrial (ECEF)**
-  The spacecraft state vectors $(X_{TEME}, Y_{TEME}, Z_{TEME})$ output by the SGP4 propagator reside in the TEME (True Equator Mean Equinox) inertial frame. A rotation using the GMST angle $\theta_{GMST}$ projects them to the ECEF (Earth-Centered, Earth-Fixed) terrestrial frame:
-  $$\begin{pmatrix} X_{ECEF} \\ Y_{ECEF} \\ Z_{ECEF} \end{pmatrix} = \begin{pmatrix} \cos\theta_{GMST} & \sin\theta_{GMST} & 0 \\ -\sin\theta_{GMST} & \cos\theta_{GMST} & 0 \\ 0 & 0 & 1 \end{pmatrix} \begin{pmatrix} X_{TEME} \\ Y_{TEME} \\ Z_{TEME} \end{pmatrix}$$
+  The spacecraft state vectors output by the SGP4 propagator reside in the TEME (True Equator Mean Equinox) inertial frame. A rotation matrix using the GMST angle projects them to the ECEF (Earth-Centered, Earth-Fixed) terrestrial frame, transforming the inertial position coordinates into Earth-surface 3D coordinates.
 * **WGS-84 Earth Ellipsoid Model**
-  To model Earth's flattening shape accurately, the WGS-84 ellipsoid parameters are adopted (semi-major axis $a = 6378.137\text{ km}$, first eccentricity squared $e^2 = 0.00669437999014$).
-  * **Geodetic to ECEF**:
-    The observer's coordinates (latitude $\phi$, longitude $\lambda$, and altitude $h$, aligned to user altitude `baseUserAlt`) are converted to the 3D ECEF position $(X_{obs}, Y_{obs}, Z_{obs})$:
-    $$N(\phi) = \frac{a}{\sqrt{1 - e^2 \sin^2\phi}}$$
-    $$X_{obs} = (N(\phi) + h) \cos\phi \cos\lambda, \quad Y_{obs} = (N(\phi) + h) \cos\phi \sin\lambda, \quad Z_{obs} = (N(\phi)(1 - e^2) + h) \sin\phi$$
-  * **ECEF to Geodetic (Ground Track)**:
-    An iterative method with 5 iterations is implemented to calculate the satellite's latitude/longitude and altitude above the ellipsoid.
+  To model Earth's flattening shape accurately, the WGS-84 ellipsoid parameters are adopted (introducing semi-major axis and flattening parameters).
+  - **Geodetic to ECEF**: The observer's coordinates (latitude, longitude, and altitude, automatically acquired from GNSS or network positioning) are converted to the 3D ECEF position.
+  - **ECEF to Geodetic (Ground Track)**: An iterative method is implemented to solve and correct geodetic distortion, yielding the exact ground track (latitude/longitude) and altitude of the satellite.
 * **Topocentric Coordinate System (ENU: East-North-Up)**
-  To solve the satellite's position relative to the local observer, the delta vector $\mathbf{d} = \mathbf{r}_{sat} - \mathbf{r}_{obs}$ is projected onto the local horizon plane, producing the East-North-Up (ENU) coordinates $(E, N, U)$. From these, the Azimuth ($Az$), Elevation ($El$), and Range ($Range$) are derived:
-  $$Range = \sqrt{E^2 + N^2 + U^2}$$
-  $$Az = \text{atan2}(E, N) \pmod{360^\circ}, \quad El = \arcsin\left(\frac{U}{Range}\right)$$
+  To solve the satellite's position relative to the local observer, the delta vector is projected onto the local horizon plane, producing the East-North-Up (ENU) coordinates. From these, the Azimuth (Az), Elevation (El), and Range (Range) are derived.
 
 ### 3. Atmospheric Refraction Correction
-For satellites at low elevations, Earth's atmosphere bends incoming light, making the satellite appear slightly higher than its geometric position. An atmospheric refraction compensation is applied when the geometric elevation is between $-5^\circ < El < 15^\circ$:
-$$R = \frac{1.02}{\tan\left(El + \frac{10.3}{El + 5.11}\right)} \quad (\text{arcminutes})$$
-$$El_{corrected} = El + \frac{R}{60^\circ}$$
-This correction aligns the predicted Acquisition of Signal (AOS) and Loss of Signal (LOS) times with professional online databases such as Heavens-Above.
+For satellites at low elevations, Earth's atmosphere bends incoming light, making the satellite appear slightly higher than its geometric position. An atmospheric refraction compensation is applied when the elevation is low, aligning the predicted Acquisition of Signal (AOS) and Loss of Signal (LOS) times with professional online databases such as Heavens-Above.
 
 ### 4. Tri-Criterion Optical Visibility
 For a spacecraft to be visible to the naked eye, three conditions must be satisfied simultaneously:
-1. **Minimum Elevation**: The corrected elevation must satisfy $El_{corrected} \ge 10.0^\circ$ to clear local obstructions and atmospheric extinction.
-2. **Local Dark Sky**: The Sun's local elevation at the observer's location $\theta_{sun}$ must be $\theta_{sun} < -6.0^\circ$ (civil twilight has ended, skies are dark).
-3. **Earth Umbra Check (Illuminated Satellite)**:
-   The satellite must be illuminated by sunlight. A spherical approximation is used to determine if the satellite is in Earth's shadow.
-   The cosine of the angle between the subsolar point and the satellite is:
-   $$\cos\theta = \sin(subLat_R)\sin(lat_R) + \cos(subLat_R)\cos(lat_R)\cos(lon_R - subLon_R)$$
-   If $\cos\theta < 0$, the perpendicular distance to the shadow axis is computed:
-   $$d_{shadow} = d_{sat} \times \sqrt{1 - \cos^2\theta}$$
-   If $d_{shadow} < 6378.137\text{ km}$, the satellite is eclipsed by Earth's shadow (in Earth's umbra) and receives no sunlight, making it optically invisible.
+1. **Minimum Elevation**: The corrected elevation must satisfy a minimum threshold (typically 10.0°) to clear local obstructions and atmospheric refraction.
+2. **Local Dark Sky**: The Sun's local elevation at the observer's location must be below civil twilight (typically less than -6.0°), indicating the sky is dark.
+3. **Earth Umbra Check (Illuminated Satellite)**: The satellite must be illuminated by sunlight. A spherical approximation is used to model Earth's shadow cone and determine if the satellite is eclipsed (in Earth's umbra) and receives no sunlight, making it optically invisible.
 
 ### 5. Visual Magnitude, Phase Angle & Atmospheric Extinction
-To estimate the satellite's brightness, the visual magnitude ($M$) is calculated by taking into account the standard magnitude ($M_{std}$, defined at $1000\text{ km}$ distance and full phase), observer distance ($Range$), solar phase angle, and atmospheric extinction:
-* **Phase Angle ($\psi$)**: The angle "Sun - Satellite - Observer".
-* **Diffuse Sphere Phase Function ($\Phi(\psi)$)**: Models diffuse solar reflection scattering from a spherical surface:
-  $$\Phi(\psi) = \sin(\psi) + (\pi - \psi)\cos(\psi)$$
-* **Atmospheric Extinction ($\Delta M_{ext}$)**:
-  To match specialized platforms like Tianwentong in low-elevation extinction fading, the Kasten-Young Air Mass ($AM$) formulation is integrated with a visual band extinction coefficient $k_v = 0.18$:
-  $$AM \approx \frac{1}{\sin(El_{corrected}) + 0.15(El_{corrected} + 3.825)^{-1.253}}$$
-  $$\Delta M_{ext} = 0.18 \times AM$$
-* **Apparent Magnitude Formulation**:
-  $$M = M_{std} + 5.0 \log_{10}\left(\frac{Range}{1000\text{ km}}\right) - 2.5 \log_{10}\left(\Phi(\psi)\right) + \Delta M_{ext}$$
-  This refined model accounts for both solar geometry and low-elevation atmospheric absorption/scattering, ensuring high-fidelity correlation with mainstream astronomical tools.
+To estimate the satellite's brightness, the visual magnitude is calculated by taking into account the standard magnitude, observer distance, solar phase angle, and atmospheric extinction:
+* **Phase Angle (ψ)**: Calculates the "Sun - Satellite - Observer" three-dimensional angle to determine the reflection geometry.
+* **Diffuse Sphere Phase Function**: Models diffuse solar reflection scattering from a spherical surface to represent how sunlight scatters off the satellite's body.
+* **Atmospheric Extinction**: Integrates the Kasten-Young Air Mass model with an atmospheric extinction coefficient to correct for brightness attenuation at low elevation angles due to the thicker air mass.
+* **Apparent Magnitude Formulation**: Synthesizes range, phase angle, and low-elevation atmospheric extinction to compute the apparent magnitude, ensuring high-fidelity correlation with mainstream astronomical tools.
 
 ### 6. Power-Efficient Dual-Step Prediction Engine & Time Machine Optimization
 To bypass ESP32's processing limits during 24-hour pass searches, several energy-efficiency algorithms are implemented:
@@ -141,10 +115,8 @@ For satellites supporting Amateur Radio (HAM) payloads (such as FM transponder s
 * **T (Tone - CTCSS Sub-tone)**: Continuous Tone-Coded Squelch System. Displayed in the UI as `T: [Hz]` (e.g., `T:67.0`). This sub-audible tone is required to open the squelch of the satellite's FM repeater. If your transmitter does not inject this specific sub-tone, the satellite will not relay your voice. A value of `None` indicates no sub-tone is required.
 * **Doppler Deviation (The bracketed number)**: Shown to the right of the RX frequency (e.g., `(+1.5k)` or `(-3.2k)`), this indicates the **real-time Doppler frequency shift $\Delta f$ in kHz**.
   * **Physical Model of Doppler Shift**:
-    Because the satellite moves at high orbital velocity (approx. $7.8\text{ km/s}$) relative to the observer, the received radio frequency shifts. The Doppler shift $\Delta f$ is computed as:
-    $$\Delta f = -f_0 \times \frac{v_{radial}}{c}$$
-    Where $f_0$ is the satellite's nominal center frequency, $c$ is the speed of light (approx. $299792.458\text{ km/s}$), and $v_{radial}$ is the **radial velocity** of the satellite relative to the observer (negative when approaching, positive when receding).
-  * **Operational Meaning for Operators**:
+    Because the satellite moves at high orbital velocity (approx. 7.8 km/s) relative to the observer, the received radio frequency shifts. The Doppler shift is computed dynamically based on the relationship between the nominal center frequency, radial velocity, and the speed of light. Frequency shifts higher as the satellite approaches and lower as it recedes.
+* **Operational Meaning for Operators**:
     * **Acquisition of Signal (AOS)**: The satellite approaches rapidly. The Doppler shift reaches its positive maximum (e.g., `+3.5k`). Operators must tune their receivers higher.
     * **Time of Closest Approach (TCA / Max El)**: The radial velocity is zero, yielding $\Delta f = 0$. The received frequency matches the nominal center frequency.
     * **Loss of Signal (LOS)**: The satellite recedes rapidly. The Doppler shift reaches its negative maximum (e.g., `-3.5k`). Operators must tune their receivers lower.
