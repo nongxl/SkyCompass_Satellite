@@ -205,6 +205,8 @@ bool g_repSatInitialized = false;
 String g_repSatName = "";
 uint32_t recentLaunchDownloadFinishedMs = 0;
 bool showListHelp = false;
+bool isCameraTransitioning = false;
+float targetZoom = 0.95f;
 
 // Level 3 Objects 分页数据结构与状态
 bool recentLaunchInObjectsView = false;
@@ -2378,7 +2380,7 @@ void loop() {
                 }
                 
                 if (key == '-' || key == '_') {
-                    currentZoom -= 0.2f;
+                    targetZoom -= 0.2f;
                     float minLimit = 0.95f;
                     if (isSatViewMode) {
                         double visualAlt = targetFocusAlt;
@@ -2386,11 +2388,12 @@ void loop() {
                         if (visualAlt < 0.0f) visualAlt = 0.0f;
                         minLimit = 62.0f / (55.0f + sqrtf(visualAlt) * 0.4f);
                     }
-                    if (currentZoom < minLimit) currentZoom = minLimit;
+                    if (targetZoom < minLimit) targetZoom = minLimit;
                 } else if (key == '=' || key == '+') {
-                    currentZoom += 0.2f;
-                    if (currentZoom > 20.0f) currentZoom = 20.0f;
+                    targetZoom += 0.2f;
+                    if (targetZoom > 20.0f) targetZoom = 20.0f;
                 }
+
             };
             
             static unsigned long keyReleaseTime = 0;
@@ -2432,9 +2435,9 @@ void loop() {
                 if (M5Cardputer.Keyboard.isKeyPressed('c')) {
                     if (isSatViewMode) {
                         isSatViewMode = false;
-                        currentZoom = 0.95f;
-                        earth_renderer->setZoom(currentZoom);
+                        targetZoom = 0.95f;
                     }
+
                     isManualLocationMode = !isManualLocationMode;
                     if (!isManualLocationMode) {
                         portENTER_CRITICAL(&passMutex);
@@ -2473,7 +2476,9 @@ void loop() {
                         isManualLocationMode = false;
                     } else if (isSatViewMode) {
                         isSatViewMode = false;
+                        targetZoom = 0.95f;
                     }
+
                 } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
                     if (appState == STATE_MAIN && !showRecommendations) {
                         showRecommendations = true;
@@ -2551,7 +2556,9 @@ void loop() {
                     isSatViewMode = !isSatViewMode;
                     if (isSatViewMode) {
                         bool found = false;
-                        if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+                        if (g_recentLaunchFocusMode) {
+                            found = true;
+                        } else if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
                             found = true;
                         } else {
                             for (int i = 0; i < NUM_SATELLITES; i++) {
@@ -2565,21 +2572,37 @@ void loop() {
                         if (!found) {
                             isSatViewMode = false;
                         } else {
+                            isCameraTransitioning = true;
+                            
                             if (attitude && imu) {
                                 AttitudeData att = attitude->getAttitude();
                                 basePitch = att.pitch;
                                 baseRoll = att.roll;
                             }
                         }
+                    } else {
+                        // Keep current targetZoom
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
+
+                }
+ else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
                     if (isSatViewMode && !showRecommendations) {
                         int idx = focusSatIndex - 1;
-                        for (int count = 0; count < NUM_SATELLITES; count++) {
-                            if (idx < 0) idx = NUM_SATELLITES - 1;
-                            if (g_satellites[idx].selected) {
-                                focusSatIndex = idx;
-                                break;
+                        for (int count = 0; count <= NUM_SATELLITES; count++) {
+                            if (idx < -1) idx = NUM_SATELLITES - 1;
+                            if (idx == -1) {
+                                if (g_recentLaunchFocusMode) {
+                                    focusSatIndex = -1;
+                                    isCameraTransitioning = true;
+                                    break;
+                                }
+                                idx = NUM_SATELLITES - 1;
+                            } else {
+                                if (g_satellites[idx].selected) {
+                                    focusSatIndex = idx;
+                                    isCameraTransitioning = true;
+                                    break;
+                                }
                             }
                             idx--;
                         }
@@ -2587,16 +2610,27 @@ void loop() {
                 } else if (M5Cardputer.Keyboard.isKeyPressed('.')) {
                     if (isSatViewMode && !showRecommendations) {
                         int idx = focusSatIndex + 1;
-                        for (int count = 0; count < NUM_SATELLITES; count++) {
-                            if (idx >= NUM_SATELLITES) idx = 0;
-                            if (g_satellites[idx].selected) {
-                                focusSatIndex = idx;
-                                break;
+                        for (int count = 0; count <= NUM_SATELLITES; count++) {
+                            if (idx >= NUM_SATELLITES) idx = -1;
+                            if (idx == -1) {
+                                if (g_recentLaunchFocusMode) {
+                                    focusSatIndex = -1;
+                                    isCameraTransitioning = true;
+                                    break;
+                                }
+                                idx = 0;
+                            } else {
+                                if (g_satellites[idx].selected) {
+                                    focusSatIndex = idx;
+                                    isCameraTransitioning = true;
+                                    break;
+                                }
                             }
                             idx++;
                         }
                     }
                 }
+
 
             } else if (appState == STATE_WIFI_SETUP) {
                 if (M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
@@ -2998,7 +3032,7 @@ void loop() {
         if (isSatViewMode) {
             bool hasFocalPos = false;
             GeodeticCoord focalGeo;
-            if (g_recentLaunchFocusMode) {
+            if (g_recentLaunchFocusMode && focusSatIndex == -1) {
                 double tx, ty, tz;
                 if (g_repSatCalc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
                     double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
@@ -3007,7 +3041,7 @@ void loop() {
                     hasFocalPos = true;
                 }
             }
- else if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+            else if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
                 double tx, ty, tz;
                 if (g_satellites[focusSatIndex].calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
                     double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
@@ -3016,6 +3050,7 @@ void loop() {
                     hasFocalPos = true;
                 }
             }
+
             
             if (hasFocalPos) {
                 targetFocusAlt = focalGeo.alt;
@@ -3024,11 +3059,9 @@ void loop() {
                 if (visualAlt > 20000.0f) visualAlt = 20000.0f;
                 if (visualAlt < 0.0f) visualAlt = 0.0f;
                 
-                float adaptiveZoom = 62.0f / (55.0f + sqrtf(visualAlt) * 0.4f);
-                if (!prevSatViewMode) {
-                    currentZoom = adaptiveZoom;
-                }
                 prevSatViewMode = true;
+
+
                 
                 if (!(attitude && imu)) {
                     targetViewLat = focalGeo.lat;
@@ -3117,6 +3150,8 @@ void loop() {
             }
         }
         
+        // Smoothly interpolate currentZoom to targetZoom
+        currentZoom += (targetZoom - currentZoom) * 0.15f;
         earth_renderer->setZoom(currentZoom);
         
         static double smoothViewLat = baseUserLat;
@@ -3133,12 +3168,31 @@ void loop() {
         if (lonDiff > 180.0) targetViewLon -= 360.0;
         else if (lonDiff < -180.0) targetViewLon += 360.0;
         
-        float dt = (isFastForwarding || isSatViewMode) ? 1.0f : 0.15f; // Instant snap when fast forwarding or locked in Sat View to prevent orbital jitter
+        float dt = 0.15f;
+        if (isFastForwarding) {
+            dt = 1.0f;
+        } else if (isSatViewMode) {
+            if (isCameraTransitioning) {
+                dt = 0.15f;
+            } else {
+                dt = 1.0f;
+            }
+        }
         
         smoothViewLat += (targetViewLat - smoothViewLat) * dt;
         smoothViewLon += (targetViewLon - smoothViewLon) * dt;
         if (smoothViewLon > 180.0) smoothViewLon -= 360.0;
         if (smoothViewLon < -180.0) smoothViewLon += 360.0;
+        
+        if (isCameraTransitioning && isSatViewMode) {
+            double latErr = abs(targetViewLat - smoothViewLat);
+            double lonErr = abs(targetViewLon - smoothViewLon);
+            if (lonErr > 180.0) lonErr = 360.0 - lonErr;
+            if (latErr < 0.5 && lonErr < 0.5) {
+                isCameraTransitioning = false; // Transition completed
+            }
+        }
+
         
         smoothPitch += (targetPitch - smoothPitch) * dt;
         smoothRoll += (targetRoll - smoothRoll) * dt;
@@ -3336,9 +3390,10 @@ void loop() {
                     }
                 }
             }
-        } else {
-            sats.reserve(NUM_SATELLITES);
-            for (int i = 0; i < NUM_SATELLITES; i++) {
+        }
+        
+        // Always compute and load selected encyclopedia satellites
+        for (int i = 0; i < NUM_SATELLITES; i++) {
                 if (!g_satellites[i].selected) {
                     g_satCaches[i].lastGeoValid = false;
                     g_satCaches[i].isVisible = false;
@@ -3433,7 +3488,6 @@ void loop() {
                     g_satCaches[i].isVisible = false;
                 }
             }
-        }
         
         // Render scene
         double renderUserLat = baseUserLat;
@@ -3844,74 +3898,115 @@ void loop() {
             int textWidth = earth_renderer->getCanvas()->textWidth(timeStr);
             earth_renderer->getCanvas()->drawString(timeStr, 238 - textWidth, 125);
             
-            if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES) {
-                earth_renderer->getCanvas()->setTextColor(g_satellites[focusSatIndex].color);
-                earth_renderer->getCanvas()->drawString("Sat View", 180, 5);
+            if (isSatViewMode) {
+                String satName = "";
+                uint16_t satColor = TFT_WHITE;
+                bool hasSatInfo = false;
                 
-                // Add calculation for Az/Alt and Doppler Shift
-                double tx, ty, tz;
-                if (g_satellites[focusSatIndex].calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
-                    double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
-                    ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
-                    GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
-                    GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                    TopocentricCoord topo = CoordTransform::ecefToTopocentric(obsGeo, ecef);
-                    double az = topo.az;
-                    double el = topo.el;
-                    double dist = topo.range;
+                SGP4Calc* currentCalc = nullptr;
+                SatelliteType currentType = SAT_TYPE_VISUAL;
+                int currentNoradId = 0;
+                String downlinkFreq = "";
+                
+                if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES) {
+                    satName = g_satellites[focusSatIndex].name;
+                    satColor = g_satellites[focusSatIndex].color;
+                    currentCalc = &(g_satellites[focusSatIndex].calc);
+                    currentType = g_satellites[focusSatIndex].type;
+                    currentNoradId = g_satellites[focusSatIndex].noradId;
+                    downlinkFreq = g_satellites[focusSatIndex].downlinkFreq;
+                    hasSatInfo = true;
+                } else if (g_recentLaunchFocusMode) {
+                    satName = g_repSatName;
                     
-                    double tx_prev, ty_prev, tz_prev;
-                    double dist_prev = dist;
-                    if (g_satellites[focusSatIndex].calc.getTEME(current_unix + timeMachineOffset - 1, tx_prev, ty_prev, tz_prev)) {
-                        double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset - 1));
-                        ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
-                        TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
-                        dist_prev = topo_prev.range;
+                    double ageDays = 30.0;
+                    if (!g_recentLaunches.empty()) {
+                        for (const auto& item : g_recentLaunches) {
+                            if (item.batchId == recentLaunchActiveBatchId) {
+                                if (item.epoch > 0 && (current_unix + timeMachineOffset) >= item.epoch) {
+                                    ageDays = (double)((current_unix + timeMachineOffset) - item.epoch) / 86400.0;
+                                }
+                                break;
+                            }
+                        }
                     }
                     
-                    double range_rate = dist - dist_prev;
+                    uint16_t baseCol = TFT_WHITE;
+                    if (ageDays <= 2.0) baseCol = TFT_WHITE;
+                    else if (ageDays <= 14.0) baseCol = 0x07FF; // TFT_CYAN
+                    else if (ageDays >= 365.0) baseCol = earth_renderer->getCanvas()->color565(150, 150, 150);
                     
-                    uint16_t satColor = g_satellites[focusSatIndex].color;
+                    satColor = baseCol;
+                    currentCalc = &g_repSatCalc;
+                    hasSatInfo = true;
+                }
+                
+                if (hasSatInfo && currentCalc != nullptr) {
                     earth_renderer->getCanvas()->setTextColor(satColor);
+                    earth_renderer->getCanvas()->drawString("Sat View", 180, 5);
                     
-                    char azBuf[32];
-                    char elBuf[32];
-                    sprintf(azBuf, "Az : %03d", (int)az);
-                    sprintf(elBuf, "Alt: %02d", (int)el);
-                    
-                    if (g_satellites[focusSatIndex].type == SAT_TYPE_SPACE_STATION && g_satellites[focusSatIndex].noradId == 25544) {
-                        double freq_aprs = 145.825;
-                        double freq_sstv = 145.800;
-                        double shift_aprs = (freq_aprs * -range_rate / 299792.458) * 1000.0;
-                        double shift_sstv = (freq_sstv * -range_rate / 299792.458) * 1000.0;
+                    double tx, ty, tz;
+                    if (currentCalc->getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
+                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
+                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                        GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                        GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                        TopocentricCoord topo = CoordTransform::ecefToTopocentric(obsGeo, ecef);
+                        double az = topo.az;
+                        double el = topo.el;
+                        double dist = topo.range;
                         
-                        earth_renderer->getCanvas()->drawString(azBuf, 5, 95);
-                        earth_renderer->getCanvas()->drawString(elBuf, 5, 105);
+                        double tx_prev, ty_prev, tz_prev;
+                        double dist_prev = dist;
+                        if (currentCalc->getTEME(current_unix + timeMachineOffset - 1, tx_prev, ty_prev, tz_prev)) {
+                            double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset - 1));
+                            ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
+                            TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
+                            dist_prev = topo_prev.range;
+                        }
                         
-                        char rx1Buf[32];
-                        char rx2Buf[32];
-                        sprintf(rx1Buf, "Rx1: %07.3f", freq_aprs + shift_aprs/1000.0);
-                        sprintf(rx2Buf, "Rx2: %07.3f", freq_sstv + shift_sstv/1000.0);
-                        earth_renderer->getCanvas()->drawString(rx1Buf, 5, 115);
-                        earth_renderer->getCanvas()->drawString(rx2Buf, 5, 125);
-                    } 
-                    else {
-                        earth_renderer->getCanvas()->drawString(azBuf, 5, 105);
-                        earth_renderer->getCanvas()->drawString(elBuf, 5, 115);
+                        double range_rate = dist - dist_prev;
                         
-                        if (g_satellites[focusSatIndex].type == SAT_TYPE_HAM || g_satellites[focusSatIndex].type == SAT_TYPE_WEATHER) {
-                            String freq = g_satellites[focusSatIndex].downlinkFreq;
-                            if (freq.length() > 0) {
-                                double freq_mhz = freq.toDouble();
-                                double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
-                                char freqBuf[32];
-                                sprintf(freqBuf, "Rx : %s (%+.1f)", freq.c_str(), shift_khz);
-                                earth_renderer->getCanvas()->drawString(freqBuf, 5, 125);
+                        earth_renderer->getCanvas()->setTextColor(satColor);
+                        
+                        char azBuf[32];
+                        char elBuf[32];
+                        sprintf(azBuf, "Az : %03d", (int)az);
+                        sprintf(elBuf, "Alt: %02d", (int)el);
+                        
+                        if (currentType == SAT_TYPE_SPACE_STATION && currentNoradId == 25544) {
+                            double freq_aprs = 145.825;
+                            double freq_sstv = 145.800;
+                            double shift_aprs = (freq_aprs * -range_rate / 299792.458) * 1000.0;
+                            double shift_sstv = (freq_sstv * -range_rate / 299792.458) * 1000.0;
+                            
+                            earth_renderer->getCanvas()->drawString(azBuf, 5, 95);
+                            earth_renderer->getCanvas()->drawString(elBuf, 5, 105);
+                            
+                            char rx1Buf[32];
+                            char rx2Buf[32];
+                            sprintf(rx1Buf, "Rx1: %07.3f", freq_aprs + shift_aprs/1000.0);
+                            sprintf(rx2Buf, "Rx2: %07.3f", freq_sstv + shift_sstv/1000.0);
+                            earth_renderer->getCanvas()->drawString(rx1Buf, 5, 115);
+                            earth_renderer->getCanvas()->drawString(rx2Buf, 5, 125);
+                        } else {
+                            earth_renderer->getCanvas()->drawString(azBuf, 5, 105);
+                            earth_renderer->getCanvas()->drawString(elBuf, 5, 115);
+                            
+                            if (currentType == SAT_TYPE_HAM || currentType == SAT_TYPE_WEATHER) {
+                                if (downlinkFreq.length() > 0) {
+                                    double freq_mhz = downlinkFreq.toDouble();
+                                    double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
+                                    char freqBuf[32];
+                                    sprintf(freqBuf, "Rx : %s (%+.1f)", downlinkFreq.c_str(), shift_khz);
+                                    earth_renderer->getCanvas()->drawString(freqBuf, 5, 125);
+                                }
                             }
                         }
                     }
                 }
             }
+
         }
         
         earth_renderer->getCanvas()->pushSprite(0, 0);
