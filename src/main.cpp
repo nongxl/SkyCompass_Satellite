@@ -152,6 +152,15 @@ struct RecentLaunchItem {
     
     std::shared_ptr<SGP4Calc> calc;
     RecentLaunchRealtimeCache cache;
+
+    // New fields for Mission Formation Visualization
+    std::vector<FormationPoint> proxyFormation;
+    float occupancy = 0.0f;
+    float occupancyStartPhase = 0.0f;
+    float occupancyEndPhase = 0.0f;
+    float repAlongTrackPhase = 0.0f;
+    String shortName;
+    SatIconType iconType = ICON_SATELLITE;
 };
 
 
@@ -229,6 +238,227 @@ struct LazyObjectItem {
     OrbitCache cache;
 };
 std::vector<LazyObjectItem> g_level3Objects;
+
+
+static String getShortNameForDisplay(const String& fullName, uint32_t epoch) {
+    // 1. Extract prefix by splitting special symbols to get clean constellation/group name
+    // e.g., STARLINK-32128 -> STARLINK, QIANFAN-1-03 -> QIANFAN
+    String baseName = fullName;
+    int sepIdx = baseName.indexOf('-');
+    if (sepIdx == -1) sepIdx = baseName.indexOf('_');
+    if (sepIdx == -1) sepIdx = baseName.indexOf(' ');
+    if (sepIdx != -1) {
+        baseName = baseName.substring(0, sepIdx);
+    }
+    baseName.trim();
+    
+    String nameUpper = baseName;
+    nameUpper.toUpperCase();
+    
+    char dateBuf[8] = "";
+    if (epoch > 0) {
+        time_t ep = (time_t)epoch;
+        struct tm ep_tm;
+        gmtime_r(&ep, &ep_tm);
+        sprintf(dateBuf, " %02d/%02d", ep_tm.tm_mon + 1, ep_tm.tm_mday);
+    }
+    
+    // 2. Pick abbreviation: Special case rules for common constellations, general fallbacks for future ones
+    String abbr = "";
+    if (nameUpper.indexOf("STARLINK") != -1) {
+        abbr = "SL";
+    } else if (nameUpper.indexOf("ONEWEB") != -1) {
+        abbr = "OW";
+    } else if (nameUpper.indexOf("KUIPER") != -1) {
+        abbr = "KP";
+    } else if (nameUpper.indexOf("OBJECT") != -1 || nameUpper.indexOf("DEBRIS") != -1) {
+        abbr = "DEB";
+    } else if (nameUpper.indexOf("GALAXY") != -1) {
+        abbr = "GAL";
+    } else if (nameUpper.indexOf("YAOGAN") != -1) {
+        abbr = "YG";
+    } else if (nameUpper.indexOf("SHIJIAN") != -1) {
+        abbr = "SJ";
+    } else {
+        // High future compatibility general fallback:
+        // Slice the first 3 letters of prefix as abbreviation (e.g. QIANFAN -> QIA)
+        if (baseName.length() >= 3) {
+            abbr = nameUpper.substring(0, 3);
+        } else {
+            abbr = nameUpper;
+        }
+    }
+    
+    return abbr + String(dateBuf);
+}
+
+static void assignShortNameAndIcon(RecentLaunchItem& item) {
+    item.shortName = getShortNameForDisplay(item.displayName, item.epoch);
+    item.iconType = ICON_SATELLITE;
+}
+
+void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
+    if (items.empty()) return;
+    
+    if (!LittleFS.exists("/tle_recent_raw.txt")) {
+        // Fallback: Default dummy values
+        for (auto& item : items) {
+            assignShortNameAndIcon(item);
+            item.occupancy = 0.0f;
+            item.proxyFormation.clear();
+            FormationPoint fp = {0.0f, 1.0f};
+            item.proxyFormation.push_back(fp);
+        }
+        return;
+    }
+    
+    // Store original Mean Anomalies for each item index
+    std::vector<std::vector<float>> rawPhases(items.size());
+    
+    File f = LittleFS.open("/tle_recent_raw.txt", "r");
+    if (!f) return;
+    
+    while (f.available()) {
+        String name = f.readStringUntil('\n'); name.trim();
+        if (name.length() == 0) break;
+        String line1 = f.readStringUntil('\n'); line1.trim();
+        String line2 = f.readStringUntil('\n'); line2.trim();
+        
+        if (line1.length() < 14 || line1.charAt(0) != '1' || line2.length() < 14 || line2.charAt(0) != '2') {
+            continue;
+        }
+        
+        String batchId = line1.substring(9, 14);
+        for (size_t i = 0; i < items.size(); i++) {
+            if (items[i].batchId == batchId) {
+                if (line2.length() >= 51) {
+                    float ma = line2.substring(43, 51).toFloat();
+                    rawPhases[i].push_back(ma);
+                }
+                break;
+            }
+        }
+    }
+    f.close();
+    
+    for (size_t i = 0; i < items.size(); i++) {
+        auto& item = items[i];
+        auto& phases = rawPhases[i];
+        
+        // 1. Assign shortName and icon
+        assignShortNameAndIcon(item);
+        
+        if (phases.empty()) {
+            item.occupancy = 0.0f;
+            item.repAlongTrackPhase = 0.0f;
+            item.proxyFormation.clear();
+            FormationPoint fp = {0.0f, 1.0f};
+            item.proxyFormation.push_back(fp);
+            continue;
+        }
+        
+        // Record repAlongTrackPhase (assuming first read one is representative)
+        item.repAlongTrackPhase = phases[0];
+        
+        // 2. Calculate Occupancy and Start/End Phases using circular max gap
+        std::sort(phases.begin(), phases.end());
+        
+        float maxGap = 0.0f;
+        float gapStart = phases.back();
+        float gapEnd = phases.front();
+        
+        if (phases.size() == 1) {
+            item.occupancy = 0.0f;
+            item.occupancyStartPhase = phases[0];
+            item.occupancyEndPhase = phases[0];
+        } else {
+            for (size_t j = 0; j < phases.size(); j++) {
+                float p1 = phases[j];
+                float p2 = phases[(j + 1) % phases.size()];
+                float gap = p2 - p1;
+                if (gap < 0.0f) gap += 360.0f;
+                if (gap > maxGap) {
+                    maxGap = gap;
+                    gapStart = p1;
+                    gapEnd = p2;
+                }
+            }
+            item.occupancy = 360.0f - maxGap;
+            item.occupancyStartPhase = gapEnd;
+            item.occupancyEndPhase = gapStart;
+        }
+        
+        // 3. Hierarchical Agglomerative Clustering to compress N phases into K proxies
+        int N = phases.size();
+        int K = 5;
+        if (N <= 5) {
+            K = N;
+        } else if (N < 30) {
+            K = 6;
+        } else if (N < 80) {
+            K = 7;
+        } else {
+            K = 8;
+        }
+        
+        struct Cluster {
+            float phase;
+            int count;
+        };
+        std::vector<Cluster> clusters;
+        clusters.reserve(N);
+        for (float p : phases) {
+            clusters.push_back({p, 1});
+        }
+        
+        while (clusters.size() > (size_t)K) {
+            float minDist = 360.0f;
+            int bestA = -1;
+            int bestB = -1;
+            
+            for (size_t a = 0; a < clusters.size(); a++) {
+                for (size_t b = a + 1; b < clusters.size(); b++) {
+                    float diff = abs(clusters[a].phase - clusters[b].phase);
+                    float d = min(diff, 360.0f - diff);
+                    if (d < minDist) {
+                        minDist = d;
+                        bestA = a;
+                        bestB = b;
+                    }
+                }
+            }
+            
+            if (bestA == -1 || bestB == -1) break;
+            
+            Cluster& cA = clusters[bestA];
+            Cluster& cB = clusters[bestB];
+            
+            float pA = cA.phase;
+            float pB = cB.phase;
+            if (abs(pA - pB) > 180.0f) {
+                if (pA < pB) pA += 360.0f;
+                else pB += 360.0f;
+            }
+            
+            float newPhase = (pA * cA.count + pB * cB.count) / (cA.count + cB.count);
+            if (newPhase >= 360.0f) newPhase -= 360.0f;
+            
+            cA.phase = newPhase;
+            cA.count = cA.count + cB.count;
+            
+            clusters.erase(clusters.begin() + bestB);
+        }
+        
+        // Store into proxyFormation
+        item.proxyFormation.clear();
+        for (const auto& cl : clusters) {
+            FormationPoint fp;
+            fp.AlongTrackPhase = cl.phase;
+            fp.brightness = 1.0f;
+            item.proxyFormation.push_back(fp);
+        }
+    }
+}
 
 
 void initRecentLaunchCalcs(RecentLaunchItem& item) {
@@ -970,7 +1200,8 @@ void recentLaunchNetworkTask(void* parameter) {
         }
         
         if (recentLaunchDownloading && rawTleCount > 0) {
-            g_pendingRecentLaunches = tempLaunches;
+            g_pendingRecentLaunches = std::move(tempLaunches);
+            calculateFormationsForItems(g_pendingRecentLaunches);
             g_recentLaunchesPending = true;
             recentLaunchSelectedIndex = 0;
             recentLaunchDownloadSuccess = true;
@@ -1216,6 +1447,7 @@ void tryLoadRecentLaunchCache() {
     
     if (fresh) {
         g_recentLaunches = tempLaunches;
+        calculateFormationsForItems(g_recentLaunches);
         recentLaunchDownloadSuccess = true;
         recentLaunchSelectedIndex = 0;
         recentLaunchErrorMsg = "Loaded from local cache.";
@@ -1237,6 +1469,19 @@ void saveCustomSatellites() {
     prefs.end();
 }
 
+void imuTask(void* pvParameters) {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms (100Hz) high precision interval
+    
+    while (true) {
+        if (imu && attitude) {
+            imu->update();
+            attitude->update();
+        }
+        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    }
+}
+
 void setup() {
     
     Serial.begin(115200);
@@ -1255,6 +1500,18 @@ void setup() {
         attitude = new AttitudeEstimator(imu);
         attitude->begin();
         LOG_I("APP", "IMU Initialized");
+        
+        // Spawn high-precision background IMU sampling task on Core 0 (I2C reading & sensor fusion integration)
+        // Fixed at 100Hz to prevent step sizes from fluctuating during heavy 3D rendering on Core 1
+        xTaskCreatePinnedToCore(
+            imuTask,
+            "ImuTask",
+            4096,
+            NULL,
+            3, // High priority
+            NULL,
+            0  // Pinned to Core 0 (same core as networking and protocol tasks)
+        );
     }
     
     // Initialize Position & Sun Calculator
@@ -2123,28 +2380,40 @@ void drawSatSelectPage() {
                     ageDays = (currentSimTime - epoch) / 86400;
                 }
                 
-                char ageBuf[32];
-                uint16_t ageColor = TFT_GREEN;
-                if (ageDays < 0) {
-                    sprintf(ageBuf, "Age: N/A");
-                    ageColor = TFT_RED;
-                } else {
-                    sprintf(ageBuf, "Age: %dd", ageDays);
-                    if (ageDays <= 7) ageColor = TFT_GREEN;
-                    else if (ageDays <= 14) ageColor = TFT_ORANGE;
-                    else ageColor = TFT_RED;
-                }
-                
-                canvas->setTextColor(ageColor);
-                int ageW = canvas->textWidth(ageBuf);
-                canvas->drawString(ageBuf, width - ageW - 4, 23);
+                // 1. Calculate Recommended Stars based on occupancy (compact trains get higher score)
+                // Use ASCII stars '*' and '-' to avoid font rendering blocks on Cardputer TFT screen
+                const char* stars = "**---";
+                if (item.occupancy < 10.0f) stars = "*****";
+                else if (item.occupancy < 30.0f) stars = "****-";
+                else if (item.occupancy < 90.0f) stars = "***--";
+                else stars = "**---";
                 
                 if (!recentLaunchInObjectsView) {
                     canvas->setTextColor(TFT_GOLD);
                     canvas->drawString(item.displayName.c_str(), rightX, 23);
                     
+                    canvas->setTextColor(TFT_YELLOW);
+                    int starsW = canvas->textWidth(stars);
+                    canvas->drawString(stars, width - starsW - 4, 23);
+                    
                     canvas->setTextColor(TFT_CYAN);
                     canvas->drawString(("Batch: " + item.batchId).c_str(), rightX, 33);
+                    
+                    // Age placement on the right
+                    char ageBuf[16];
+                    uint16_t ageColor = TFT_GREEN;
+                    if (ageDays < 0) {
+                        sprintf(ageBuf, "Age: N/A");
+                        ageColor = TFT_RED;
+                    } else {
+                        sprintf(ageBuf, "%dd", ageDays);
+                        if (ageDays <= 7) ageColor = TFT_GREEN;
+                        else if (ageDays <= 14) ageColor = TFT_ORANGE;
+                        else ageColor = TFT_RED;
+                    }
+                    canvas->setTextColor(ageColor);
+                    int ageW = canvas->textWidth(ageBuf);
+                    canvas->drawString(ageBuf, width - ageW - 4, 33);
                     
                     char dateBuf[32];
                     if (epoch > 0) {
@@ -2157,52 +2426,48 @@ void drawSatSelectPage() {
                     canvas->setTextColor(TFT_LIGHTGRAY);
                     canvas->drawString(("Launch: " + String(dateBuf)).c_str(), rightX, 43);
                     
-                    String repName = item.repSatName;
-                    if (repName.length() > 0) {
-                        if (repName.length() > 14) repName = repName.substring(0, 12) + "..";
-                    } else {
-                        repName = "N/A";
-                    }
+                    // Display real count of objects and clustered proxies
                     char satsBuf[64];
-                    sprintf(satsBuf, "Sats: %d | Rep: %s", item.satelliteCount, repName.c_str());
+                    int proxyCount = item.proxyFormation.size();
+                    sprintf(satsBuf, "Objects: %d | Proxy: %d", item.satelliteCount, proxyCount);
                     canvas->drawString(satsBuf, rightX, 53);
                     
                     char orbitBuf[48];
                     sprintf(orbitBuf, "Orbit: %dkm, %.1f*", (int)avgAlt, inclination);
                     canvas->drawString(orbitBuf, rightX, 63);
                     
+                    // Formation State & Occupancy degree
                     canvas->setTextColor(TFT_GREEN);
                     canvas->drawString("Status:", rightX, 73);
                     canvas->setTextColor(TFT_WHITE);
-                    if (ageDays >= 0) {
-                        if (ageDays <= 2) canvas->drawString("Very Tight Train", rightX + 45, 73);
-                        else if (ageDays <= 5) canvas->drawString("Tight Train", rightX + 45, 73);
-                        else if (ageDays <= 14) canvas->drawString("Expanding", rightX + 45, 73);
-                        else canvas->drawString("Operational", rightX + 45, 73);
-                    } else {
-                        canvas->drawString("Unknown", rightX + 45, 73);
-                    }
+                    const char* formState = "Operational";
+                    if (item.occupancy < 15.0f) formState = "Tight Train";
+                    else if (item.occupancy < 60.0f) formState = "Train Formation";
+                    else if (item.occupancy < 120.0f) formState = "Expanding";
+                    canvas->drawString(formState, rightX + 45, 73);
                     
+                    char occBuf[32];
+                    sprintf(occBuf, "Occ: %d*", (int)item.occupancy);
+                    canvas->setTextColor(TFT_CYAN);
+                    int occW = canvas->textWidth(occBuf);
+                    canvas->drawString(occBuf, width - occW - 4, 94);
+                    
+                    // Distribution indicator (8 refined blocks)
                     canvas->setTextColor(TFT_GREEN);
                     canvas->drawString("Distribution:", rightX, 85);
+                    
                     int barY = 95;
-                    if (ageDays >= 0) {
-                        if (ageDays <= 2) {
-                            canvas->fillRect(rightX, barY, 40, 5, TFT_WHITE);
-                        } else if (ageDays <= 5) {
-                            for (int k = 0; k < 5; k++) {
-                                canvas->fillRect(rightX + k * 8, barY, 5, 5, 0x07FF);
-                            }
-                        } else if (ageDays <= 14) {
-                            for (int k = 0; k < 4; k++) {
-                                canvas->fillRect(rightX + k * 13, barY, 4, 5, 0x07FF);
-                            }
+                    int filledCount = (int)((item.occupancy / 360.0f) * 8.0f + 0.5f);
+                    if (filledCount < 1 && item.occupancy > 0.0f) filledCount = 1;
+                    if (filledCount > 8) filledCount = 8;
+                    
+                    for (int k = 0; k < 8; k++) {
+                        int bx = rightX + k * 10;
+                        if (k < filledCount) {
+                            canvas->fillRect(bx, barY, 8, 6, 0x07FF); // High-contrast Cyan block
                         } else {
-                            canvas->fillRect(rightX, barY, 3, 5, TFT_WHITE);
-                            canvas->fillRect(rightX + 37, barY, 3, 5, TFT_WHITE);
+                            canvas->drawRect(bx, barY, 8, 6, TFT_DARKGREY); // Empty block
                         }
-                    } else {
-                        canvas->drawString("N/A", rightX, barY);
                     }
                     
                     canvas->setTextColor(TFT_GREEN);
@@ -2357,7 +2622,7 @@ void drawSatSelectPage() {
 
 void loop() {
     if (g_recentLaunchesPending) {
-        g_recentLaunches = g_pendingRecentLaunches;
+        g_recentLaunches = std::move(g_pendingRecentLaunches);
         g_pendingRecentLaunches.clear();
         g_recentLaunchesPending = false;
         bool hasSelected = false;
@@ -2395,14 +2660,7 @@ void loop() {
         doScreenshot();
     }
 
-    // CRITICAL: IMU and Attitude filter must update as fast as possible, but limited to 100Hz (10ms) to prevent I2C polling from starving the CPU.
-    // Otherwise the AHRS filter will diverge and cause freezing/lag.
-    static unsigned long lastImuUpdate = 0;
-    if (imu && attitude && (millis() - lastImuUpdate >= 10)) {
-        lastImuUpdate = millis();
-        imu->update();
-        attitude->update();
-    }
+
     
     if (gnss) {
         gnss->update();
@@ -2618,7 +2876,7 @@ void loop() {
                     if (!g_networkActive) {
                         if (!HalWifi::isConnected()) {
                             manualWifiToggle = true;
-                            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
+                            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 12288, NULL, 1, NULL, 0);
                         } else {
                             WiFi.disconnect(true);
                             WiFi.mode(WIFI_OFF);
@@ -2680,48 +2938,112 @@ void loop() {
                     }
 
                 }
- else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
+                else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
                     if (isSatViewMode && !showRecommendations) {
-                        int idx = focusSatIndex - 1;
-                        for (int count = 0; count <= NUM_SATELLITES; count++) {
-                            if (idx < -1) idx = NUM_SATELLITES - 1;
-                            if (idx == -1) {
-                                if (g_recentLaunchFocusMode) {
-                                    focusSatIndex = -1;
-                                    isCameraTransitioning = true;
-                                    break;
+                        struct FocusTarget {
+                            int type; // 0 = Regular Sat, 1 = Recent Launch
+                            int index;
+                        };
+                        std::vector<FocusTarget> targets;
+                        
+                        for (int i = 0; i < NUM_SATELLITES; i++) {
+                            if (g_satellites[i].selected) {
+                                targets.push_back({0, i});
+                            }
+                        }
+                        for (size_t i = 0; i < g_recentLaunches.size(); i++) {
+                            if (g_recentLaunches[i].selected) {
+                                targets.push_back({1, (int)i});
+                            }
+                        }
+                        
+                        if (!targets.empty()) {
+                            int currentIdx = -1;
+                            if (focusSatIndex >= 0) {
+                                for (size_t i = 0; i < targets.size(); i++) {
+                                    if (targets[i].type == 0 && targets[i].index == focusSatIndex) {
+                                        currentIdx = i;
+                                        break;
+                                    }
                                 }
-                                idx = NUM_SATELLITES - 1;
-                            } else {
-                                if (g_satellites[idx].selected) {
-                                    focusSatIndex = idx;
-                                    isCameraTransitioning = true;
-                                    break;
+                            } else if (g_recentLaunchFocusMode) {
+                                for (size_t i = 0; i < targets.size(); i++) {
+                                    if (targets[i].type == 1 && g_recentLaunches[targets[i].index].batchId == recentLaunchActiveBatchId) {
+                                        currentIdx = i;
+                                        break;
+                                    }
                                 }
                             }
-                            idx--;
+                            
+                            if (currentIdx != -1) {
+                                int prevIdx = (currentIdx - 1 + targets.size()) % targets.size();
+                                const auto& prevTarget = targets[prevIdx];
+                                if (prevTarget.type == 0) {
+                                    focusSatIndex = prevTarget.index;
+                                    isCameraTransitioning = true;
+                                } else {
+                                    focusSatIndex = -1;
+                                    g_recentLaunchFocusMode = true;
+                                    auto& item = g_recentLaunches[prevTarget.index];
+                                    recentLaunchActiveBatchId = item.batchId;
+                                    initRecentLaunchCalcs(item);
+                                    isCameraTransitioning = true;
+                                }
+                            }
                         }
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed('.')) {
                     if (isSatViewMode && !showRecommendations) {
-                        int idx = focusSatIndex + 1;
-                        for (int count = 0; count <= NUM_SATELLITES; count++) {
-                            if (idx >= NUM_SATELLITES) idx = -1;
-                            if (idx == -1) {
-                                if (g_recentLaunchFocusMode) {
-                                    focusSatIndex = -1;
-                                    isCameraTransitioning = true;
-                                    break;
+                        struct FocusTarget {
+                            int type; // 0 = Regular Sat, 1 = Recent Launch
+                            int index;
+                        };
+                        std::vector<FocusTarget> targets;
+                        
+                        for (int i = 0; i < NUM_SATELLITES; i++) {
+                            if (g_satellites[i].selected) {
+                                targets.push_back({0, i});
+                            }
+                        }
+                        for (size_t i = 0; i < g_recentLaunches.size(); i++) {
+                            if (g_recentLaunches[i].selected) {
+                                targets.push_back({1, (int)i});
+                            }
+                        }
+                        
+                        if (!targets.empty()) {
+                            int currentIdx = -1;
+                            if (focusSatIndex >= 0) {
+                                for (size_t i = 0; i < targets.size(); i++) {
+                                    if (targets[i].type == 0 && targets[i].index == focusSatIndex) {
+                                        currentIdx = i;
+                                        break;
+                                    }
                                 }
-                                idx = 0;
-                            } else {
-                                if (g_satellites[idx].selected) {
-                                    focusSatIndex = idx;
-                                    isCameraTransitioning = true;
-                                    break;
+                            } else if (g_recentLaunchFocusMode) {
+                                for (size_t i = 0; i < targets.size(); i++) {
+                                    if (targets[i].type == 1 && g_recentLaunches[targets[i].index].batchId == recentLaunchActiveBatchId) {
+                                        currentIdx = i;
+                                        break;
+                                    }
                                 }
                             }
-                            idx++;
+                            
+                            if (currentIdx != -1) {
+                                int nextIdx = (currentIdx + 1) % targets.size();
+                                const auto& nextTarget = targets[nextIdx];
+                                if (nextTarget.type == 0) {
+                                    focusSatIndex = nextTarget.index;
+                                    isCameraTransitioning = true;
+                                } else {
+                                    focusSatIndex = -1;
+                                    g_recentLaunchFocusMode = true;
+                                    auto& item = g_recentLaunches[nextTarget.index];
+                                    recentLaunchActiveBatchId = item.batchId;
+                                    initRecentLaunchCalcs(item);
+                                    isCameraTransitioning = true;
+                                }
+                            }
                         }
                     }
                 }
@@ -2852,7 +3174,7 @@ void loop() {
                             recentLaunchErrorMsg = "Connecting WiFi...";
                             drawSatSelectPage();
                             earth_renderer->getCanvas()->pushSprite(0, 0);
-                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 16384, NULL, 1, NULL, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 12288, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 recentLaunchDownloading = false;
                                 recentLaunchErrorMsg = "Task Init Failed!";
@@ -2870,7 +3192,7 @@ void loop() {
                             downloadErrorMsg = "Connecting to WiFi...";
                             drawSatSelectPage();
                             earth_renderer->getCanvas()->pushSprite(0, 0);
-                            BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 12288, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 downloadErrorMsg = "Task Init Failed!";
                                 drawSatSelectPage();
@@ -3454,7 +3776,7 @@ void loop() {
                             
                             SatRenderData data;
                             data.name = g_repSatName.c_str();
-                            data.iconType = ICON_SATELLITE;
+                            data.iconType = item.iconType;
                             data.currentPos = g_repSatCache.lastGeo;
                             data.color = TFT_CYAN;
                             data.isVisible = g_repSatCache.isVisible;
@@ -3468,6 +3790,14 @@ void loop() {
                             data.pastOrbit = &(g_repSatCache.cache.past);
                             data.futureOrbit = &(g_repSatCache.cache.future);
                             data.lastCalcTime = g_repSatCache.cache.lastCalcTime;
+                            
+                            // Set mission formation fields
+                            data.proxyFormation = &(item.proxyFormation);
+                            data.occupancy = item.occupancy;
+                            data.occupancyStartPhase = item.occupancyStartPhase;
+                            data.occupancyEndPhase = item.occupancyEndPhase;
+                            data.repAlongTrackPhase = item.repAlongTrackPhase;
+                            data.shortName = item.shortName.c_str();
                             
                             sats.push_back(data);
                         } else {
@@ -3554,6 +3884,14 @@ void loop() {
                             data.futureOrbit = &(item.cache.cache.future);
                             data.lastCalcTime = item.cache.cache.lastCalcTime;
                             
+                            // Set mission formation fields for non-focus representitive sat render
+                            data.proxyFormation = &(item.proxyFormation);
+                            data.occupancy = item.occupancy;
+                            data.occupancyStartPhase = item.occupancyStartPhase;
+                            data.occupancyEndPhase = item.occupancyEndPhase;
+                            data.repAlongTrackPhase = item.repAlongTrackPhase;
+                            data.shortName = item.shortName.c_str();
+                            
                             sats.push_back(data);
                         } else {
                             item.cache.isVisible = false;
@@ -3592,6 +3930,16 @@ void loop() {
                         
                         data.pastOrbit = &(obj.cache.past);
                         data.futureOrbit = &(obj.cache.future);
+                        
+                        // Uniform display names for all launch target objects with its launch epoch dates
+                        static String sNameCache[5];
+                        if (recentLaunchSelectedIndex < (int)g_recentLaunches.size()) {
+                            sNameCache[i] = getShortNameForDisplay(obj.name, g_recentLaunches[recentLaunchSelectedIndex].epoch);
+                        } else {
+                            sNameCache[i] = obj.name;
+                        }
+                        data.shortName = sNameCache[i].c_str();
+                        
                         sats.push_back(data);
                     }
                 }
@@ -3807,11 +4155,10 @@ void loop() {
                 sprintf(buf, "Calculating... %d%%", predictionProgress);
                 earth_renderer->getCanvas()->drawString(buf, 5, 30);
             } else {
-                int y = 25;
                 if (recommendedPasses.empty()) {
+                    earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
                     earth_renderer->getCanvas()->drawString("No passes in 7 days", 5, 30);
-                }
-                                if (selectedPassIndex != -1) {
+                } else if (selectedPassIndex != -1) {
                     // Draw Detail View
                     const auto& p = recommendedPasses[selectedPassIndex];
                     earth_renderer->getCanvas()->setTextColor(TFT_CYAN);

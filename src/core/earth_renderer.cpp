@@ -613,102 +613,179 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
     
     if (sat.pastOrbit) drawOrbit(*(sat.pastOrbit), pastColor);
     if (sat.futureOrbit) drawOrbit(*(sat.futureOrbit), futureColor);
-    
-    // Draw Mission Visualization Layer
-    if (sat.isRecentLaunchBatch && sat.pastOrbit && sat.futureOrbit) {
-        double ageDays = 30.0;
-        if (sat.launchEpoch > 0 && sat.simTime >= sat.launchEpoch) {
-            ageDays = (double)(sat.simTime - sat.launchEpoch) / 86400.0;
-        }
+        
+        // Draw Mission Visualization Layer
+        if (sat.isRecentLaunchBatch && sat.pastOrbit && sat.futureOrbit && sat.proxyFormation && !sat.proxyFormation->empty()) {
+            double ageDays = 30.0;
+            if (sat.launchEpoch > 0 && sat.simTime >= sat.launchEpoch) {
+                ageDays = (double)(sat.simTime - sat.launchEpoch) / 86400.0;
+            }
 
-        TrainState state = OPERATIONAL;
-        if (ageDays <= 2.0) state = VERY_TIGHT;
-        else if (ageDays <= 5.0) state = TIGHT;
-        else if (ageDays <= 14.0) state = EXPANDING;
+            uint16_t baseCol = TFT_WHITE;
+            if (ageDays <= 2.0) baseCol = TFT_WHITE;
+            else if (ageDays <= 14.0) baseCol = 0x07FF; // TFT_CYAN
+            else if (ageDays >= 365.0) baseCol = _display->color565(150, 150, 150);
+            else baseCol = 0x07FF;
 
-        uint16_t baseCol = TFT_WHITE;
-        if (ageDays <= 2.0) baseCol = TFT_WHITE;
-        else if (ageDays <= 14.0) baseCol = 0x07FF; // TFT_CYAN
-        else if (ageDays >= 365.0) baseCol = _display->color565(150, 150, 150);
+            float breathe = 0.8f + 0.2f * sinf((float)millis() * 0.003f);
+            uint16_t missionColor = scaleColor(baseCol, breathe);
 
-        float breathe = 0.8f + 0.2f * sinf((float)millis() * 0.003f);
-        uint16_t missionColor = scaleColor(baseCol, breathe);
-
-        std::vector<GeodeticCoord> mergedOrbit;
-        if (sat.pastOrbit) {
-            mergedOrbit.insert(mergedOrbit.end(), sat.pastOrbit->begin(), sat.pastOrbit->end());
-        }
-        if (sat.futureOrbit) {
-            mergedOrbit.insert(mergedOrbit.end(), sat.futureOrbit->begin(), sat.futureOrbit->end());
-        }
-
-        if (!mergedOrbit.empty()) {
-            int markerCount = 5;
-            int count = sat.totalSatellitesInBatch;
-            if (count <= 5) markerCount = 3;
-            else if (count <= 25) markerCount = 6;
-            else if (count <= 45) markerCount = 9;
-            else markerCount = 12;
-
-            float baseCenter = 14.5f;
+            std::vector<GeodeticCoord> mergedOrbit;
             if (sat.pastOrbit) {
-                baseCenter = (float)sat.pastOrbit->size() - 0.5f;
+                mergedOrbit.insert(mergedOrbit.end(), sat.pastOrbit->begin(), sat.pastOrbit->end());
+            }
+            if (sat.futureOrbit) {
+                mergedOrbit.insert(mergedOrbit.end(), sat.futureOrbit->begin(), sat.futureOrbit->end());
             }
 
-            int deltaTime = 0;
-            if (sat.lastCalcTime > 0) {
-                deltaTime = (int)sat.simTime - (int)sat.lastCalcTime;
-            }
-            float preciseCenterIdx = baseCenter + (float)deltaTime / 180.0f;
-
-            if (state == OPERATIONAL) {
-                for (int j = 0; j < markerCount; j++) {
-                    float idx = (float)j * (mergedOrbit.size() - 1) / (markerCount - 1) + preciseCenterIdx;
-                    idx = fmodf(idx, (float)(mergedOrbit.size() - 1));
-                    if (idx < 0.0f) idx += (float)(mergedOrbit.size() - 1);
-                    
-                    GeodeticCoord pt = interpolateOrbit(mergedOrbit, idx);
-                    int dx, dy;
-                    if (projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, dx, dy)) {
-                        _canvas->fillRect(dx - 1, dy - 1, 3, 3, missionColor);
+            if (!mergedOrbit.empty()) {
+                float preciseCenterIdx = 0.0f;
+                
+                // Locate the nearest point in the cached orbit to the representative sat's real-time propagated position
+                float minD = 1e9f;
+                int bestIdx = 0;
+                for (size_t i = 0; i < mergedOrbit.size(); i++) {
+                    float dLat = mergedOrbit[i].lat - sat.currentPos.lat;
+                    float dLon = mergedOrbit[i].lon - sat.currentPos.lon;
+                    if (dLon > 180.0f) dLon -= 360.0f;
+                    else if (dLon < -180.0f) dLon += 360.0f;
+                    float d = dLat * dLat + dLon * dLon;
+                    if (d < minD) {
+                        minD = d;
+                        bestIdx = i;
                     }
                 }
-            }
- else {
-                float spacing = 0.15f;
-                if (state == VERY_TIGHT) {
-                    spacing = 0.15f + 0.05f * (float)ageDays;
-                } else if (state == TIGHT) {
-                    spacing = 0.25f + 0.12f * ((float)ageDays - 2.0f);
-                } else {
-                    spacing = 0.61f + 0.25f * ((float)ageDays - 5.0f);
-                }
-
-                bool isDenseGroup = (state == VERY_TIGHT && count >= 40);
-
-                for (int j = 0; j < markerCount; j++) {
-                    float delta_j = (float)((j * 17) % 7 - 3) * 0.25f;
-                    float phaseOffset = delta_j * (1.0f + 0.15f * (float)ageDays);
+                
+                // Compute high-precision sub-pixel float index using 2D vector projection in the neighborhood of bestIdx
+                // to achieve absolute smooth, millisecond-level continuous sliding without any discrete coordinate jumping or jitter.
+                int N = mergedOrbit.size();
+                if (N > 1) {
+                    int prevIdx = (bestIdx - 1 + N) % N;
+                    int nextIdx = (bestIdx + 1) % N;
                     
-                    float offset = (j - (markerCount - 1) / 2.0f) * spacing + phaseOffset;
-                    float idx = preciseCenterIdx + offset;
+                    float pLat = sat.currentPos.lat;
+                    float pLon = sat.currentPos.lon;
+                    
+                    float aLat = mergedOrbit[prevIdx].lat;
+                    float aLon = mergedOrbit[prevIdx].lon;
+                    if (aLon - pLon > 180.0f) aLon -= 360.0f;
+                    else if (aLon - pLon < -180.0f) aLon += 360.0f;
+                    
+                    float bLat = mergedOrbit[bestIdx].lat;
+                    float bLon = mergedOrbit[bestIdx].lon;
+                    if (bLon - pLon > 180.0f) bLon -= 360.0f;
+                    else if (bLon - pLon < -180.0f) bLon += 360.0f;
+                    
+                    float cLat = mergedOrbit[nextIdx].lat;
+                    float cLon = mergedOrbit[nextIdx].lon;
+                    if (cLon - pLon > 180.0f) cLon -= 360.0f;
+                    else if (cLon - pLon < -180.0f) cLon += 360.0f;
+                    
+                    float dPA2 = (pLat - aLat) * (pLat - aLat) + (pLon - aLon) * (pLon - aLon);
+                    float dPC2 = (pLat - cLat) * (pLat - cLat) + (pLon - cLon) * (pLon - cLon);
+                    
+                    if (dPA2 < dPC2) {
+                        // Project onto segment AB
+                        float vAB_lat = bLat - aLat;
+                        float vAB_lon = bLon - aLon;
+                        float vAP_lat = pLat - aLat;
+                        float vAP_lon = pLon - aLon;
+                        float lenSq = vAB_lat * vAB_lat + vAB_lon * vAB_lon;
+                        float t = 0.5f;
+                        if (lenSq > 1e-6f) {
+                            t = (vAP_lat * vAB_lat + vAP_lon * vAB_lon) / lenSq;
+                            if (t < 0.0f) t = 0.0f;
+                            if (t > 1.0f) t = 1.0f;
+                        }
+                        preciseCenterIdx = (float)prevIdx + t;
+                    } else {
+                        // Project onto segment BC
+                        float vBC_lat = cLat - bLat;
+                        float vBC_lon = cLon - bLon;
+                        float vBP_lat = pLat - bLat;
+                        float vBP_lon = pLon - bLon;
+                        float lenSq = vBC_lat * vBC_lat + vBC_lon * vBC_lon;
+                        float t = 0.5f;
+                        if (lenSq > 1e-6f) {
+                            t = (vBP_lat * vBC_lat + vBP_lon * vBC_lon) / lenSq;
+                            if (t < 0.0f) t = 0.0f;
+                            if (t > 1.0f) t = 1.0f;
+                        }
+                        preciseCenterIdx = (float)bestIdx + t;
+                    }
+                } else {
+                    preciseCenterIdx = (float)bestIdx;
+                }
+                
+                float dIndex = (float)(mergedOrbit.size() - 1) / 360.0f;
+                float maxIdx = (float)(mergedOrbit.size() - 1);
 
-                    if (idx >= 0.0f && idx < (float)mergedOrbit.size()) {
+                // 1. Draw Occupancy Light Band
+                if (sat.occupancy > 1.0f) {
+                    int numSteps = (int)(sat.occupancy / 5.0f) + 2;
+                    if (numSteps > 75) numSteps = 75;
+                    if (numSteps < 5) numSteps = 5;
+                    
+                    int prevLx = -1, prevLy = -1;
+                    bool prevLVisible = false;
+                    
+                    uint16_t lightBandColor = scaleColor(baseCol, 0.4f * breathe);
+                    
+                    for (int step = 0; step < numSteps; step++) {
+                        float ratio = (float)step / (float)(numSteps - 1);
+                        float P = sat.occupancyStartPhase + ratio * sat.occupancy;
+                        if (P >= 360.0f) P -= 360.0f;
+                        
+                        float diff = P - sat.repAlongTrackPhase;
+                        if (diff > 180.0f) diff -= 360.0f;
+                        else if (diff < -180.0f) diff += 360.0f;
+                        
+                        float idx = preciseCenterIdx + diff * dIndex;
+                        if (maxIdx > 0.1f) {
+                            idx = fmodf(idx, maxIdx);
+                            if (idx < 0.0f) idx += maxIdx;
+                        } else {
+                            idx = 0.0f;
+                        }
+                        
                         GeodeticCoord pt = interpolateOrbit(mergedOrbit, idx);
-                        int dx, dy;
-                        if (projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, dx, dy)) {
-                            if (isDenseGroup) {
-                                _canvas->fillCircle(dx, dy, 2, missionColor);
-                            } else {
-                                _canvas->fillRect(dx - 1, dy - 1, 3, 3, missionColor);
+                        int lx, ly;
+                        bool lVisible = projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, lx, ly);
+                        
+                        if (lVisible && prevLVisible) {
+                            if (abs(lx - prevLx) < 100 && abs(ly - prevLy) < 100) {
+                                _canvas->drawLine(prevLx, prevLy, lx, ly, lightBandColor);
                             }
                         }
+                        prevLx = lx;
+                        prevLy = ly;
+                        prevLVisible = lVisible;
+                    }
+                }
+
+                // 2. Draw Proxy Satellites
+                for (const auto& fp : *(sat.proxyFormation)) {
+                    float diff = fp.AlongTrackPhase - sat.repAlongTrackPhase;
+                    if (diff > 180.0f) diff -= 360.0f;
+                    else if (diff < -180.0f) diff += 360.0f;
+                    
+                    float idx = preciseCenterIdx + diff * dIndex;
+                    if (maxIdx > 0.1f) {
+                        idx = fmodf(idx, maxIdx);
+                        if (idx < 0.0f) idx += maxIdx;
+                    } else {
+                        idx = 0.0f;
+                    }
+                    
+                    GeodeticCoord pt = interpolateOrbit(mergedOrbit, idx);
+                    int px, py;
+                    if (projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, px, py)) {
+                        uint16_t proxyColor = scaleColor(baseCol, breathe * fp.brightness);
+                        _canvas->fillRect(px - 1, py - 1, 3, 3, proxyColor);
                     }
                 }
             }
         }
-    }
-
     
     // Draw Satellite Current Position
     int sx, sy;
@@ -788,7 +865,11 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
         
         _canvas->setTextColor(drawColor);
         _canvas->setTextSize(1);
-        _canvas->drawString(sat.name, sx + 8, sy - 4);
+        const char* displayName = sat.name;
+        if (sat.isRecentLaunchBatch && sat.shortName != nullptr) {
+            displayName = sat.shortName;
+        }
+        _canvas->drawString(displayName, sx + 8, sy - 4);
     }
 }
 

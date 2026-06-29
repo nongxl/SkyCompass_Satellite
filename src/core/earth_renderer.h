@@ -3,6 +3,7 @@
 #include <M5Cardputer.h>
 #include <vector>
 #include "coord_transform.h"
+#include "tle_data.h"
 
 enum SatIconType {
     ICON_SATELLITE,
@@ -37,6 +38,14 @@ struct SatRenderData {
     uint32_t launchEpoch = 0;
     uint32_t simTime = 0;
     uint32_t lastCalcTime = 0;
+    
+    // New fields for Mission Formation Visualization
+    const std::vector<FormationPoint>* proxyFormation = nullptr;
+    float occupancy = 0.0f;
+    float occupancyStartPhase = 0.0f;
+    float occupancyEndPhase = 0.0f;
+    float repAlongTrackPhase = 0.0f;
+    const char* shortName = nullptr;
 };
 
 class EarthRenderer {

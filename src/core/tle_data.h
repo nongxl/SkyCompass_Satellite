@@ -9,6 +9,11 @@ struct TLEData {
     int baseScore; // Additional base score for size/brightness
 };
 
+struct FormationPoint {
+    float AlongTrackPhase; // Along-track orbital position (0 ~ 360 degrees)
+    float brightness;      // Brightness factor for animation (0.0f ~ 1.0f)
+};
+
 class TLEManager {
 public:
     static TLEData getISS_TLE();
