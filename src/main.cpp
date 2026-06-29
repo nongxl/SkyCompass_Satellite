@@ -138,6 +138,7 @@ struct RecentLaunchItem {
     uint32_t epoch = 0;        // TLE 历元时间戳缓存
     float inclination = 0.0f;  // 轨道倾角缓存
     float avgAlt = 0.0f;       // 平均高度缓存
+    String repSatName;         // 缓存的代表卫星名称
 };
 
 struct RecentLaunchRealtimeCache {
@@ -202,6 +203,8 @@ SGP4Calc g_repSatCalc;
 RecentLaunchRealtimeCache g_repSatCache;
 bool g_repSatInitialized = false;
 String g_repSatName = "";
+uint32_t recentLaunchDownloadFinishedMs = 0;
+bool showListHelp = false;
 
 // Level 3 Objects 分页数据结构与状态
 bool recentLaunchInObjectsView = false;
@@ -458,7 +461,7 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
         }
         
         // Future 45 minutes, every 3 minutes
-        for (int i = 1; i <= 45; i += 3) {
+        for (int i = 3; i <= 45; i += 3) {
             uint32_t t = baseTime + i * 60;
             if (calc.getTEME(t, teme_x, teme_y, teme_z)) {
                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
@@ -933,6 +936,7 @@ void recentLaunchNetworkTask(void* parameter) {
                 item.selected = false;
                 item.epoch = parseTleEpoch(line1);
                 getRepresentativeOrbitParams(line2, item.inclination, item.avgAlt);
+                item.repSatName = name;
                 tempLaunches.push_back(item);
             }
             vTaskDelay(pdMS_TO_TICKS(2));
@@ -1171,6 +1175,7 @@ void tryLoadRecentLaunchCache() {
             item.selected = false;
             item.epoch = parseTleEpoch(line1);
             getRepresentativeOrbitParams(line2, item.inclination, item.avgAlt);
+            item.repSatName = name;
             tempLaunches.push_back(item);
         }
     }
@@ -1548,6 +1553,12 @@ void drawWiFiSetupPage() {
 }
 
 void drawSatSelectPage() {
+    static bool lastDownloading = false;
+    if (lastDownloading && !recentLaunchDownloading) {
+        recentLaunchDownloadFinishedMs = millis();
+    }
+    lastDownloading = recentLaunchDownloading;
+
     auto canvas = earth_renderer->getCanvas();
     uint16_t width = canvas->width();
     uint16_t height = canvas->height();
@@ -2044,43 +2055,83 @@ void drawSatSelectPage() {
                 
                 if (!recentLaunchInObjectsView) {
                     canvas->setTextColor(TFT_GOLD);
-                    canvas->drawString(item.displayName.c_str(), rightX, 25);
+                    canvas->drawString(item.displayName.c_str(), rightX, 23);
                     
                     canvas->setTextColor(TFT_CYAN);
-                    canvas->drawString(("Batch: " + item.batchId).c_str(), rightX, 35);
+                    canvas->drawString(("Batch: " + item.batchId).c_str(), rightX, 33);
                     
+                    char dateBuf[32];
+                    if (epoch > 0) {
+                        time_t tEpoch = (time_t)epoch;
+                        struct tm* timeinfo = gmtime(&tEpoch);
+                        strftime(dateBuf, sizeof(dateBuf), "%Y-%m-%d", timeinfo);
+                    } else {
+                        sprintf(dateBuf, "N/A");
+                    }
                     canvas->setTextColor(TFT_LIGHTGRAY);
-                    canvas->drawString(("Total Sats: " + String(item.satelliteCount)).c_str(), rightX, 45);
+                    canvas->drawString(("Launch: " + String(dateBuf)).c_str(), rightX, 43);
+                    
+                    String repName = item.repSatName;
+                    if (repName.length() > 0) {
+                        if (repName.length() > 14) repName = repName.substring(0, 12) + "..";
+                    } else {
+                        repName = "N/A";
+                    }
+                    char satsBuf[64];
+                    sprintf(satsBuf, "Sats: %d | Rep: %s", item.satelliteCount, repName.c_str());
+                    canvas->drawString(satsBuf, rightX, 53);
                     
                     char orbitBuf[48];
                     sprintf(orbitBuf, "Orbit: %dkm, %.1f*", (int)avgAlt, inclination);
-                    canvas->drawString(orbitBuf, rightX, 57);
+                    canvas->drawString(orbitBuf, rightX, 63);
                     
                     canvas->setTextColor(TFT_GREEN);
-                    canvas->drawString("Status:", rightX, 70);
+                    canvas->drawString("Status:", rightX, 73);
                     canvas->setTextColor(TFT_WHITE);
                     if (ageDays >= 0) {
-                        if (ageDays <= 2) canvas->drawString("Tight Train *****", rightX, 80);
-                        else if (ageDays <= 7) canvas->drawString("Train ****", rightX, 80);
-                        else if (ageDays <= 14) canvas->drawString("Dispersing ***", rightX, 80);
-                        else canvas->drawString("Operational **", rightX, 80);
+                        if (ageDays <= 2) canvas->drawString("Very Tight Train", rightX + 45, 73);
+                        else if (ageDays <= 5) canvas->drawString("Tight Train", rightX + 45, 73);
+                        else if (ageDays <= 14) canvas->drawString("Expanding", rightX + 45, 73);
+                        else canvas->drawString("Operational", rightX + 45, 73);
                     } else {
-                        canvas->drawString("Unknown Status *", rightX, 80);
+                        canvas->drawString("Unknown", rightX + 45, 73);
                     }
                     
                     canvas->setTextColor(TFT_GREEN);
-                    canvas->drawString("Est. Visibility:", rightX, 93);
+                    canvas->drawString("Distribution:", rightX, 85);
+                    int barY = 95;
+                    if (ageDays >= 0) {
+                        if (ageDays <= 2) {
+                            canvas->fillRect(rightX, barY, 40, 5, TFT_WHITE);
+                        } else if (ageDays <= 5) {
+                            for (int k = 0; k < 5; k++) {
+                                canvas->fillRect(rightX + k * 8, barY, 5, 5, 0x07FF);
+                            }
+                        } else if (ageDays <= 14) {
+                            for (int k = 0; k < 4; k++) {
+                                canvas->fillRect(rightX + k * 13, barY, 4, 5, 0x07FF);
+                            }
+                        } else {
+                            canvas->fillRect(rightX, barY, 3, 5, TFT_WHITE);
+                            canvas->fillRect(rightX + 37, barY, 3, 5, TFT_WHITE);
+                        }
+                    } else {
+                        canvas->drawString("N/A", rightX, barY);
+                    }
+                    
+                    canvas->setTextColor(TFT_GREEN);
+                    canvas->drawString("Visibility:", rightX, 107);
                     canvas->setTextColor(TFT_YELLOW);
                     if (avgAlt >= 250 && avgAlt <= 600) {
-                        canvas->drawString("Excellent", rightX, 103);
+                        canvas->drawString("Excellent", rightX + 65, 107);
                     } else if (avgAlt > 0) {
-                        canvas->drawString("Moderate", rightX, 103);
+                        canvas->drawString("Moderate", rightX + 65, 107);
                     } else {
-                        canvas->drawString("N/A", rightX, 103);
+                        canvas->drawString("N/A", rightX + 65, 107);
                     }
                     
                     canvas->setTextColor(TFT_LIGHTGRAY);
-                    canvas->drawString("Press 'O' for Objects", rightX, 114);
+                    canvas->drawString("Press 'O' for Objects", rightX, 120);
                 } else {
                     canvas->setTextColor(TFT_GOLD);
                     String title = item.displayName;
@@ -2120,14 +2171,38 @@ void drawSatSelectPage() {
         }
     }
     
-    // Draw Bottom Guide Banner
-    canvas->fillRect(0, height - 11, width, 11, canvas->color565(15, 20, 25));
-    canvas->drawFastHLine(0, height - 11, width, TFT_DARKGREY);
-    canvas->setTextColor(TFT_LIGHTGRAY);
-    if (currentSatTab == TAB_RECENT_LAUNCH && recentLaunchInObjectsView) {
-        canvas->drawString("[[ ] Page Prev/Next  [ESC] Back to Mission", 4, height - 9);
-    } else {
-        canvas->drawString("[;/. ] Move  [ENT] Sel  [w] WiFi  [/] Tab  [ESC] Exit", 4, height - 9);
+    // Draw Bottom Guide Banner (Only when updating or showing feedback)
+    bool showBanner = false;
+    if (currentSatTab == TAB_RECENT_LAUNCH) {
+        if (recentLaunchDownloading || (recentLaunchDownloadFinishedMs > 0 && (millis() - recentLaunchDownloadFinishedMs < 3000))) {
+            showBanner = true;
+        }
+    }
+    
+    if (showBanner) {
+        canvas->fillRect(0, height - 11, width, 11, canvas->color565(15, 20, 25));
+        canvas->drawFastHLine(0, height - 11, width, TFT_DARKGREY);
+        
+        if (recentLaunchDownloading) {
+            canvas->setTextColor(TFT_YELLOW);
+            String msg = "Recent Launch Updating: " + recentLaunchErrorMsg;
+            if (canvas->textWidth(msg.c_str()) > width - 8) {
+                msg = msg.substring(0, 35) + "...";
+            }
+            canvas->drawString(msg.c_str(), 4, height - 9);
+        } else {
+            if (recentLaunchDownloadSuccess) {
+                canvas->setTextColor(TFT_GREEN);
+                canvas->drawString("Update Success: TLE cache overwritten!", 4, height - 9);
+            } else {
+                canvas->setTextColor(TFT_RED);
+                String failMsg = "Update Failed: " + recentLaunchErrorMsg;
+                if (canvas->textWidth(failMsg.c_str()) > width - 8) {
+                    failMsg = failMsg.substring(0, 35) + "...";
+                }
+                canvas->drawString(failMsg.c_str(), 4, height - 9);
+            }
+        }
     }
     
     // Draw Delete Confirm Popup
@@ -2138,6 +2213,67 @@ void drawSatSelectPage() {
         canvas->drawString("Delete Custom Sat?", 45, height/2 - 15);
         canvas->drawString("[y] Yes  [n] No", 45, height/2 + 5);
     }
+    
+    // Draw List Selection Page Help Overlay
+    if (showListHelp) {
+        uint16_t w = 200, h = 108;
+        int x = (width - w) / 2;
+        int y = (height - h) / 2;
+        
+        canvas->fillRect(x, y, w, h, canvas->color565(20, 30, 40));
+        canvas->drawRect(x, y, w, h, TFT_LIGHTGRAY);
+        
+        canvas->setTextColor(TFT_WHITE);
+        canvas->setTextSize(1);
+        canvas->drawString("--- Setup Shortcuts ---", x + 25, y + 5);
+        
+        auto drawHotKey = [&](const char* word, char keyChar, int dx, int dy) {
+            int cx = dx;
+            bool highlighted = false;
+            for (int i = 0; word[i] != '\0'; i++) {
+                if (!highlighted && tolower(word[i]) == tolower(keyChar) && keyChar != '\0') {
+                    canvas->setTextColor(TFT_YELLOW);
+                    highlighted = true;
+                } else {
+                    canvas->setTextColor(TFT_LIGHTGRAY);
+                }
+                char cstr[2] = {word[i], '\0'};
+                canvas->drawString(cstr, cx, dy);
+                cx += canvas->textWidth(cstr);
+            }
+        };
+        
+        int ty = y + 20;
+        if (currentSatTab == TAB_ENCYCLOPEDIA) {
+            drawHotKey("Move( ; / . )", ';', x + 5, ty);
+            drawHotKey("Tab( / )", '/', x + 105, ty); ty += 12;
+            
+            drawHotKey("Select(Ent)", 'e', x + 5, ty);
+            drawHotKey("Del(Back)", 'd', x + 105, ty); ty += 12;
+            
+            drawHotKey("WiFi(w)", 'w', x + 5, ty);
+            drawHotKey("Exit(Esc)", 'x', x + 105, ty); ty += 12;
+        } else {
+            if (recentLaunchInObjectsView) {
+                drawHotKey("Page[ [ / ] ]", '[', x + 5, ty); ty += 12;
+                drawHotKey("Back(Esc)", 'b', x + 5, ty); ty += 12;
+            } else {
+                drawHotKey("Move( ; / . )", ';', x + 5, ty);
+                drawHotKey("Tab( / )", '/', x + 105, ty); ty += 12;
+                
+                drawHotKey("Select(Ent)", 'e', x + 5, ty);
+                drawHotKey("Objects(o)", 'o', x + 105, ty); ty += 12;
+                
+                drawHotKey("WiFi(w)", 'w', x + 5, ty);
+                drawHotKey("Exit(Esc)", 'x', x + 105, ty); ty += 12;
+            }
+        }
+        
+        canvas->setTextColor(TFT_YELLOW);
+        canvas->drawString("Press any key to Close", x + 35, y + h - 14);
+    }
+
+
 }
 
 void loop() {
@@ -2517,7 +2653,13 @@ void loop() {
                     }
                 }
             } else if (appState == STATE_SAT_SELECT) {
-                if (deleteConfirmIndex >= 0 && currentSatTab == TAB_ENCYCLOPEDIA) {
+                if (showListHelp) {
+                    if (M5Cardputer.Keyboard.isKeyPressed('h') || M5Cardputer.Keyboard.isKeyPressed('H') || 
+                        M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || 
+                        M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER) || M5Cardputer.Keyboard.isKeyPressed('`')) {
+                        showListHelp = false;
+                    }
+                } else if (deleteConfirmIndex >= 0 && currentSatTab == TAB_ENCYCLOPEDIA) {
                     if (deleteConfirmIndex < NUM_BUILTIN_SATELLITES) {
                         deleteConfirmIndex = -1;
                     } else if (M5Cardputer.Keyboard.isKeyPressed('y')) {
@@ -2567,6 +2709,8 @@ void loop() {
                             g_repSatInitialized = false;
                         }
                     }
+                } else if (M5Cardputer.Keyboard.isKeyPressed('h') || M5Cardputer.Keyboard.isKeyPressed('H')) {
+                    showListHelp = true;
                 } else if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) {
                     if (currentSatTab == TAB_RECENT_LAUNCH) {
                         if (g_dataUpdating || g_wifiConnecting) {
@@ -2855,11 +2999,15 @@ void loop() {
             bool hasFocalPos = false;
             GeodeticCoord focalGeo;
             if (g_recentLaunchFocusMode) {
-                if (g_repSatCache.lastGeoValid) {
-                    focalGeo = g_repSatCache.lastGeo;
+                double tx, ty, tz;
+                if (g_repSatCalc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
+                    double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
+                    ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                    focalGeo = CoordTransform::ecefToGeodetic(ecef);
                     hasFocalPos = true;
                 }
-            } else if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+            }
+ else if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
                 double tx, ty, tz;
                 if (g_satellites[focusSatIndex].calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
                     double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
@@ -3139,11 +3287,14 @@ void loop() {
                     data.isVisible = g_repSatCache.isVisible;
                     data.isRecentLaunchBatch = true;
                     data.totalSatellitesInBatch = activeGroup->satelliteCount;
+                    data.launchEpoch = activeGroup->epoch;
+                    data.simTime = simTime;
                     
                     calculateOrbit(g_repSatCalc, simTime, g_repSatCache.cache, orbitsCalculatedThisFrame, isFastForwarding);
                     
                     data.pastOrbit = &(g_repSatCache.cache.past);
                     data.futureOrbit = &(g_repSatCache.cache.future);
+                    data.lastCalcTime = g_repSatCache.cache.lastCalcTime;
                     
                     sats.push_back(data);
                 } else {

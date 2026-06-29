@@ -17,6 +17,13 @@ enum SatIconType {
     ICON_COMMUNICATION
 };
 
+enum TrainState {
+    VERY_TIGHT,
+    TIGHT,
+    EXPANDING,
+    OPERATIONAL
+};
+
 struct SatRenderData {
     const char* name;
     SatIconType iconType;
@@ -27,6 +34,9 @@ struct SatRenderData {
     bool isVisible;
     bool isRecentLaunchBatch = false;
     int totalSatellitesInBatch = 0;
+    uint32_t launchEpoch = 0;
+    uint32_t simTime = 0;
+    uint32_t lastCalcTime = 0;
 };
 
 class EarthRenderer {

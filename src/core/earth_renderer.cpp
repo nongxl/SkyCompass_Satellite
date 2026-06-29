@@ -536,6 +536,44 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
     */
 }
 
+static GeodeticCoord interpolateOrbit(const std::vector<GeodeticCoord>& orbit, float idx) {
+    if (orbit.empty()) return {0.0, 0.0, 0.0};
+    if (idx <= 0.0f) return orbit.front();
+    if (idx >= orbit.size() - 1.0f) return orbit.back();
+    
+    int i = (int)idx;
+    float t = idx - (float)i;
+    const auto& p1 = orbit[i];
+    const auto& p2 = orbit[i+1];
+    
+    GeodeticCoord res;
+    res.lat = p1.lat + t * (p2.lat - p1.lat);
+    
+    float dLon = p2.lon - p1.lon;
+    if (dLon > 180.0f) dLon -= 360.0f;
+    else if (dLon < -180.0f) dLon += 360.0f;
+    res.lon = p1.lon + t * dLon;
+    if (res.lon > 180.0f) res.lon -= 360.0f;
+    else if (res.lon < -180.0f) res.lon += 360.0f;
+    
+    res.alt = p1.alt + t * (p2.alt - p1.alt);
+    return res;
+}
+
+static uint16_t scaleColor(uint16_t color, float factor) {
+    if (factor >= 1.0f) return color;
+    uint8_t r = ((color >> 11) & 0x1F);
+    uint8_t g = ((color >> 5) & 0x3F);
+    uint8_t b = (color & 0x1F);
+    r = (uint8_t)(r * factor);
+    g = (uint8_t)(g * factor);
+    b = (uint8_t)(b * factor);
+    if (r > 0x1F) r = 0x1F;
+    if (g > 0x3F) g = 0x3F;
+    if (b > 0x1F) b = 0x1F;
+    return (r << 11) | (g << 5) | b;
+}
+
 void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon) {
     if (sat.pastOrbit && sat.futureOrbit) {
         if (sat.pastOrbit->empty() && sat.futureOrbit->empty()) return;
@@ -576,29 +614,101 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
     if (sat.pastOrbit) drawOrbit(*(sat.pastOrbit), pastColor);
     if (sat.futureOrbit) drawOrbit(*(sat.futureOrbit), futureColor);
     
-    // Draw evenly spaced dots on the representative orbit to simulate the satellite train
-    if (sat.isRecentLaunchBatch && sat.color == 0x07FF /* TFT_CYAN */ && sat.pastOrbit && sat.futureOrbit) {
+    // Draw Mission Visualization Layer
+    if (sat.isRecentLaunchBatch && sat.pastOrbit && sat.futureOrbit) {
+        double ageDays = 30.0;
+        if (sat.launchEpoch > 0 && sat.simTime >= sat.launchEpoch) {
+            ageDays = (double)(sat.simTime - sat.launchEpoch) / 86400.0;
+        }
+
+        TrainState state = OPERATIONAL;
+        if (ageDays <= 2.0) state = VERY_TIGHT;
+        else if (ageDays <= 5.0) state = TIGHT;
+        else if (ageDays <= 14.0) state = EXPANDING;
+
+        uint16_t baseCol = TFT_WHITE;
+        if (ageDays <= 2.0) baseCol = TFT_WHITE;
+        else if (ageDays <= 14.0) baseCol = 0x07FF; // TFT_CYAN
+        else if (ageDays >= 365.0) baseCol = _display->color565(150, 150, 150);
+
+        float breathe = 0.8f + 0.2f * sinf((float)millis() * 0.003f);
+        uint16_t missionColor = scaleColor(baseCol, breathe);
+
         std::vector<GeodeticCoord> mergedOrbit;
-        mergedOrbit.insert(mergedOrbit.end(), sat.pastOrbit->begin(), sat.pastOrbit->end());
-        mergedOrbit.insert(mergedOrbit.end(), sat.futureOrbit->begin(), sat.futureOrbit->end());
-        
+        if (sat.pastOrbit) {
+            mergedOrbit.insert(mergedOrbit.end(), sat.pastOrbit->begin(), sat.pastOrbit->end());
+        }
+        if (sat.futureOrbit) {
+            mergedOrbit.insert(mergedOrbit.end(), sat.futureOrbit->begin(), sat.futureOrbit->end());
+        }
+
         if (!mergedOrbit.empty()) {
-            int dotCount = sat.totalSatellitesInBatch;
-            if (dotCount > 15) dotCount = 15;
-            if (dotCount < 4) dotCount = 4;
-            
-            size_t step = mergedOrbit.size() / dotCount;
-            if (step < 1) step = 1;
-            
-            for (size_t k = 0; k < mergedOrbit.size(); k += step) {
-                int dx, dy;
-                if (projectOrthographic(mergedOrbit[k].lat, mergedOrbit[k].lon, mergedOrbit[k].alt, centerLat, centerLon, dx, dy)) {
-                    // Draw small golden dots to represent the trailing group members
-                    _canvas->fillRect(dx - 1, dy - 1, 3, 3, 0xF7BE /* TFT_GOLD */);
+            int markerCount = 5;
+            int count = sat.totalSatellitesInBatch;
+            if (count <= 5) markerCount = 3;
+            else if (count <= 25) markerCount = 6;
+            else if (count <= 45) markerCount = 9;
+            else markerCount = 12;
+
+            float baseCenter = 14.5f;
+            if (sat.pastOrbit) {
+                baseCenter = (float)sat.pastOrbit->size() - 0.5f;
+            }
+
+            int deltaTime = 0;
+            if (sat.lastCalcTime > 0) {
+                deltaTime = (int)sat.simTime - (int)sat.lastCalcTime;
+            }
+            float preciseCenterIdx = baseCenter + (float)deltaTime / 180.0f;
+
+            if (state == OPERATIONAL) {
+                for (int j = 0; j < markerCount; j++) {
+                    float idx = (float)j * (mergedOrbit.size() - 1) / (markerCount - 1) + preciseCenterIdx;
+                    idx = fmodf(idx, (float)(mergedOrbit.size() - 1));
+                    if (idx < 0.0f) idx += (float)(mergedOrbit.size() - 1);
+                    
+                    GeodeticCoord pt = interpolateOrbit(mergedOrbit, idx);
+                    int dx, dy;
+                    if (projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, dx, dy)) {
+                        _canvas->fillRect(dx - 1, dy - 1, 3, 3, missionColor);
+                    }
+                }
+            }
+ else {
+                float spacing = 0.15f;
+                if (state == VERY_TIGHT) {
+                    spacing = 0.15f + 0.05f * (float)ageDays;
+                } else if (state == TIGHT) {
+                    spacing = 0.25f + 0.12f * ((float)ageDays - 2.0f);
+                } else {
+                    spacing = 0.61f + 0.25f * ((float)ageDays - 5.0f);
+                }
+
+                bool isDenseGroup = (state == VERY_TIGHT && count >= 40);
+
+                for (int j = 0; j < markerCount; j++) {
+                    float delta_j = (float)((j * 17) % 7 - 3) * 0.25f;
+                    float phaseOffset = delta_j * (1.0f + 0.15f * (float)ageDays);
+                    
+                    float offset = (j - (markerCount - 1) / 2.0f) * spacing + phaseOffset;
+                    float idx = preciseCenterIdx + offset;
+
+                    if (idx >= 0.0f && idx < (float)mergedOrbit.size()) {
+                        GeodeticCoord pt = interpolateOrbit(mergedOrbit, idx);
+                        int dx, dy;
+                        if (projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, dx, dy)) {
+                            if (isDenseGroup) {
+                                _canvas->fillCircle(dx, dy, 2, missionColor);
+                            } else {
+                                _canvas->fillRect(dx - 1, dy - 1, 3, 3, missionColor);
+                            }
+                        }
+                    }
                 }
             }
         }
     }
+
     
     // Draw Satellite Current Position
     int sx, sy;
@@ -606,34 +716,6 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
         // Render colorful if visible to observer, otherwise render gray
         uint16_t drawColor = isVisibleToObserver ? sat.color : _display->color565(100, 100, 100);
         bool renderDark = !isVisibleToObserver;
-        
-        // Dynamic Starlink/Qianfan Train tail simulation: Draw trailing golden members close to representative sat
-        if (sat.isRecentLaunchBatch && sat.color == 0x07FF /* TFT_CYAN */) {
-            // Trailing members from past orbit (closest to current point)
-            if (sat.pastOrbit && !sat.pastOrbit->empty()) {
-                size_t pSize = sat.pastOrbit->size();
-                size_t drawCount = pSize > 4 ? 4 : pSize;
-                for (size_t k = 0; k < drawCount; k++) {
-                    const auto& pt = (*sat.pastOrbit)[pSize - 1 - k];
-                    int dx, dy;
-                    if (projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, dx, dy)) {
-                        _canvas->fillRect(dx - 1, dy - 1, 2, 2, 0xF7BE /* TFT_GOLD */);
-                    }
-                }
-            }
-            // Leading members from future orbit (closest to current point)
-            if (sat.futureOrbit && !sat.futureOrbit->empty()) {
-                size_t fSize = sat.futureOrbit->size();
-                size_t drawCount = fSize > 4 ? 4 : fSize;
-                for (size_t k = 0; k < drawCount; k++) {
-                    const auto& pt = (*sat.futureOrbit)[k];
-                    int dx, dy;
-                    if (projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, dx, dy)) {
-                        _canvas->fillRect(dx - 1, dy - 1, 2, 2, 0xF7BE /* TFT_GOLD */);
-                    }
-                }
-            }
-        }
         
         if (sat.iconType == ICON_STATION) {
             // 空间站 (核心舱+大太阳能帆板)
