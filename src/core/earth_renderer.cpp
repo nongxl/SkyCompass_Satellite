@@ -126,10 +126,15 @@ bool EarthRenderer::projectOrthographic(double lat, double lon, double alt, doub
     // AR Camera Effect: True 3D Pitch and Roll
     float pitchRad = _cameraPitch * DEG_TO_RAD;
     
-    float z_pitched = y * sinf(pitchRad) + z * cosf(pitchRad);
-    float y_pitched = y * cosf(pitchRad) - z * sinf(pitchRad);
+    // Translate pivot center to the visual focus point so that rotation is centered on it
+    float z_temp = z - _cameraFocusR;
     
-    if (z_pitched < 0) {
+    float z_pitched = y * sinf(pitchRad) + z_temp * cosf(pitchRad);
+    float y_pitched = y * cosf(pitchRad) - z_temp * sinf(pitchRad);
+    
+    float z_actual = z_pitched + _cameraFocusR;
+    
+    if (z_actual < 0) {
         if (alt <= 0) return false; // On or below surface, strictly occluded
         // For altitude > 0, check if it's occluded by the Earth body
         float distSq = x * x + y_pitched * y_pitched;
@@ -196,10 +201,12 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
             float y = r * (cos_cLat * sin_lat - sin_cLat * cos_lat * cos_dLon);
             float z = r * cos_c;
             
-            float z_pitched = y * sin_pitch + z * cos_pitch;
+            float z_temp = z - _cameraFocusR;
+            float z_pitched = y * sin_pitch + z_temp * cos_pitch;
+            float z_actual = z_pitched + _cameraFocusR;
             
-            if (z_pitched >= 0) {
-                float y_pitched = y * cos_pitch - z * sin_pitch;
+            if (z_actual >= 0) {
+                float y_pitched = y * cos_pitch - z_temp * sin_pitch;
                 
                 float rotatedX = x * cos_roll - y_pitched * sin_roll;
                 float rotatedY = x * sin_roll + y_pitched * cos_roll;
@@ -341,8 +348,16 @@ void EarthRenderer::drawStars(double centerLat, double centerLon) {
 void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat, double userLon) {
     // The center of the earth is at (0, 0, 0) relative to projection.
     
-    int circleX = _centerX + _centerOffsetX;
-    int circleY = _centerY + _centerOffsetY;
+    // Calculate the projected center of the Earth sphere under camera 3D rotation
+    float pitchRad = _cameraPitch * DEG_TO_RAD;
+    float rollRad = -_cameraRoll * DEG_TO_RAD;
+    
+    float center_y_pitched = _cameraFocusR * sinf(pitchRad);
+    float center_rotatedX = -center_y_pitched * sinf(rollRad);
+    float center_rotatedY = center_y_pitched * cosf(rollRad);
+    
+    int circleX = _centerX + _centerOffsetX + (int)center_rotatedX;
+    int circleY = _centerY + _centerOffsetY - (int)center_rotatedY;
     
     // Fill earth background
     _canvas->fillCircle(circleX, circleY, _earthRadius, _display->color565(10, 20, 30));
@@ -431,12 +446,14 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
                 float proj_z = r * cos_c;
                 
                 float pitchRad = _cameraPitch * DEG_TO_RAD;
-                float z_pitched = proj_y * sinf(pitchRad) + proj_z * cosf(pitchRad);
-                bool visible = z_pitched >= 0;
+                float z_temp = proj_z - _cameraFocusR;
+                float z_pitched = proj_y * sinf(pitchRad) + z_temp * cosf(pitchRad);
+                float z_actual = z_pitched + _cameraFocusR;
+                bool visible = z_actual >= 0;
                 
                 int x = -1, y = -1;
                 if (visible) {
-                    float y_pitched = proj_y * cosf(pitchRad) - proj_z * sinf(pitchRad);
+                    float y_pitched = proj_y * cosf(pitchRad) - z_temp * sinf(pitchRad);
                     
                     float rotatedX = proj_x * cos_roll - y_pitched * sin_roll;
                     float rotatedY = proj_x * sin_roll + y_pitched * cos_roll;
@@ -559,12 +576,64 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
     if (sat.pastOrbit) drawOrbit(*(sat.pastOrbit), pastColor);
     if (sat.futureOrbit) drawOrbit(*(sat.futureOrbit), futureColor);
     
+    // Draw evenly spaced dots on the representative orbit to simulate the satellite train
+    if (sat.isRecentLaunchBatch && sat.color == 0x07FF /* TFT_CYAN */ && sat.pastOrbit && sat.futureOrbit) {
+        std::vector<GeodeticCoord> mergedOrbit;
+        mergedOrbit.insert(mergedOrbit.end(), sat.pastOrbit->begin(), sat.pastOrbit->end());
+        mergedOrbit.insert(mergedOrbit.end(), sat.futureOrbit->begin(), sat.futureOrbit->end());
+        
+        if (!mergedOrbit.empty()) {
+            int dotCount = sat.totalSatellitesInBatch;
+            if (dotCount > 15) dotCount = 15;
+            if (dotCount < 4) dotCount = 4;
+            
+            size_t step = mergedOrbit.size() / dotCount;
+            if (step < 1) step = 1;
+            
+            for (size_t k = 0; k < mergedOrbit.size(); k += step) {
+                int dx, dy;
+                if (projectOrthographic(mergedOrbit[k].lat, mergedOrbit[k].lon, mergedOrbit[k].alt, centerLat, centerLon, dx, dy)) {
+                    // Draw small golden dots to represent the trailing group members
+                    _canvas->fillRect(dx - 1, dy - 1, 3, 3, 0xF7BE /* TFT_GOLD */);
+                }
+            }
+        }
+    }
+    
     // Draw Satellite Current Position
     int sx, sy;
     if (projectOrthographic(sat.currentPos.lat, sat.currentPos.lon, sat.currentPos.alt, centerLat, centerLon, sx, sy)) {
         // Render colorful if visible to observer, otherwise render gray
         uint16_t drawColor = isVisibleToObserver ? sat.color : _display->color565(100, 100, 100);
         bool renderDark = !isVisibleToObserver;
+        
+        // Dynamic Starlink/Qianfan Train tail simulation: Draw trailing golden members close to representative sat
+        if (sat.isRecentLaunchBatch && sat.color == 0x07FF /* TFT_CYAN */) {
+            // Trailing members from past orbit (closest to current point)
+            if (sat.pastOrbit && !sat.pastOrbit->empty()) {
+                size_t pSize = sat.pastOrbit->size();
+                size_t drawCount = pSize > 4 ? 4 : pSize;
+                for (size_t k = 0; k < drawCount; k++) {
+                    const auto& pt = (*sat.pastOrbit)[pSize - 1 - k];
+                    int dx, dy;
+                    if (projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, dx, dy)) {
+                        _canvas->fillRect(dx - 1, dy - 1, 2, 2, 0xF7BE /* TFT_GOLD */);
+                    }
+                }
+            }
+            // Leading members from future orbit (closest to current point)
+            if (sat.futureOrbit && !sat.futureOrbit->empty()) {
+                size_t fSize = sat.futureOrbit->size();
+                size_t drawCount = fSize > 4 ? 4 : fSize;
+                for (size_t k = 0; k < drawCount; k++) {
+                    const auto& pt = (*sat.futureOrbit)[k];
+                    int dx, dy;
+                    if (projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, dx, dy)) {
+                        _canvas->fillRect(dx - 1, dy - 1, 2, 2, 0xF7BE /* TFT_GOLD */);
+                    }
+                }
+            }
+        }
         
         if (sat.iconType == ICON_STATION) {
             // 空间站 (核心舱+大太阳能帆板)
@@ -723,10 +792,12 @@ void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
             float y = r * (cos_cLat * sin_lat - sin_cLat * cos_lat * cos_dLon);
             float z = r * cos_c;
             
-            float z_pitched = y * sin_pitch + z * cos_pitch;
+            float z_temp = z - _cameraFocusR;
+            float z_pitched = y * sin_pitch + z_temp * cos_pitch;
+            float z_actual = z_pitched + _cameraFocusR;
             
-            if (z_pitched >= 0.0f) {
-                float y_pitched = y * cos_pitch - z * sin_pitch;
+            if (z_actual >= 0.0f) {
+                float y_pitched = y * cos_pitch - z_temp * sin_pitch;
                 float rotatedX = x * cos_roll - y_pitched * sin_roll;
                 float rotatedY = x * sin_roll + y_pitched * cos_roll;
                 

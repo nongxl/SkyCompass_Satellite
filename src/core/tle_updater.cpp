@@ -10,7 +10,7 @@ void TLEUpdater::begin() {
     }
 }
 
-bool TLEUpdater::getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds) {
+bool TLEUpdater::getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds, WiFiClientSecure* sharedClient) {
     uint32_t cacheTime = 0;
     bool hasCache = loadFromCache(noradId, outTle, cacheTime);
     
@@ -27,7 +27,7 @@ bool TLEUpdater::getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds) {
         if (!hasCache || (now > 0 && (now - cacheTime) > maxAgeSeconds)) {
             LOG_I("APP", "Cache for %d is missing or old. Fetching from network...", noradId);
             TLEData newTle;
-            if (fetchFromNetwork(noradId, newTle)) {
+            if (fetchFromNetwork(noradId, newTle, sharedClient)) {
                 outTle = newTle;
                 saveToCache(noradId, newTle, now);
                 LOG_I("APP", "Successfully fetched TLE for %d from network!", noradId);
@@ -84,20 +84,28 @@ bool TLEUpdater::saveToCache(int noradId, const TLEData& tle, uint32_t timestamp
     return true;
 }
 
-bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle) {
+bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle, WiFiClientSecure* sharedClient) {
     if (noradId == 50463) {
         outTle = TLEManager::getJWST_TLE();
         return true;
     }
     
-    WiFiClientSecure *client = new WiFiClientSecure;
+    bool isLocalClient = false;
+    WiFiClientSecure* client = sharedClient;
     if (!client) {
-        LOG_I("APP", "Failed to create WiFiClientSecure");
-        return false;
+        client = new WiFiClientSecure;
+        if (!client) {
+            LOG_I("APP", "Failed to create WiFiClientSecure");
+            return false;
+        }
+        client->setInsecure(); // Skip certificate verification
+        isLocalClient = true;
     }
-    client->setInsecure(); // Skip certificate verification
+    client->setHandshakeTimeout(15); // 15 seconds SSL handshake timeout
     
     HTTPClient http;
+    http.setTimeout(15000); // 15 seconds HTTP timeout
+    http.setConnectTimeout(15000); // 15 seconds connection timeout
     String url = "https://celestrak.org/NORAD/elements/gp.php?CATNR=" + String(noradId) + "&FORMAT=tle";
     
     http.begin(*client, url);
@@ -112,6 +120,7 @@ bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle) {
         }
     }
     
+    bool success = false;
     if (httpCode == HTTP_CODE_OK) {
         String payload = http.getString();
         
@@ -127,15 +136,15 @@ bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle) {
             outTle.name.trim();
             outTle.line1.trim();
             outTle.line2.trim();
-            
-            http.end();
-            delete client;
-            return true;
+            success = true;
         }
+    } else {
+        LOG_I("APP", "Failed to fetch TLE for %d. HTTP Code: %d", noradId, httpCode);
     }
     
-    LOG_I("APP", "Failed to fetch TLE for %d. HTTP Code: %d", noradId, httpCode);
     http.end();
-    delete client;
-    return false;
+    if (isLocalClient) {
+        delete client;
+    }
+    return success;
 }

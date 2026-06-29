@@ -57,6 +57,10 @@
 - **Cloud Frequency Synchronization (GitHub Action API Gateway)**:
   - Automatically runs a GitHub workflow `.github/workflows/update_frequencies.yml` to filter the massive official frequencies list into a lightweight `data/frequencies.json` file.
   - The Cardputer pulls this lightweight JSON when online to display the real-time downlink frequencies and modulation modes (e.g., ISS SSTV, NOAA APT) for Amateur Radio (HAM)通联 (contacts).
+- **Mission-Driven Architecture**:
+  To prevent Out-Of-Memory (OOM) crashes caused by eagerly loading and calculating large spacecraft groups (e.g. Starlink launches containing 20-30 satellites), the Recent Launch module is refactored around a **Mission First** architecture:
+  - **3-Level Navigation**: Structured as Mission List (Level 1) -> Mission Overview (Level 2 with Keplerian orbital altitude/inclination, launch age, stars rating and estimated visibility) -> Objects View (Level 3 which lazy-loads exactly 5 satellites in memory, destroying and freeing all SGP4 allocations on exit or page flip).
+  - **Representative Orbit & Dot Train Rendering**: Calculates and propagates only **one** representative satellite SGP4 on the 3D globe. Projects a trail of `min(satelliteCount, 12)` golden dots along this representative orbit dynamically, visually simulating the Starlink train with zero extra SGP4 calculation and RAM overhead!
 - **Tailored Satellite Type UI (Customized Radio & Observation Layouts)**:
   Satellites are divided into 5 distinct categories according to their physical properties and radio payloads. Customized UI layouts are dynamically rendered in the Encyclopedia Panel, Tracking HUD, and Sidebar List HUD, preventing guess-work or fabrication of radio frequencies:
   - **HAM (Amateur Radio Satellites)**: Displays real-time Doppler-compensated Rx frequency, Tx uplink frequency with CTCSS sub-tones (Tone), and modulation mode. When not tracking, it dynamically calculates and displays the upcoming AOS, LOS, and Peak Elevation (Max El).

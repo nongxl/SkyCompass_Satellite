@@ -124,6 +124,196 @@ struct SatRealtimeCache {
     bool isVisible = false;
 };
 
+enum SatSelectTab {
+    TAB_ENCYCLOPEDIA = 0,
+    TAB_RECENT_LAUNCH = 1
+};
+
+struct RecentLaunchItem {
+    String batchId;            // 国际标识符前 5 位 (如 "26042")
+    String displayName;        // 智能提取出的星座/卫星公共名称前缀
+    int satelliteCount;        // 组内包含的卫星数
+    bool isGroup;              // 是否为成组任务
+    bool selected;             // 用户是否勾选观测
+    uint32_t epoch = 0;        // TLE 历元时间戳缓存
+    float inclination = 0.0f;  // 轨道倾角缓存
+    float avgAlt = 0.0f;       // 平均高度缓存
+};
+
+struct RecentLaunchRealtimeCache {
+    GeodeticCoord lastGeo;
+    bool lastGeoValid = false;
+    bool lastInShadow = false;
+    bool isVisible = false;
+    OrbitCache cache;
+};
+
+// 全局变量定义
+static uint32_t parseTleEpoch(const String& line1) {
+    if (line1.length() < 32) return 0;
+    String yrStr = line1.substring(18, 20);
+    String dayStr = line1.substring(20, 32);
+    int yr = yrStr.toInt();
+    double days = dayStr.toDouble();
+    
+    int year = (yr < 57) ? (2000 + yr) : (1900 + yr);
+    
+    auto isLeap = [](int y) {
+        return (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+    };
+    
+    uint32_t seconds = 0;
+    for (int y = 1970; y < year; ++y) {
+        seconds += isLeap(y) ? 366 * 86400 : 365 * 86400;
+    }
+    seconds += (uint32_t)((days - 1.0) * 86400.0);
+    return seconds;
+}
+extern SatSelectTab currentSatTab;
+extern std::vector<RecentLaunchItem> g_recentLaunches;
+extern int recentLaunchSelectedIndex;
+extern bool g_recentLaunchFocusMode;
+extern String recentLaunchActiveBatchId;
+extern volatile bool recentLaunchDownloading;
+extern volatile bool recentLaunchDownloadSuccess;
+extern String recentLaunchErrorMsg;
+
+SatSelectTab currentSatTab = TAB_ENCYCLOPEDIA;
+std::vector<RecentLaunchItem> g_recentLaunches;
+int recentLaunchSelectedIndex = 0;
+bool g_recentLaunchFocusMode = false;
+String recentLaunchActiveBatchId = "";
+volatile bool recentLaunchDownloading = false;
+volatile bool recentLaunchDownloadSuccess = false;
+volatile bool g_timeSynced = false;
+
+volatile bool g_networkActive = false;
+struct NetworkActiveGuard {
+    NetworkActiveGuard() { g_networkActive = true; }
+    ~NetworkActiveGuard() { g_networkActive = false; }
+};
+
+std::vector<RecentLaunchItem> g_pendingRecentLaunches;
+volatile bool g_recentLaunchesPending = false;
+
+// 唯一代表卫星及其缓存（仅用于 Focus 追踪模式）
+TLEData g_repSatTLE;
+SGP4Calc g_repSatCalc;
+RecentLaunchRealtimeCache g_repSatCache;
+bool g_repSatInitialized = false;
+String g_repSatName = "";
+
+// Level 3 Objects 分页数据结构与状态
+bool recentLaunchInObjectsView = false;
+int recentLaunchObjectPage = 0;
+
+struct LazyObjectItem {
+    String name;
+    TLEData tle;
+    SGP4Calc calc;
+    GeodeticCoord lastGeo;
+    bool lastGeoValid = false;
+    bool isVisible = false;
+    OrbitCache cache;
+};
+std::vector<LazyObjectItem> g_level3Objects;
+
+
+void initRecentLaunchCalcs(const RecentLaunchItem& item) {
+    g_repSatInitialized = false;
+    g_repSatName = "";
+    File f = LittleFS.open("/tle_recent_raw.txt", "r");
+    if (f) {
+        while (f.available()) {
+            String name = f.readStringUntil('\n'); name.trim();
+            if (name.length() == 0) break;
+            String line1 = f.readStringUntil('\n'); line1.trim();
+            String line2 = f.readStringUntil('\n'); line2.trim();
+            
+            if (line1.length() < 14 || line1.charAt(0) != '1' || line2.length() < 14 || line2.charAt(0) != '2') {
+                continue;
+            }
+            if (line1.substring(9, 14) == item.batchId) {
+                TLEData tle;
+                tle.name = name;
+                tle.line1 = line1;
+                tle.line2 = line2;
+                tle.baseScore = 0;
+                g_repSatTLE = tle;
+                g_repSatCalc.init(tle);
+                g_repSatName = name;
+                g_repSatInitialized = true;
+                g_repSatCache.lastGeoValid = false;
+                g_repSatCache.isVisible = false;
+                break;
+            }
+        }
+        f.close();
+    }
+    LOG_I("RECENT_LAUNCH", "Initialized representative satellite: %s", g_repSatName.c_str());
+}
+
+void loadLevel3ObjectsPage(const RecentLaunchItem& item, int page) {
+    g_level3Objects.clear();
+    File f = LittleFS.open("/tle_recent_raw.txt", "r");
+    if (!f) return;
+    
+    int skipCount = page * 5;
+    int loadCount = 0;
+    int matchIndex = 0;
+    
+    while (f.available() && loadCount < 5) {
+        String name = f.readStringUntil('\n'); name.trim();
+        if (name.length() == 0) break;
+        String line1 = f.readStringUntil('\n'); line1.trim();
+        String line2 = f.readStringUntil('\n'); line2.trim();
+        if (line1.length() < 14 || line1.charAt(0) != '1' || line2.length() < 14 || line2.charAt(0) != '2') {
+            continue;
+        }
+        
+        if (line1.substring(9, 14) == item.batchId) {
+            if (matchIndex >= skipCount) {
+                LazyObjectItem obj;
+                obj.name = name;
+                obj.tle.name = name;
+                obj.tle.line1 = line1;
+                obj.tle.line2 = line2;
+                obj.calc.init(obj.tle);
+                obj.lastGeoValid = false;
+                obj.isVisible = false;
+                g_level3Objects.push_back(obj);
+                loadCount++;
+            }
+            matchIndex++;
+        }
+    }
+    f.close();
+    LOG_I("RECENT_LAUNCH", "Loaded %d items for page %d (match index starts at %d)", loadCount, page, skipCount);
+}
+
+void getRepresentativeOrbitParams(const String& line2, float& inclination, float& avgAlt) {
+    if (line2.length() < 63) {
+        inclination = 0;
+        avgAlt = 0;
+        return;
+    }
+    // Inclination: characters 9-16 (0-indexed, 8 to 16)
+    inclination = line2.substring(8, 16).toFloat();
+    // Eccentricity: characters 27-33 (0-indexed, 26 to 33)
+    float ecc = ("0." + line2.substring(26, 33)).toFloat();
+    // Mean Motion: characters 53-63 (0-indexed, 52 to 63)
+    float meanMotion = line2.substring(52, 63).toFloat();
+    if (meanMotion > 0) {
+        double n = meanMotion * 2.0 * 3.141592653589793 / 86400.0;
+        double mu = 3.986004418e14;
+        double a = pow(mu / (n * n), 1.0 / 3.0) / 1000.0;
+        avgAlt = a - 6378.137;
+    } else {
+        avgAlt = 0;
+    }
+}
+String recentLaunchErrorMsg = "";
+
 const int MAX_SATELLITES = 50;
 SatRealtimeCache g_satCaches[MAX_SATELLITES];
 const int NUM_BUILTIN_SATELLITES = 20;
@@ -162,7 +352,7 @@ bool gnssTimedOut = false;
 bool gnssLocationFixed = false; // True once GNSS provides a real position fix
 bool isSatViewMode = false;
 int focusSatIndex = -1;
-float currentZoom = 1.0f;
+float currentZoom = 0.95f;
 uint8_t currentBrightness = 128;
 
 // Default GNSS location (Beijing for public release)
@@ -233,7 +423,7 @@ void doScreenshot() {
 // Helper to pre-calculate orbits with caching
 void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& calcCount, bool isFastForwarding) {
     static uint32_t lastGlobalCalcMs = 0;
-    if (isFastForwarding && cache.lastCalcTime != 0) {
+    if (isFastForwarding) {
         // Fast forwarding: DO NOT recalculate heavy orbit paths to ensure smooth input.
         return;
     }
@@ -350,8 +540,15 @@ volatile bool triggerPrediction = true;
 
 void predictorTask(void* parameter) {
     while (true) {
-        if (!triggerPrediction) {
+        if (!triggerPrediction || g_networkActive || !g_timeSynced) {
             vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        
+        // Wait 2 seconds to let the system finish recycling WiFi/TCP/SSL memory
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        
+        if (g_networkActive) {
             continue;
         }
         
@@ -361,27 +558,76 @@ void predictorTask(void* parameter) {
         
         ObservationPredictor predictor(baseUserLat, baseUserLon, baseUserAlt / 1000.0);
         std::vector<PassEvent> allPasses;
+        allPasses.reserve(150);
         
         // Use simulated time for predictions
         uint32_t startTime = current_unix + timeMachineOffset;
         
-        int totalSelected = 0;
-        for (int i = 0; i < NUM_SATELLITES; i++) {
-            if (g_satellites[i].selected) totalSelected++;
+        int numSatsToPredict = 0;
+        RecentLaunchItem* activeGroup = nullptr;
+        if (g_recentLaunchFocusMode) {
+            numSatsToPredict = 1;
+        } else {
+            for (int i = 0; i < NUM_SATELLITES; i++) {
+                if (g_satellites[i].selected) numSatsToPredict++;
+            }
         }
         
         predictionProgress = 0;
         int completedCount = 0;
-        for (int i = 0; i < NUM_SATELLITES; i++) {
-            if (triggerPrediction || cancelPrediction) break;
-            
-            if (g_satellites[i].selected) {
-                auto passes = predictor.predictPasses(g_satellites[i].tle, g_satellites[i].stdMag, startTime, 7);
+        
+        if (g_recentLaunchFocusMode) {
+            if (g_repSatInitialized && g_repSatTLE.line1.length() >= 14 && g_repSatTLE.line2.length() >= 14) {
+                auto passes = predictor.predictPasses(g_repSatTLE, 3.0, startTime, 7);
+                
+                // Cap passes to prevent OOM
+                if (passes.size() > 8) {
+                    std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
+                        return a.score > b.score;
+                    });
+                    passes.resize(8);
+                }
+                
+                for (auto& p : passes) {
+                    p.satSelected = true;
+                    p.satIndex = -100; // Representative sat fixed to -100
+                }
                 allPasses.insert(allPasses.end(), passes.begin(), passes.end());
-                vTaskDelay(pdMS_TO_TICKS(1)); // Yield between satellites
-                completedCount++;
             }
-            predictionProgress = (completedCount * 100) / (totalSelected > 0 ? totalSelected : 1);
+            completedCount = 1;
+            predictionProgress = 100;
+        } else {
+            for (int i = 0; i < NUM_SATELLITES; i++) {
+                if (triggerPrediction || cancelPrediction) break;
+                
+                if (g_satellites[i].selected) {
+                    const auto& tle = g_satellites[i].tle;
+                    if (tle.line1.length() < 14 || tle.line2.length() < 14) {
+                        completedCount++;
+                        predictionProgress = (completedCount * 100) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
+                        continue;
+                    }
+                    
+                    auto passes = predictor.predictPasses(tle, g_satellites[i].stdMag, startTime, 7);
+                    
+                    // Cap passes to prevent OOM
+                    if (passes.size() > 8) {
+                        std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
+                            return a.score > b.score;
+                        });
+                        passes.resize(8);
+                    }
+                    
+                    for (auto& p : passes) {
+                        p.satSelected = true;
+                        p.satIndex = i;
+                    }
+                    allPasses.insert(allPasses.end(), passes.begin(), passes.end());
+                    vTaskDelay(pdMS_TO_TICKS(1));
+                    completedCount++;
+                }
+                predictionProgress = (completedCount * 100) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
+            }
         }
         
         if (triggerPrediction || cancelPrediction) {
@@ -440,6 +686,8 @@ void fetchFrequencies() {
     client->setInsecure();
     
     HTTPClient http;
+    http.setTimeout(15000);
+    http.setConnectTimeout(15000);
     http.begin(*client, "https://raw.githubusercontent.com/nongxl/SkyCompass_Satellite/main/data/frequencies.json");
     int httpCode = http.GET();
     if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
@@ -452,32 +700,279 @@ void fetchFrequencies() {
     }
     if (httpCode == HTTP_CODE_OK) {
         String payload = http.getString();
-        JsonDocument doc;
-        DeserializationError error = deserializeJson(doc, payload);
-        if (!error) {
-            for (int i = 0; i < NUM_SATELLITES; i++) {
-                String idStr = String(g_satellites[i].noradId);
-                if (doc.containsKey(idStr)) {
-                    g_satellites[i].downlinkFreq = doc[idStr]["freq"].as<String>();
-                    g_satellites[i].radioMode = doc[idStr]["mode"].as<String>();
-                    if (doc[idStr].containsKey("uplink")) {
-                        g_satellites[i].uplinkFreq = doc[idStr]["uplink"].as<String>();
-                    }
-                    if (doc[idStr].containsKey("tone")) {
-                        g_satellites[i].tone = doc[idStr]["tone"].as<String>();
-                    }
-                    if (g_satellites[i].type == SAT_TYPE_VISUAL) {
-                        g_satellites[i].type = SAT_TYPE_HAM;
+        payload.trim();
+        if (payload.length() > 0 && payload.length() < 10240 && payload.startsWith("{")) {
+            JsonDocument doc;
+            DeserializationError error = deserializeJson(doc, payload);
+            if (!error) {
+                for (int i = 0; i < NUM_SATELLITES; i++) {
+                    String idStr = String(g_satellites[i].noradId);
+                    if (doc.containsKey(idStr)) {
+                        g_satellites[i].downlinkFreq = doc[idStr]["freq"].as<String>();
+                        g_satellites[i].radioMode = doc[idStr]["mode"].as<String>();
+                        if (doc[idStr].containsKey("uplink")) {
+                            g_satellites[i].uplinkFreq = doc[idStr]["uplink"].as<String>();
+                        }
+                        if (doc[idStr].containsKey("tone")) {
+                            g_satellites[i].tone = doc[idStr]["tone"].as<String>();
+                        }
+                        if (g_satellites[i].type == SAT_TYPE_VISUAL) {
+                            g_satellites[i].type = SAT_TYPE_HAM;
+                        }
                     }
                 }
             }
+        } else {
+            LOG_I("APP", "Frequencies payload skipped (size: %d)", payload.length());
         }
     }
     http.end();
     delete client;
 }
 
+String extractPrefix(String name) {
+    name.trim();
+    // 1. 如果最后一个字符是字母 (如 'A', 'B' 等)，且倒数第二个是空格或减号，先去掉
+    int len = name.length();
+    if (len > 2) {
+        char last = name.charAt(len - 1);
+        char prev = name.charAt(len - 2);
+        if (((last >= 'A' && last <= 'Z') || (last >= 'a' && last <= 'z')) && (prev == ' ' || prev == '-')) {
+            name = name.substring(0, len - 2);
+            name.trim();
+            len = name.length();
+        }
+    }
+    // 2. 如果末尾是连续的数字，我们数一下它的长度
+    int i = len - 1;
+    int digitCount = 0;
+    while (i >= 0 && (name.charAt(i) >= '0' && name.charAt(i) <= '9')) {
+        digitCount++;
+        i--;
+    }
+    // 如果数字长度 >= 3，且前面有 separator，则切掉
+    if (digitCount >= 3 && i >= 0 && (name.charAt(i) == '-' || name.charAt(i) == ' ' || name.charAt(i) == '#' || name.charAt(i) == '_')) {
+        name = name.substring(0, i);
+        name.trim();
+    } else if (digitCount > 0 && i >= 0 && name.charAt(i) == '-') {
+        // 如果是像 G10-1 这种，去掉尾部的 -1
+        name = name.substring(0, i);
+        name.trim();
+    }
+    return name;
+}
+
+String readValLine(WiFiClient* stream) {
+    String line = "";
+    unsigned long startMs = millis();
+    while (stream->connected() || stream->available()) {
+        if (millis() - startMs > 5000) { // 5秒超时
+            break;
+        }
+        if (stream->available()) {
+            char c = stream->read();
+            if (c == '\n') {
+                break;
+            }
+            if (c != '\r') {
+                line += c;
+            }
+        } else {
+            delay(1);
+        }
+    }
+    line.trim();
+    return line;
+}
+
+int drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int w, int lineH, bool draw = true) {
+    int start = 0;
+    int lines = 0;
+    while (start < text.length()) {
+        lines++;
+        int fitChars = w / 6; // roughly 6px per char for setTextSize(1)
+        if (start + fitChars >= text.length()) {
+            if (draw) canvas->drawString(text.substring(start).c_str(), x, y);
+            break;
+        }
+        int end = start + fitChars;
+        int lastSpace = text.substring(start, end).lastIndexOf(' ');
+        if (lastSpace > start && lastSpace > start + fitChars/2) {
+            end = lastSpace;
+        }
+        if (draw) canvas->drawString(text.substring(start, end).c_str(), x, y);
+        start = end + 1;
+        y += lineH;
+    }
+    return lines;
+}
+
+void recentLaunchNetworkTask(void* parameter) {
+    NetworkActiveGuard guard;
+    recentLaunchDownloading = true;
+    recentLaunchDownloadSuccess = false;
+    recentLaunchErrorMsg = "";
+    
+    // 1. WiFi Connection
+    if (!HalWifi::isConnected()) {
+        String ssid = "";
+        String pass = "";
+        HalWifi::loadCredentials(ssid, pass);
+        
+        if (ssid.length() == 0) {
+            recentLaunchErrorMsg = "No WiFi Configured!";
+            recentLaunchDownloading = false;
+            vTaskDelete(NULL);
+            return;
+        }
+        
+        recentLaunchErrorMsg = "Connecting WiFi...";
+        HalWifi::begin(ssid.c_str(), pass.c_str());
+        
+        if (!HalWifi::isConnected()) {
+            recentLaunchErrorMsg = "WiFi Connect Failed!";
+            recentLaunchDownloading = false;
+            vTaskDelete(NULL);
+            return;
+        }
+    }
+    
+    // 2. Sync Time (NTP)
+    recentLaunchErrorMsg = "Syncing NTP time...";
+    HalWifi::syncNTPTime();
+    uint32_t ntpTime = HalWifi::getUnixTime();
+    if (ntpTime > 0) {
+        current_unix = ntpTime;
+        g_timeSynced = true;
+        LOG_I("RECENT_LAUNCH", "Time synced to UTC: %u", current_unix);
+    }
+    
+    // 3. Download & Process TLE Stream
+    recentLaunchErrorMsg = "Downloading TLEs...";
+    WiFiClientSecure *client = new WiFiClientSecure;
+    if (!client) {
+        recentLaunchErrorMsg = "SSL Client Init Failed!";
+        recentLaunchDownloading = false;
+        vTaskDelete(NULL);
+        return;
+    }
+    client->setInsecure();
+    client->setTimeout(30000); // 30 seconds connection and handshake timeout
+    client->setHandshakeTimeout(25); // 25 seconds SSL handshake timeout
+    
+    HTTPClient http;
+    http.setTimeout(60000); // 60 seconds HTTP timeout for large TLE stream
+    http.setConnectTimeout(30000); // 30 seconds TCP/SSL connection timeout
+    String url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=tle";
+    http.begin(*client, url);
+    int httpCode = http.GET();
+    
+    if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+        if (httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+            String newUrl = http.getLocation();
+            http.end();
+            http.begin(*client, newUrl);
+            httpCode = http.GET();
+        }
+    }
+    
+    if (httpCode == HTTP_CODE_OK) {
+        recentLaunchErrorMsg = "Grouping Satellites...";
+        WiFiClient* stream = http.getStreamPtr();
+        
+        File f = LittleFS.open("/tle_recent_raw.txt", "w");
+        int rawTleCount = 0;
+        
+        std::vector<RecentLaunchItem> tempLaunches;
+        tempLaunches.reserve(30);
+        
+        while (stream->connected() || stream->available()) {
+            if (!recentLaunchDownloading) {
+                break;
+            }
+            String name = readValLine(stream);
+            if (name.length() == 0) {
+                if (!stream->available()) break;
+                continue;
+            }
+            String line1 = readValLine(stream);
+            String line2 = readValLine(stream);
+            
+            if (line1.length() < 14 || line1.charAt(0) != '1' || line2.length() < 14 || line2.charAt(0) != '2') {
+                continue;
+            }
+            
+            String batchId = line1.substring(9, 14);
+            
+            if (f) {
+                f.println(name);
+                f.println(line1);
+                f.println(line2);
+                rawTleCount++;
+            }
+            
+            int foundIdx = -1;
+            for (size_t i = 0; i < tempLaunches.size(); i++) {
+                if (tempLaunches[i].batchId == batchId) {
+                    foundIdx = i;
+                    break;
+                }
+            }
+            
+            if (foundIdx != -1) {
+                if (tempLaunches[foundIdx].satelliteCount < 60) {
+                    tempLaunches[foundIdx].satelliteCount++;
+                }
+                tempLaunches[foundIdx].isGroup = true;
+            } else {
+                RecentLaunchItem item;
+                item.batchId = batchId;
+                item.displayName = extractPrefix(name);
+                item.satelliteCount = 1;
+                item.isGroup = false;
+                item.selected = false;
+                item.epoch = parseTleEpoch(line1);
+                getRepresentativeOrbitParams(line2, item.inclination, item.avgAlt);
+                tempLaunches.push_back(item);
+            }
+            vTaskDelay(pdMS_TO_TICKS(2));
+        }
+        
+        if (f) {
+            f.close();
+        }
+        
+        http.end();
+        if (client) {
+            delete client;
+            client = nullptr;
+        }
+        
+        if (recentLaunchDownloading && rawTleCount > 0) {
+            g_pendingRecentLaunches = tempLaunches;
+            g_recentLaunchesPending = true;
+            recentLaunchSelectedIndex = 0;
+            recentLaunchDownloadSuccess = true;
+            recentLaunchErrorMsg = "Downloaded successfully!";
+            LOG_I("RECENT_LAUNCH", "Loaded %d unique batches saved directly to LittleFS.", g_pendingRecentLaunches.size());
+        }
+    } else {
+        recentLaunchErrorMsg = "HTTP Error: " + String(httpCode);
+        LOG_I("RECENT_LAUNCH", "Celestrak fetch failed, code: %d", httpCode);
+        http.end();
+        if (client) {
+            delete client;
+            client = nullptr;
+        }
+    }
+    
+    recentLaunchDownloading = false;
+    g_networkActive = false;
+    vTaskDelete(NULL);
+}
+
 void networkTask(void* parameter) {
+    NetworkActiveGuard guard;
     g_wifiConnecting = true;
     g_dataUpdating = false;
     
@@ -502,6 +997,7 @@ void networkTask(void* parameter) {
         wifiIsInputtingPassword = false;
         g_wifiConnecting = false;
         g_dataUpdating = false;
+        g_networkActive = false;
         vTaskDelete(NULL);
         return;
     }
@@ -519,6 +1015,7 @@ void networkTask(void* parameter) {
         wifiIsInputtingPassword = false;
         g_wifiConnecting = false;
         g_dataUpdating = false;
+        g_networkActive = false;
         vTaskDelete(NULL);
         return;
     }
@@ -544,6 +1041,7 @@ void networkTask(void* parameter) {
         uint32_t ntpTime = HalWifi::getUnixTime();
         if (ntpTime > 0) {
             current_unix = ntpTime;
+            g_timeSynced = true;
             LOG_I("APP", "Time synced to UTC: %u", current_unix);
         }
 
@@ -560,16 +1058,24 @@ void networkTask(void* parameter) {
 
         // 4. Fetch TLEs
         bool updated = false;
+        WiFiClientSecure* sharedClient = new WiFiClientSecure;
+        if (sharedClient) {
+            sharedClient->setInsecure();
+        }
         
         for (int i = 0; i < NUM_SATELLITES; i++) {
             TLEData new_tle;
-            if (TLEUpdater::getTLE(g_satellites[i].noradId, new_tle)) {
+            if (TLEUpdater::getTLE(g_satellites[i].noradId, new_tle, 2 * 24 * 3600, sharedClient)) {
                 new_tle.baseScore = g_satellites[i].baseScore;
                 g_satellites[i].tle = new_tle;
                 g_satellites[i].calc.init(g_satellites[i].tle);
                 updated = true;
             }
             vTaskDelay(pdMS_TO_TICKS(10)); // Yield CPU to prevent Task Watchdog starvation
+        }
+        
+        if (sharedClient) {
+            delete sharedClient;
         }
         
         if (updated) {
@@ -603,7 +1109,98 @@ void networkTask(void* parameter) {
         g_readyStartTime = millis(); // Trigger 2-second READY effect
     }
     g_wifiConnecting = false;
+    g_timeSynced = true; // Fallback to allow offline mock calculations if WiFi failed/finished
+    triggerPrediction = true; // Wake up the prediction loop immediately
+    g_networkActive = false;
     vTaskDelete(NULL);
+}
+
+void tryLoadRecentLaunchCache() {
+    if (!LittleFS.exists("/tle_recent_raw.txt")) {
+        LOG_I("RECENT_LAUNCH", "No local cache file found.");
+        return;
+    }
+    
+    std::vector<RecentLaunchItem> tempLaunches;
+    tempLaunches.reserve(30);
+    
+    File rf = LittleFS.open("/tle_recent_raw.txt", "r");
+    if (!rf) {
+        return;
+    }
+    
+    uint32_t firstEpoch = 0;
+    while (rf.available()) {
+        String name = rf.readStringUntil('\n');
+        name.trim();
+        if (name.length() == 0) break;
+        String line1 = rf.readStringUntil('\n');
+        line1.trim();
+        String line2 = rf.readStringUntil('\n');
+        line2.trim();
+        
+        if (line1.length() < 14 || line1.charAt(0) != '1' || line2.length() < 14 || line2.charAt(0) != '2') {
+            continue;
+        }
+        
+        if (firstEpoch == 0) {
+            firstEpoch = parseTleEpoch(line1);
+        }
+        
+        String batchId = line1.substring(9, 14);
+        
+        int foundIdx = -1;
+        for (size_t i = 0; i < tempLaunches.size(); i++) {
+            if (tempLaunches[i].batchId == batchId) {
+                foundIdx = i;
+                break;
+            }
+        }
+        
+        if (foundIdx != -1) {
+            if (tempLaunches[foundIdx].satelliteCount < 60) {
+                tempLaunches[foundIdx].satelliteCount++;
+            }
+            tempLaunches[foundIdx].isGroup = true;
+        } else {
+            RecentLaunchItem item;
+            item.batchId = batchId;
+            item.displayName = extractPrefix(name);
+            item.satelliteCount = 1;
+            item.isGroup = false;
+            item.selected = false;
+            item.epoch = parseTleEpoch(line1);
+            getRepresentativeOrbitParams(line2, item.inclination, item.avgAlt);
+            tempLaunches.push_back(item);
+        }
+    }
+    rf.close();
+    
+    if (tempLaunches.empty()) {
+        return;
+    }
+    
+    uint32_t nowTime = current_unix + timeMachineOffset;
+    bool fresh = false;
+    if (firstEpoch > 0) {
+        uint32_t age = 0;
+        if (nowTime >= firstEpoch) {
+            age = nowTime - firstEpoch;
+        }
+        if (age <= 3 * 86400 || nowTime < firstEpoch) {
+            fresh = true;
+        }
+    }
+    
+    if (fresh) {
+        g_recentLaunches = tempLaunches;
+        recentLaunchDownloadSuccess = true;
+        recentLaunchSelectedIndex = 0;
+        recentLaunchErrorMsg = "Loaded from local cache.";
+        LOG_I("RECENT_LAUNCH", "Loaded %d launches from local cache, age is fresh.", g_recentLaunches.size());
+    } else {
+        LOG_I("RECENT_LAUNCH", "Local cache TLE is expired. Needs download.");
+    }
 }
 
 void saveCustomSatellites() {
@@ -742,7 +1339,7 @@ void setup() {
     xTaskCreatePinnedToCore(
         predictorTask,
         "PredictorTask",
-        8192,
+        16384,
         NULL,
         1,
         &predictorTaskHandle,
@@ -752,7 +1349,7 @@ void setup() {
     // Start network task on Core 0 to handle WiFi and TLE fetching in background
     // Auto connects at boot and auto disconnects when done
     manualWifiToggle = false;
-    xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+    xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
 
     // Initialize Chain Mono on Serial2 (Grove Port) at setup tail
     // This allows the Chain Mono module's internal MCU enough time to boot up completely.
@@ -869,6 +1466,7 @@ void setup() {
         gnss->probeGrove();
     }
 #endif
+    tryLoadRecentLaunchCache();
 }
 
 void drawWiFiSetupPage() {
@@ -949,28 +1547,6 @@ void drawWiFiSetupPage() {
     }
 }
 
-int drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int w, int lineH, bool draw = true) {
-    int start = 0;
-    int lines = 0;
-    while (start < text.length()) {
-        lines++;
-        int fitChars = w / 6; // roughly 6px per char for setTextSize(1)
-        if (start + fitChars >= text.length()) {
-            if (draw) canvas->drawString(text.substring(start).c_str(), x, y);
-            break;
-        }
-        int end = start + fitChars;
-        int lastSpace = text.lastIndexOf(' ', end);
-        if (lastSpace > start && lastSpace > start + fitChars/2) {
-            end = lastSpace;
-        }
-        if (draw) canvas->drawString(text.substring(start, end).c_str(), x, y);
-        start = end + 1;
-        y += lineH;
-    }
-    return lines;
-}
-
 void drawSatSelectPage() {
     auto canvas = earth_renderer->getCanvas();
     uint16_t width = canvas->width();
@@ -979,329 +1555,199 @@ void drawSatSelectPage() {
     // Background
     canvas->fillRect(0, 0, width, height, canvas->color565(20, 30, 40));
     
-    // Top Bar
-    canvas->fillRect(0, 0, width, 20, canvas->color565(100, 50, 200)); // Purple
+    // Top Bar - Dual Tabs
+    canvas->fillRect(0, 0, width, 20, canvas->color565(30, 40, 50));
+    
+    // Tab 1: Encyclopedia
+    uint16_t tab1Bg = (currentSatTab == TAB_ENCYCLOPEDIA) ? canvas->color565(100, 50, 200) : canvas->color565(30, 40, 50);
+    canvas->fillRect(0, 0, width/2, 20, tab1Bg);
     canvas->setTextColor(TFT_WHITE);
     canvas->setTextSize(1);
-    canvas->drawString("Satellites Encyclopedia", 5, 6);
+    canvas->drawString("Encyclopedia", width/4 - canvas->textWidth("Encyclopedia")/2, 6);
     
-    // Left Panel (List)
-    int yPos = 25;
-    int itemsPerPage = 6;
-    int startIndex = (satSelectedIndex / itemsPerPage) * itemsPerPage;
+    // Tab 2: Recent Launch
+    uint16_t tab2Bg = (currentSatTab == TAB_RECENT_LAUNCH) ? canvas->color565(100, 50, 200) : canvas->color565(30, 40, 50);
+    canvas->fillRect(width/2, 0, width/2, 20, tab2Bg);
+    canvas->drawString("Recent Launch", 3 * width/4 - canvas->textWidth("Recent Launch")/2, 6);
     
-    // Total items is NUM_SATELLITES + 1 (the Add row)
-    for (int i = 0; i < itemsPerPage && (startIndex + i) <= NUM_SATELLITES; i++) {
-        int index = startIndex + i;
-        if (index == satSelectedIndex) {
-            canvas->fillRect(2, yPos - 2, 82, 15, canvas->color565(0, 120, 255));
-            canvas->setTextColor(TFT_WHITE);
-        } else {
-            canvas->setTextColor(TFT_LIGHTGRAY);
-        }
-        
-        if (index < NUM_SATELLITES) {
-            String checkBox = g_satellites[index].selected ? "[x]" : "[ ]";
-            canvas->drawString(checkBox.c_str(), 4, yPos);
-            
-            String nameStr = g_satellites[index].name;
-            if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
-            canvas->drawString(nameStr.c_str(), 28, yPos);
-        } else {
-            // "Add Custom" row
-            String text = isDownloadingCustom ? "Downloading..." : ("[+] " + noradInput + "_");
-            canvas->drawString(text.c_str(), 4, yPos);
-        }
-        
-        yPos += 16;
-    }
+    // Bottom border for Top Bar
+    canvas->drawFastHLine(0, 20, width, TFT_DARKGREY);
     
-    // Right Panel (Description)
-    canvas->drawFastVLine(85, 20, height-20, TFT_DARKGREY);
-    
-    int rightX = 89;
-    int descY = 25;
-    if (satSelectedIndex < NUM_SATELLITES) {
-        SatProfile& selSat = g_satellites[satSelectedIndex];
+    if (currentSatTab == TAB_ENCYCLOPEDIA) {
+        // Left Panel (List)
+        int yPos = 25;
+        int itemsPerPage = 6;
+        int startIndex = (satSelectedIndex / itemsPerPage) * itemsPerPage;
         
-        // Draw 3x Scaled Icon
-        int iconX = rightX + 21;
-        int iconY = descY + 12;
-        uint16_t satColor = selSat.color;
-        SatIconType t = selSat.iconType;
-        
-        if (t == ICON_STATION) {
-            canvas->fillRect(iconX - 6, iconY - 3, 15, 9, TFT_WHITE);
-            canvas->fillRect(iconX - 21, iconY - 9, 12, 21, satColor);
-            canvas->fillRect(iconX + 12, iconY - 9, 12, 21, satColor);
-        } else if (t == ICON_TELESCOPE) {
-            canvas->fillRect(iconX - 6, iconY - 9, 15, 21, TFT_WHITE);
-            canvas->fillRect(iconX - 9, iconY - 12, 21, 6, TFT_LIGHTGRAY);
-            canvas->fillRect(iconX - 18, iconY, 9, 6, satColor);
-            canvas->fillRect(iconX + 12, iconY, 9, 6, satColor);
-        } else if (t == ICON_DEEPSPACE) {
-            canvas->fillRect(iconX - 1, iconY - 15, 3, 31, satColor);
-            canvas->fillRect(iconX - 15, iconY - 1, 31, 3, satColor);
-            for (int i = -1; i <= 1; i++) {
-                canvas->drawLine(iconX - 6 + i, iconY - 6, iconX + 6 + i, iconY + 6, TFT_WHITE);
-                canvas->drawLine(iconX - 6 + i, iconY + 6, iconX + 6 + i, iconY - 6, TFT_WHITE);
+        for (int i = 0; i < itemsPerPage && (startIndex + i) <= NUM_SATELLITES; i++) {
+            int index = startIndex + i;
+            if (index == satSelectedIndex) {
+                canvas->fillRect(2, yPos - 2, 82, 15, canvas->color565(0, 120, 255));
+                canvas->setTextColor(TFT_WHITE);
+            } else {
+                canvas->setTextColor(TFT_LIGHTGRAY);
             }
-        } else if (t == ICON_ROCKET) {
-            canvas->fillRect(iconX - 5, iconY - 8, 11, 16, TFT_WHITE);
-            canvas->fillTriangle(iconX - 5, iconY - 8, iconX + 5, iconY - 8, iconX, iconY - 15, satColor);
-            canvas->fillRect(iconX - 5, iconY + 8, 4, 4, TFT_ORANGE); // Engine 1
-            canvas->fillRect(iconX + 2, iconY + 8, 4, 4, TFT_ORANGE); // Engine 2
-        } else if (t == ICON_DFH1) {
-            canvas->fillCircle(iconX, iconY, 9, TFT_WHITE);
-            canvas->drawLine(iconX - 6, iconY - 6, iconX - 18, iconY - 18, satColor);
-            canvas->drawLine(iconX + 6, iconY - 6, iconX + 18, iconY - 18, satColor);
-            canvas->drawLine(iconX - 6, iconY + 6, iconX - 18, iconY + 18, satColor);
-            canvas->drawLine(iconX + 6, iconY + 6, iconX + 18, iconY + 18, satColor);
-        } else if (t == ICON_BLUEWALKER3) {
-            canvas->fillRect(iconX - 3, iconY - 3, 9, 9, TFT_WHITE);
-            canvas->fillRect(iconX - 21, iconY - 9, 15, 21, satColor);
-            canvas->fillRect(iconX + 9, iconY - 9, 15, 21, satColor);
-            canvas->drawFastVLine(iconX - 15, iconY - 9, 21, TFT_BLACK);
-            canvas->drawFastVLine(iconX - 9, iconY - 9, 21, TFT_BLACK);
-            canvas->drawFastVLine(iconX + 15, iconY - 9, 21, TFT_BLACK);
-            canvas->drawFastVLine(iconX + 21, iconY - 9, 21, TFT_BLACK);
-            canvas->drawFastHLine(iconX - 21, iconY, 15, TFT_BLACK);
-            canvas->drawFastHLine(iconX + 9, iconY, 15, TFT_BLACK);
-        } else if (t == ICON_WEATHER) {
-            canvas->fillRect(iconX - 3, iconY - 6, 9, 15, TFT_WHITE);
-            canvas->drawLine(iconX - 6, iconY, iconX - 18, iconY - 6, satColor);
-            canvas->fillRect(iconX - 24, iconY - 12, 9, 9, satColor);
-            canvas->fillRect(iconX + 6, iconY - 3, 6, 3, satColor);
-            canvas->fillRect(iconX + 9, iconY - 6, 3, 3, satColor);
-        } else if (t == ICON_NAVIGATION) {
-            canvas->fillRect(iconX - 3, iconY - 6, 9, 15, TFT_WHITE);
-            canvas->fillRect(iconX - 24, iconY - 3, 9, 9, satColor);
-            canvas->fillRect(iconX + 15, iconY - 3, 9, 9, satColor);
-            canvas->drawFastHLine(iconX - 15, iconY + 1, 12, TFT_LIGHTGRAY);
-            canvas->drawFastHLine(iconX + 6, iconY + 1, 9, TFT_LIGHTGRAY);
-            canvas->fillRect(iconX - 1, iconY + 9, 3, 6, satColor);
-            canvas->fillCircle(iconX, iconY + 15, 3, satColor);
-        } else if (t == ICON_COMMUNICATION) {
-            canvas->fillCircle(iconX, iconY, 6, TFT_WHITE);
-            canvas->drawLine(iconX, iconY - 6, iconX - 9, iconY - 18, satColor);
-            canvas->drawLine(iconX, iconY - 6, iconX + 9, iconY - 18, satColor);
-            canvas->drawFastVLine(iconX, iconY + 6, 6, satColor);
-            canvas->drawFastHLine(iconX - 6, iconY + 12, 13, satColor);
-            canvas->drawFastHLine(iconX - 3, iconY + 13, 7, satColor);
-        } else { // SATELLITE
-            canvas->fillRect(iconX - 3, iconY - 3, 9, 9, TFT_WHITE);
-            canvas->fillRect(iconX - 15, iconY - 3, 9, 9, satColor);
-            canvas->fillRect(iconX - 6, iconY - 1, 3, 3, TFT_LIGHTGRAY);
+            
+            if (index < NUM_SATELLITES) {
+                String checkBox = g_satellites[index].selected ? "[x]" : "[ ]";
+                canvas->drawString(checkBox.c_str(), 4, yPos);
+                
+                String nameStr = g_satellites[index].name;
+                if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
+                canvas->drawString(nameStr.c_str(), 28, yPos);
+            } else {
+                String text = isDownloadingCustom ? "Downloading..." : ("[+] " + noradInput + "_");
+                canvas->drawString(text.c_str(), 4, yPos);
+            }
+            
+            yPos += 16;
         }
         
-        // Draw Name next to icon
-        canvas->setTextColor(selSat.color);
-        canvas->drawString(selSat.name.c_str(), rightX + 48, descY + 8);
-        descY += 32; // Skip past icon and name
+        // Right Panel (Description)
+        canvas->drawFastVLine(85, 20, height-31, TFT_DARKGREY);
         
-        // Determine radio layout beforehand
-        double tx, ty, tz;
-        bool isTracking = false;
-        double az = 0, el = 0, dist = 0;
-        
-        if (selSat.calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
-            double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
-            ECEFCoord satEcef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
-            GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-            TopocentricCoord topo = CoordTransform::ecefToTopocentric(obsGeo, satEcef);
-            az = topo.az; el = topo.el; dist = topo.range;
-            if (el > 0) isTracking = true;
-        }
-        
-        int radioY = 135;
-        int requiredLines = 0;
-        
-        if (isTracking) {
-            requiredLines = 1; // Az/El
-            if (selSat.type == SAT_TYPE_WEATHER) {
-                requiredLines = 3; // Az/El, Rx, Mode
-            } else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
-                requiredLines = 4; // Az/El, APRS, SSTV, Mode
-            } else if (selSat.type == SAT_TYPE_HAM) {
-                if (selSat.uplinkFreq.length() > 0) {
-                    requiredLines = 4; // Az/El, Rx, Tx, Mode
+        int rightX = 89;
+        int descY = 25;
+        if (satSelectedIndex < NUM_SATELLITES) {
+            SatProfile& selSat = g_satellites[satSelectedIndex];
+            
+            // Draw 3x Scaled Icon
+            int iconX = rightX + 21;
+            int iconY = descY + 12;
+            uint16_t satColor = selSat.color;
+            SatIconType t = selSat.iconType;
+            
+            if (t == ICON_STATION) {
+                canvas->fillRect(iconX - 6, iconY - 3, 15, 9, TFT_WHITE);
+                canvas->fillRect(iconX - 21, iconY - 9, 12, 21, satColor);
+                canvas->fillRect(iconX + 12, iconY - 9, 12, 21, satColor);
+            } else if (t == ICON_TELESCOPE) {
+                canvas->fillRect(iconX - 6, iconY - 9, 15, 21, TFT_WHITE);
+                canvas->fillRect(iconX - 9, iconY - 12, 21, 6, TFT_LIGHTGRAY);
+                canvas->fillRect(iconX - 18, iconY, 9, 6, satColor);
+                canvas->fillRect(iconX + 12, iconY, 9, 6, satColor);
+            } else if (t == ICON_DEEPSPACE) {
+                canvas->fillRect(iconX - 1, iconY - 15, 3, 31, satColor);
+                canvas->fillRect(iconX - 15, iconY - 1, 31, 3, satColor);
+                for (int i = -1; i <= 1; i++) {
+                    canvas->drawLine(iconX - 6 + i, iconY - 6, iconX + 6 + i, iconY + 6, TFT_WHITE);
+                    canvas->drawLine(iconX - 6 + i, iconY + 6, iconX + 6 + i, iconY - 6, TFT_WHITE);
+                }
+            } else if (t == ICON_ROCKET) {
+                canvas->fillRect(iconX - 5, iconY - 8, 11, 16, TFT_WHITE);
+                canvas->fillTriangle(iconX - 5, iconY - 8, iconX + 5, iconY - 8, iconX, iconY - 15, satColor);
+                canvas->fillRect(iconX - 5, iconY + 8, 4, 4, TFT_ORANGE);
+                canvas->fillRect(iconX + 2, iconY + 8, 4, 4, TFT_ORANGE);
+            } else if (t == ICON_DFH1) {
+                canvas->fillCircle(iconX, iconY, 9, TFT_WHITE);
+                canvas->drawLine(iconX - 6, iconY - 6, iconX - 18, iconY - 18, satColor);
+                canvas->drawLine(iconX + 6, iconY - 6, iconX + 18, iconY - 18, satColor);
+                canvas->drawLine(iconX - 6, iconY + 6, iconX - 18, iconY + 18, satColor);
+                canvas->drawLine(iconX + 6, iconY + 6, iconX + 18, iconY + 18, satColor);
+            } else if (t == ICON_BLUEWALKER3) {
+                canvas->fillRect(iconX - 3, iconY - 3, 9, 9, TFT_WHITE);
+                canvas->fillRect(iconX - 21, iconY - 9, 15, 21, satColor);
+                canvas->fillRect(iconX + 9, iconY - 9, 15, 21, satColor);
+                canvas->drawFastVLine(iconX - 15, iconY - 9, 21, TFT_BLACK);
+                canvas->drawFastVLine(iconX - 9, iconY - 9, 21, TFT_BLACK);
+                canvas->drawFastVLine(iconX + 15, iconY - 9, 21, TFT_BLACK);
+                canvas->drawFastVLine(iconX + 21, iconY - 9, 21, TFT_BLACK);
+                canvas->drawFastHLine(iconX - 21, iconY, 15, TFT_BLACK);
+                canvas->drawFastHLine(iconX + 9, iconY, 15, TFT_BLACK);
+            } else if (t == ICON_WEATHER) {
+                canvas->fillRect(iconX - 3, iconY - 6, 9, 15, TFT_WHITE);
+                canvas->drawLine(iconX - 6, iconY, iconX - 18, iconY - 6, satColor);
+                canvas->fillRect(iconX - 24, iconY - 12, 9, 9, satColor);
+                canvas->fillRect(iconX + 6, iconY - 3, 6, 3, satColor);
+                canvas->fillRect(iconX + 9, iconY - 6, 3, 3, satColor);
+            } else if (t == ICON_NAVIGATION) {
+                canvas->fillRect(iconX - 3, iconY - 6, 9, 15, TFT_WHITE);
+                canvas->fillRect(iconX - 24, iconY - 3, 9, 9, satColor);
+                canvas->fillRect(iconX + 15, iconY - 3, 9, 9, satColor);
+                canvas->drawFastHLine(iconX - 15, iconY + 1, 12, TFT_LIGHTGRAY);
+                canvas->drawFastHLine(iconX + 6, iconY + 1, 9, TFT_LIGHTGRAY);
+                canvas->fillRect(iconX - 1, iconY + 9, 3, 6, satColor);
+                canvas->fillCircle(iconX, iconY + 15, 3, satColor);
+            } else if (t == ICON_COMMUNICATION) {
+                canvas->fillCircle(iconX, iconY, 6, TFT_WHITE);
+                canvas->drawLine(iconX, iconY - 6, iconX - 9, iconY - 18, satColor);
+                canvas->drawLine(iconX, iconY - 6, iconX + 9, iconY - 18, satColor);
+                canvas->drawFastVLine(iconX, iconY + 6, 6, satColor);
+                canvas->drawFastHLine(iconX - 6, iconY + 12, 13, satColor);
+                canvas->drawFastHLine(iconX - 3, iconY + 13, 7, satColor);
+            } else {
+                canvas->fillRect(iconX - 3, iconY - 3, 9, 9, TFT_WHITE);
+                canvas->fillRect(iconX - 15, iconY - 3, 9, 9, satColor);
+                canvas->fillRect(iconX - 6, iconY - 1, 3, 3, TFT_LIGHTGRAY);
+            }
+            
+            canvas->setTextColor(selSat.color);
+            canvas->drawString(selSat.name.c_str(), rightX + 48, descY + 8);
+            
+            if (selSat.tle.line1.length() >= 32) {
+                uint32_t currentSimTime = current_unix + timeMachineOffset;
+                uint32_t satEpoch = parseTleEpoch(selSat.tle.line1);
+                int ageDays = -1;
+                if (satEpoch > 0 && currentSimTime >= satEpoch) {
+                    ageDays = (currentSimTime - satEpoch) / 86400;
+                }
+                
+                char ageBuf[32];
+                uint16_t ageColor = TFT_GREEN;
+                if (ageDays < 0) {
+                    sprintf(ageBuf, "GP Age:N/A");
+                    ageColor = TFT_RED;
                 } else {
-                    requiredLines = 3; // Az/El, Rx, Mode
+                    sprintf(ageBuf, "GP Age:%dd", ageDays);
+                    if (ageDays <= 7) ageColor = TFT_GREEN;
+                    else if (ageDays <= 14) ageColor = TFT_ORANGE;
+                    else ageColor = TFT_RED;
                 }
-            }
-        } else {
-            if (selSat.type == SAT_TYPE_WEATHER) {
-                requiredLines = 3; // Rx, Mode, Weather Imaging
-            } else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
-                requiredLines = 3; // APRS, SSTV, Mode
-            } else if (selSat.type == SAT_TYPE_HAM) {
-                PassEvent nextPass;
-                bool foundNext = false;
-                for (const auto& pass : recommendedPasses) {
-                    if (pass.satName == selSat.name && pass.aosTime >= current_unix + timeMachineOffset) {
-                        nextPass = pass;
-                        foundNext = true;
-                        break;
-                    }
-                }
-                int baseLines = (selSat.uplinkFreq.length() > 0) ? 3 : 2; // Rx, [Tx], Mode
-                if (foundNext) {
-                    requiredLines = baseLines + 2; // AOS, LOS
-                } else {
-                    requiredLines = baseLines;
-                }
-            }
-        }
-        
-        if (requiredLines > 0) {
-            radioY = 135 - (requiredLines * 11 + 2);
-        } else {
-            radioY = 135;
-        }
-        
-        // Draw Description with Auto-Scroll
-        canvas->setTextColor(TFT_LIGHTGRAY);
-        if (selSat.description) {
-            int descAreaHeight = radioY - descY - 2;
-            int totalLines = drawWrappedText(canvas, selSat.description, rightX, descY, width - rightX - 5, 10, false);
-            int totalHeight = totalLines * 10;
-            
-            int yOffset = 0;
-            if (totalHeight > descAreaHeight && descAreaHeight > 10) {
-                int scrollRange = totalHeight - descAreaHeight + 10; // Extra 10px to show bottom clearly
-                int cycleTime = scrollRange * 33 + 2000; // 1000ms pause at each end, 30px/sec speed
-                int t = millis() % cycleTime;
-                if (t < 1000) yOffset = 0;
-                else if (t < cycleTime - 1000) yOffset = (t - 1000) / 33;
-                else yOffset = scrollRange;
+                canvas->setTextColor(ageColor);
+                int ageW = canvas->textWidth(ageBuf);
+                canvas->drawString(ageBuf, width - ageW - 4, descY - 2);
+            } else {
+                canvas->setTextColor(TFT_RED);
+                canvas->drawString("GP Age:N/A", width - canvas->textWidth("GP Age:N/A") - 4, descY - 2);
             }
             
-            canvas->setClipRect(rightX, descY, width - rightX, descAreaHeight);
-            drawWrappedText(canvas, selSat.description, rightX, descY - yOffset, width - rightX - 5, 10);
-            canvas->clearClipRect();
-        } else {
-            canvas->drawString("No description.", rightX, descY);
-        }
-        
-        // Draw fixed 'Press d to delete' prompt for custom satellites when there is no radio block to overlay
-        if (satSelectedIndex >= NUM_BUILTIN_SATELLITES && requiredLines == 0) {
-            canvas->setTextColor(TFT_YELLOW);
-            canvas->drawString("Press 'd' to delete", rightX, 123);
-        }
-        
-        // Draw Radio Info Block
-        if (requiredLines > 0) {
-            canvas->fillRect(rightX - 2, radioY - 2, width - rightX - 2, requiredLines * 11 + 2, canvas->color565(30, 40, 50));
+            descY += 32;
+            
+            double tx, ty, tz;
+            bool isTracking = false;
+            double az = 0, el = 0, dist = 0;
+            
+            if (selSat.calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
+                double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
+                ECEFCoord satEcef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                TopocentricCoord topo = CoordTransform::ecefToTopocentric(obsGeo, satEcef);
+                az = topo.az; el = topo.el; dist = topo.range;
+                if (el > 0) isTracking = true;
+            }
+            
+            int radioY = 124;
+            int requiredLines = 0;
             
             if (isTracking) {
-                double tx_prev, ty_prev, tz_prev;
-                double dist_prev = dist;
-                if (selSat.calc.getTEME(current_unix + timeMachineOffset - 1, tx_prev, ty_prev, tz_prev)) {
-                    double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset - 1));
-                    ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
-                    GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                    TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
-                    dist_prev = topo_prev.range;
-                }
-                double radialVel = dist - dist_prev;
-                
-                double dlFreq = selSat.downlinkFreq.toDouble();
-                double dopplerShiftHz = 0;
-                if (dlFreq > 0) {
-                    dopplerShiftHz = -(radialVel / 299792.458) * (dlFreq * 1e6);
-                }
-
-                canvas->setTextColor(TFT_YELLOW);
-                char posBuf[32];
-                sprintf(posBuf, "Az:%03.0f El:%02.0f", az, el);
-                canvas->drawString(posBuf, rightX, radioY);
-                
+                requiredLines = 1;
                 if (selSat.type == SAT_TYPE_WEATHER) {
-                    canvas->setTextColor(TFT_GREEN);
-                    char freqBuf[32];
-                    sprintf(freqBuf, "Rx:%s", selSat.downlinkFreq.c_str());
-                    canvas->drawString(freqBuf, rightX, radioY + 11);
-                    
-                    canvas->setTextColor(dopplerShiftHz > 0 ? TFT_CYAN : TFT_ORANGE);
-                    char dopBuf[32];
-                    sprintf(dopBuf, "%+dHz", (int)dopplerShiftHz);
-                    canvas->drawString(dopBuf, rightX + canvas->textWidth(freqBuf) + 2, radioY + 11);
-                    
-                    canvas->setTextColor(TFT_LIGHTGRAY);
-                    canvas->drawString("Mode: " + selSat.radioMode, rightX, radioY + 22);
-                }
-                else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
-                    double dlFreq2 = 145.825; // APRS frequency
-                    double dopplerShiftHz2 = -(radialVel / 299792.458) * (dlFreq2 * 1e6);
-                    
-                    canvas->setTextColor(TFT_GREEN);
-                    char f1[32];
-                    sprintf(f1, "APRS:%07.3f", dlFreq2 + dopplerShiftHz2/1e6);
-                    canvas->drawString(f1, rightX, radioY + 11);
-                    
-                    char f2[32];
-                    sprintf(f2, "SSTV:%07.3f", dlFreq + dopplerShiftHz/1e6);
-                    canvas->drawString(f2, rightX, radioY + 22);
-                    
-                    canvas->setTextColor(TFT_LIGHTGRAY);
-                    canvas->drawString("Mode: FM/Packet", rightX, radioY + 33);
-                }
-                else if (selSat.type == SAT_TYPE_HAM) {
-                    canvas->setTextColor(TFT_GREEN);
-                    char freqBuf[32];
-                    sprintf(freqBuf, "Rx:%s", selSat.downlinkFreq.c_str());
-                    canvas->drawString(freqBuf, rightX, radioY + 11);
-                    
-                    canvas->setTextColor(dopplerShiftHz > 0 ? TFT_CYAN : TFT_ORANGE);
-                    char dopBuf[32];
-                    sprintf(dopBuf, "%+dHz", (int)dopplerShiftHz);
-                    canvas->drawString(dopBuf, rightX + canvas->textWidth(freqBuf) + 2, radioY + 11);
-                    
-                    int nextLineY = radioY + 22;
+                    requiredLines = 3;
+                } else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
+                    requiredLines = 4;
+                } else if (selSat.type == SAT_TYPE_HAM) {
                     if (selSat.uplinkFreq.length() > 0) {
-                        canvas->setTextColor(TFT_RED);
-                        String txStr = "Tx:" + selSat.uplinkFreq;
-                        if (selSat.tone.length() > 0) txStr += " T:" + selSat.tone;
-                        canvas->drawString(txStr.c_str(), rightX, nextLineY);
-                        nextLineY += 11;
+                        requiredLines = 4;
+                    } else {
+                        requiredLines = 3;
                     }
-                    
-                    canvas->setTextColor(TFT_LIGHTGRAY);
-                    canvas->drawString("Mode: " + selSat.radioMode, rightX, nextLineY);
                 }
             } else {
                 if (selSat.type == SAT_TYPE_WEATHER) {
-                    canvas->setTextColor(TFT_GREEN);
-                    canvas->drawString("Rx: " + selSat.downlinkFreq + " MHz", rightX, radioY);
-                    canvas->setTextColor(TFT_CYAN);
-                    canvas->drawString("Mode: " + selSat.radioMode, rightX, radioY + 11);
-                    canvas->setTextColor(TFT_LIGHTGRAY);
-                    canvas->drawString("Weather Imaging", rightX, radioY + 22);
-                }
-                else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
-                    canvas->setTextColor(TFT_GREEN);
-                    canvas->drawString("APRS: 145.825 MHz", rightX, radioY);
-                    canvas->drawString("SSTV: 145.800 MHz", rightX, radioY + 11);
-                    canvas->setTextColor(TFT_CYAN);
-                    canvas->drawString("Mode: FM/Packet", rightX, radioY + 22);
-                }
-                else if (selSat.type == SAT_TYPE_HAM) {
-                    canvas->setTextColor(TFT_GREEN);
-                    canvas->drawString("Rx: " + selSat.downlinkFreq + " MHz", rightX, radioY);
-                    
-                    int nextLineY = radioY + 11;
-                    if (selSat.uplinkFreq.length() > 0) {
-                        canvas->setTextColor(TFT_RED);
-                        String txStr = "Tx:" + selSat.uplinkFreq;
-                        if (selSat.tone.length() > 0) txStr += " T:" + selSat.tone;
-                        canvas->drawString(txStr.c_str(), rightX, nextLineY);
-                        nextLineY += 11;
-                    }
-                    
-                    canvas->setTextColor(TFT_CYAN);
-                    canvas->drawString("Mode: " + selSat.radioMode, rightX, nextLineY);
-                    nextLineY += 11;
-                    
+                    requiredLines = 3;
+                } else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
+                    requiredLines = 3;
+                } else if (selSat.type == SAT_TYPE_HAM) {
                     PassEvent nextPass;
                     bool foundNext = false;
                     for (const auto& pass : recommendedPasses) {
@@ -1311,38 +1757,381 @@ void drawSatSelectPage() {
                             break;
                         }
                     }
+                    int baseLines = (selSat.uplinkFreq.length() > 0) ? 3 : 2;
                     if (foundNext) {
-                        canvas->setTextColor(TFT_YELLOW);
-                        time_t aosTime = nextPass.aosTime;
-                        time_t losTime = nextPass.losTime;
+                        requiredLines = baseLines + 2;
+                    } else {
+                        requiredLines = baseLines;
+                    }
+                }
+            }
+            
+            if (requiredLines > 0) {
+                radioY = 124 - (requiredLines * 11 + 2);
+            } else {
+                radioY = 124;
+            }
+            
+            canvas->setTextColor(TFT_LIGHTGRAY);
+            if (selSat.description) {
+                int descAreaHeight = radioY - descY - 2;
+                int totalLines = drawWrappedText(canvas, selSat.description, rightX, descY, width - rightX - 5, 10, false);
+                int totalHeight = totalLines * 10;
+                
+                int yOffset = 0;
+                if (totalHeight > descAreaHeight && descAreaHeight > 10) {
+                    int scrollRange = totalHeight - descAreaHeight + 10;
+                    int cycleTime = scrollRange * 33 + 2000;
+                    int t = millis() % cycleTime;
+                    if (t < 1000) yOffset = 0;
+                    else if (t < cycleTime - 1000) yOffset = (t - 1000) / 33;
+                    else yOffset = scrollRange;
+                }
+                
+                canvas->setClipRect(rightX, descY, width - rightX, descAreaHeight);
+                drawWrappedText(canvas, selSat.description, rightX, descY - yOffset, width - rightX - 5, 10);
+                canvas->clearClipRect();
+            } else {
+                canvas->drawString("No description.", rightX, descY);
+            }
+            
+            if (satSelectedIndex >= NUM_BUILTIN_SATELLITES && requiredLines == 0) {
+                canvas->setTextColor(TFT_YELLOW);
+                canvas->drawString("Press 'd' to delete", rightX, 112);
+            }
+            
+            if (requiredLines > 0) {
+                canvas->fillRect(rightX - 2, radioY - 2, width - rightX - 2, requiredLines * 11 + 2, canvas->color565(30, 40, 50));
+                
+                if (isTracking) {
+                    double tx_prev, ty_prev, tz_prev;
+                    double dist_prev = dist;
+                    if (selSat.calc.getTEME(current_unix + timeMachineOffset - 1, tx_prev, ty_prev, tz_prev)) {
+                        double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset - 1));
+                        ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
+                        GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                        TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
+                        dist_prev = topo_prev.range;
+                    }
+                    double radialVel = dist - dist_prev;
+                    
+                    double dlFreq = selSat.downlinkFreq.toDouble();
+                    double dopplerShiftHz = 0;
+                    if (dlFreq > 0) {
+                        dopplerShiftHz = -(radialVel / 299792.458) * (dlFreq * 1e6);
+                    }
+                    
+                    canvas->setTextColor(TFT_YELLOW);
+                    char posBuf[32];
+                    sprintf(posBuf, "Az:%03.0f El:%02.0f", az, el);
+                    canvas->drawString(posBuf, rightX, radioY);
+                    
+                    if (selSat.type == SAT_TYPE_WEATHER) {
+                        canvas->setTextColor(TFT_GREEN);
+                        char freqBuf[32];
+                        sprintf(freqBuf, "Rx:%s", selSat.downlinkFreq.c_str());
+                        canvas->drawString(freqBuf, rightX, radioY + 11);
                         
-                        struct tm* aos_info = localtime(&aosTime);
-                        char aosBuf[16];
-                        strftime(aosBuf, sizeof(aosBuf), "%H:%M:%S", aos_info);
+                        canvas->setTextColor(dopplerShiftHz > 0 ? TFT_CYAN : TFT_ORANGE);
+                        char dopBuf[32];
+                        sprintf(dopBuf, "%+dHz", (int)dopplerShiftHz);
+                        canvas->drawString(dopBuf, rightX + canvas->textWidth(freqBuf) + 2, radioY + 11);
                         
-                        struct tm* los_info = localtime(&losTime);
-                        char losBuf[16];
-                        strftime(losBuf, sizeof(losBuf), "%H:%M:%S", los_info);
+                        canvas->setTextColor(TFT_LIGHTGRAY);
+                        canvas->drawString("Mode: " + selSat.radioMode, rightX, radioY + 22);
+                    }
+                    else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
+                        double dlFreq2 = 145.825;
+                        double dopplerShiftHz2 = -(radialVel / 299792.458) * (dlFreq2 * 1e6);
                         
-                        char aosStr[32];
-                        char losStr[32];
-                        sprintf(aosStr, "AOS: %s", aosBuf);
-                        sprintf(losStr, "LOS: %s El:%02d", losBuf, (int)nextPass.maxElevation);
+                        canvas->setTextColor(TFT_GREEN);
+                        char f1[32];
+                        sprintf(f1, "APRS:%07.3f", dlFreq2 + dopplerShiftHz2/1e6);
+                        canvas->drawString(f1, rightX, radioY + 11);
                         
-                        canvas->drawString(aosStr, rightX, nextLineY);
-                        canvas->drawString(losStr, rightX, nextLineY + 11);
+                        char f2[32];
+                        sprintf(f2, "SSTV:%07.3f", dlFreq + dopplerShiftHz/1e6);
+                        canvas->drawString(f2, rightX, radioY + 22);
+                        
+                        canvas->setTextColor(TFT_LIGHTGRAY);
+                        canvas->drawString("Mode: FM/Packet", rightX, radioY + 33);
+                    }
+                    else if (selSat.type == SAT_TYPE_HAM) {
+                        canvas->setTextColor(TFT_GREEN);
+                        char freqBuf[32];
+                        sprintf(freqBuf, "Rx:%s", selSat.downlinkFreq.c_str());
+                        canvas->drawString(freqBuf, rightX, radioY + 11);
+                        
+                        canvas->setTextColor(dopplerShiftHz > 0 ? TFT_CYAN : TFT_ORANGE);
+                        char dopBuf[32];
+                        sprintf(dopBuf, "%+dHz", (int)dopplerShiftHz);
+                        canvas->drawString(dopBuf, rightX + canvas->textWidth(freqBuf) + 2, radioY + 11);
+                        
+                        int nextLineY = radioY + 22;
+                        if (selSat.uplinkFreq.length() > 0) {
+                            canvas->setTextColor(TFT_RED);
+                            String txStr = "Tx:" + selSat.uplinkFreq;
+                            if (selSat.tone.length() > 0) txStr += " T:" + selSat.tone;
+                            canvas->drawString(txStr.c_str(), rightX, nextLineY);
+                            nextLineY += 11;
+                        }
+                        
+                        canvas->setTextColor(TFT_LIGHTGRAY);
+                        canvas->drawString("Mode: " + selSat.radioMode, rightX, nextLineY);
+                    }
+                } else {
+                    if (selSat.type == SAT_TYPE_WEATHER) {
+                        canvas->setTextColor(TFT_GREEN);
+                        canvas->drawString("Rx: " + selSat.downlinkFreq + " MHz", rightX, radioY);
+                        canvas->setTextColor(TFT_CYAN);
+                        canvas->drawString("Mode: " + selSat.radioMode, rightX, radioY + 11);
+                        canvas->setTextColor(TFT_LIGHTGRAY);
+                        canvas->drawString("Weather Imaging", rightX, radioY + 22);
+                    }
+                    else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
+                        canvas->setTextColor(TFT_GREEN);
+                        canvas->drawString("APRS: 145.825 MHz", rightX, radioY);
+                        canvas->drawString("SSTV: 145.800 MHz", rightX, radioY + 11);
+                        canvas->setTextColor(TFT_CYAN);
+                        canvas->drawString("Mode: FM/Packet", rightX, radioY + 22);
+                    }
+                    else if (selSat.type == SAT_TYPE_HAM) {
+                        canvas->setTextColor(TFT_GREEN);
+                        canvas->drawString("Rx: " + selSat.downlinkFreq + " MHz", rightX, radioY);
+                        
+                        int nextLineY = radioY + 11;
+                        if (selSat.uplinkFreq.length() > 0) {
+                            canvas->setTextColor(TFT_RED);
+                            String txStr = "Tx:" + selSat.uplinkFreq;
+                            if (selSat.tone.length() > 0) txStr += " T:" + selSat.tone;
+                            canvas->drawString(txStr.c_str(), rightX, nextLineY);
+                            nextLineY += 11;
+                        }
+                        
+                        canvas->setTextColor(TFT_CYAN);
+                        canvas->drawString("Mode: " + selSat.radioMode, rightX, nextLineY);
+                        nextLineY += 11;
+                        
+                        PassEvent nextPass;
+                        bool foundNext = false;
+                        for (const auto& pass : recommendedPasses) {
+                            if (pass.satName == selSat.name && pass.aosTime >= current_unix + timeMachineOffset) {
+                                nextPass = pass;
+                                foundNext = true;
+                                break;
+                            }
+                        }
+                        if (foundNext) {
+                            canvas->setTextColor(TFT_YELLOW);
+                            time_t aosTime = nextPass.aosTime;
+                            time_t losTime = nextPass.losTime;
+                            
+                            struct tm* aos_info = localtime(&aosTime);
+                            char aosBuf[16];
+                            strftime(aosBuf, sizeof(aosBuf), "%H:%M:%S", aos_info);
+                            
+                            struct tm* los_info = localtime(&losTime);
+                            char losBuf[16];
+                            strftime(losBuf, sizeof(losBuf), "%H:%M:%S", los_info);
+                            
+                            char aosStr[32];
+                            char losStr[32];
+                            sprintf(aosStr, "AOS: %s", aosBuf);
+                            sprintf(losStr, "LOS: %s El:%02d", losBuf, (int)nextPass.maxElevation);
+                            
+                            canvas->drawString(aosStr, rightX, nextLineY);
+                            canvas->drawString(losStr, rightX, nextLineY + 11);
+                        }
+                    }
+                }
+            }
+        } else {
+            if (downloadErrorMsg.length() > 0) {
+                canvas->setTextColor(TFT_RED);
+                drawWrappedText(canvas, downloadErrorMsg.c_str(), rightX, descY, width - rightX - 5, 10);
+            } else {
+                canvas->setTextColor(TFT_LIGHTGRAY);
+                int lines = drawWrappedText(canvas, "Enter 5-digit NORAD ID to add custom satellite.", rightX, descY, width - rightX - 5, 10);
+                
+                canvas->setTextColor(TFT_YELLOW);
+                canvas->drawString("Source: celestrak.org", rightX, descY + lines * 10 + 4);
+            }
+        }
+    } else {
+        // TAB_RECENT_LAUNCH Tab
+        if (!recentLaunchDownloadSuccess && g_recentLaunches.empty()) {
+            if (recentLaunchDownloading) {
+                canvas->setTextColor(TFT_YELLOW);
+                canvas->drawString("Downloading TLEs...", width/2 - canvas->textWidth("Downloading TLEs...")/2, height/2 - 10);
+                if (recentLaunchErrorMsg.length() > 0) {
+                    canvas->setTextColor(TFT_LIGHTGRAY);
+                    canvas->drawString(recentLaunchErrorMsg.c_str(), width/2 - canvas->textWidth(recentLaunchErrorMsg.c_str())/2, height/2 + 5);
+                }
+            } else {
+                canvas->fillRect(10, 30, width - 20, height - 55, canvas->color565(35, 45, 55));
+                canvas->drawRect(10, 30, width - 20, height - 55, TFT_YELLOW);
+                
+                canvas->setTextColor(TFT_YELLOW);
+                canvas->drawString("Recent Launch is an online feature.", width/2 - canvas->textWidth("Recent Launch is an online feature.")/2, height/2 - 20);
+                canvas->setTextColor(TFT_WHITE);
+                canvas->drawString("Press 'w' to connect WiFi", width/2 - canvas->textWidth("Press 'w' to connect WiFi")/2, height/2 - 2);
+                canvas->drawString("& download latest launcher groups.", width/2 - canvas->textWidth("& download latest launcher groups.")/2, height/2 + 8);
+                
+                if (recentLaunchErrorMsg.length() > 0) {
+                    canvas->setTextColor(TFT_RED);
+                    canvas->drawString(recentLaunchErrorMsg.c_str(), width/2 - canvas->textWidth(recentLaunchErrorMsg.c_str())/2, height/2 + 22);
+                }
+            }
+        } else {
+            int yPos = 25;
+            int itemsPerPage = 6;
+            int startIndex = (recentLaunchSelectedIndex / itemsPerPage) * itemsPerPage;
+            int totalItems = g_recentLaunches.size();
+            
+            for (int i = 0; i < itemsPerPage && (startIndex + i) < totalItems; i++) {
+                int index = startIndex + i;
+                if (index == recentLaunchSelectedIndex) {
+                    canvas->fillRect(2, yPos - 2, 82, 15, canvas->color565(0, 120, 255));
+                    canvas->setTextColor(TFT_WHITE);
+                } else {
+                    canvas->setTextColor(TFT_LIGHTGRAY);
+                }
+                
+                String checkBox = g_recentLaunches[index].selected ? "[x]" : "[ ]";
+                canvas->drawString(checkBox.c_str(), 4, yPos);
+                
+                String nameStr = g_recentLaunches[index].displayName;
+                if (g_recentLaunches[index].isGroup) {
+                    nameStr = nameStr + " (" + String(g_recentLaunches[index].satelliteCount) + ")";
+                }
+                if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
+                canvas->drawString(nameStr.c_str(), 28, yPos);
+                
+                yPos += 16;
+            }
+            
+            canvas->drawFastVLine(85, 20, height-31, TFT_DARKGREY);
+            
+            int rightX = 89;
+            if (recentLaunchSelectedIndex < totalItems) {
+                RecentLaunchItem& item = g_recentLaunches[recentLaunchSelectedIndex];
+                
+                uint32_t epoch = item.epoch;
+                float inclination = item.inclination;
+                float avgAlt = item.avgAlt;
+                
+                uint32_t currentSimTime = current_unix + timeMachineOffset;
+                int ageDays = -1;
+                if (epoch > 0 && currentSimTime >= epoch) {
+                    ageDays = (currentSimTime - epoch) / 86400;
+                }
+                
+                char ageBuf[32];
+                uint16_t ageColor = TFT_GREEN;
+                if (ageDays < 0) {
+                    sprintf(ageBuf, "Age: N/A");
+                    ageColor = TFT_RED;
+                } else {
+                    sprintf(ageBuf, "Age: %dd", ageDays);
+                    if (ageDays <= 7) ageColor = TFT_GREEN;
+                    else if (ageDays <= 14) ageColor = TFT_ORANGE;
+                    else ageColor = TFT_RED;
+                }
+                
+                canvas->setTextColor(ageColor);
+                int ageW = canvas->textWidth(ageBuf);
+                canvas->drawString(ageBuf, width - ageW - 4, 23);
+                
+                if (!recentLaunchInObjectsView) {
+                    canvas->setTextColor(TFT_GOLD);
+                    canvas->drawString(item.displayName.c_str(), rightX, 25);
+                    
+                    canvas->setTextColor(TFT_CYAN);
+                    canvas->drawString(("Batch: " + item.batchId).c_str(), rightX, 35);
+                    
+                    canvas->setTextColor(TFT_LIGHTGRAY);
+                    canvas->drawString(("Total Sats: " + String(item.satelliteCount)).c_str(), rightX, 45);
+                    
+                    char orbitBuf[48];
+                    sprintf(orbitBuf, "Orbit: %dkm, %.1f*", (int)avgAlt, inclination);
+                    canvas->drawString(orbitBuf, rightX, 57);
+                    
+                    canvas->setTextColor(TFT_GREEN);
+                    canvas->drawString("Status:", rightX, 70);
+                    canvas->setTextColor(TFT_WHITE);
+                    if (ageDays >= 0) {
+                        if (ageDays <= 2) canvas->drawString("Tight Train *****", rightX, 80);
+                        else if (ageDays <= 7) canvas->drawString("Train ****", rightX, 80);
+                        else if (ageDays <= 14) canvas->drawString("Dispersing ***", rightX, 80);
+                        else canvas->drawString("Operational **", rightX, 80);
+                    } else {
+                        canvas->drawString("Unknown Status *", rightX, 80);
+                    }
+                    
+                    canvas->setTextColor(TFT_GREEN);
+                    canvas->drawString("Est. Visibility:", rightX, 93);
+                    canvas->setTextColor(TFT_YELLOW);
+                    if (avgAlt >= 250 && avgAlt <= 600) {
+                        canvas->drawString("Excellent", rightX, 103);
+                    } else if (avgAlt > 0) {
+                        canvas->drawString("Moderate", rightX, 103);
+                    } else {
+                        canvas->drawString("N/A", rightX, 103);
+                    }
+                    
+                    canvas->setTextColor(TFT_LIGHTGRAY);
+                    canvas->drawString("Press 'O' for Objects", rightX, 114);
+                } else {
+                    canvas->setTextColor(TFT_GOLD);
+                    String title = item.displayName;
+                    if (title.length() > 10) title = title.substring(0, 8) + "..";
+                    canvas->drawString((title + " Objects").c_str(), rightX, 25);
+                    
+                    canvas->setTextColor(TFT_CYAN);
+                    int startNum = recentLaunchObjectPage * 5 + 1;
+                    int endNum = startNum + g_level3Objects.size() - 1;
+                    char pageBuf[32];
+                    sprintf(pageBuf, "Page %d (%d-%d)", recentLaunchObjectPage + 1, startNum, endNum);
+                    canvas->drawString(pageBuf, rightX, 35);
+                    
+                    int memY = 48;
+                    for (size_t s = 0; s < g_level3Objects.size(); s++) {
+                        auto& obj = g_level3Objects[s];
+                        String satName = obj.name;
+                        if (satName.length() > 16) satName = satName.substring(0, 14) + "..";
+                        
+                        canvas->setTextColor(TFT_LIGHTGRAY);
+                        canvas->drawString(("- " + satName).c_str(), rightX, memY + s * 13);
+                        
+                        if (obj.lastGeoValid) {
+                            char hBuf[16];
+                            sprintf(hBuf, "%dkm", (int)obj.lastGeo.alt);
+                            canvas->setTextColor(TFT_GREEN);
+                            canvas->drawString(hBuf, width - 36, memY + s * 13);
+                        }
+                    }
+                    
+                    if (g_level3Objects.empty()) {
+                        canvas->setTextColor(TFT_RED);
+                        canvas->drawString("No Objects Found.", rightX, memY);
                     }
                 }
             }
         }
+    }
+    
+    // Draw Bottom Guide Banner
+    canvas->fillRect(0, height - 11, width, 11, canvas->color565(15, 20, 25));
+    canvas->drawFastHLine(0, height - 11, width, TFT_DARKGREY);
+    canvas->setTextColor(TFT_LIGHTGRAY);
+    if (currentSatTab == TAB_RECENT_LAUNCH && recentLaunchInObjectsView) {
+        canvas->drawString("[[ ] Page Prev/Next  [ESC] Back to Mission", 4, height - 9);
     } else {
-        canvas->setTextColor(downloadErrorMsg.length() > 0 ? TFT_RED : TFT_LIGHTGRAY);
-        String msg = downloadErrorMsg.length() > 0 ? downloadErrorMsg : "Enter 5-digit NORAD ID to add custom satellite.";
-        drawWrappedText(canvas, msg.c_str(), rightX, descY, width - rightX - 5, 10);
+        canvas->drawString("[;/. ] Move  [ENT] Sel  [w] WiFi  [/] Tab  [ESC] Exit", 4, height - 9);
     }
     
     // Draw Delete Confirm Popup
-    if (deleteConfirmIndex >= NUM_BUILTIN_SATELLITES && deleteConfirmIndex < NUM_SATELLITES) {
+    if (deleteConfirmIndex >= NUM_BUILTIN_SATELLITES && deleteConfirmIndex < NUM_SATELLITES && currentSatTab == TAB_ENCYCLOPEDIA) {
         canvas->fillRect(40, height/2 - 20, width - 80, 40, TFT_RED);
         canvas->drawRect(40, height/2 - 20, width - 80, 40, TFT_WHITE);
         canvas->setTextColor(TFT_WHITE);
@@ -1352,6 +2141,21 @@ void drawSatSelectPage() {
 }
 
 void loop() {
+    if (g_recentLaunchesPending) {
+        g_recentLaunches = g_pendingRecentLaunches;
+        g_pendingRecentLaunches.clear();
+        g_recentLaunchesPending = false;
+        if (g_recentLaunchFocusMode) {
+            for (auto& item : g_recentLaunches) {
+                if (item.batchId == recentLaunchActiveBatchId) {
+                    initRecentLaunchCalcs(item);
+                    break;
+                }
+            }
+        }
+        LOG_I("APP", "Applied new recent launches safely on main core.");
+    }
+
     bool isFastForwarding = false;
     M5Cardputer.update();
 
@@ -1382,6 +2186,7 @@ void loop() {
         static char lastKey = 0;
         static unsigned long lastKeyRepeat = 0;
         isFastForwarding = false;
+        static double targetFocusAlt = 0.0;
         
         if (appState == STATE_MAIN) {
             char currentKey = 0;
@@ -1438,7 +2243,14 @@ void loop() {
                 
                 if (key == '-' || key == '_') {
                     currentZoom -= 0.2f;
-                    if (currentZoom < 1.0f) currentZoom = 1.0f;
+                    float minLimit = 0.95f;
+                    if (isSatViewMode) {
+                        double visualAlt = targetFocusAlt;
+                        if (visualAlt > 20000.0f) visualAlt = 20000.0f;
+                        if (visualAlt < 0.0f) visualAlt = 0.0f;
+                        minLimit = 62.0f / (55.0f + sqrtf(visualAlt) * 0.4f);
+                    }
+                    if (currentZoom < minLimit) currentZoom = minLimit;
                 } else if (key == '=' || key == '+') {
                     currentZoom += 0.2f;
                     if (currentZoom > 20.0f) currentZoom = 20.0f;
@@ -1484,7 +2296,7 @@ void loop() {
                 if (M5Cardputer.Keyboard.isKeyPressed('c')) {
                     if (isSatViewMode) {
                         isSatViewMode = false;
-                        currentZoom = 1.0f;
+                        currentZoom = 0.95f;
                         earth_renderer->setZoom(currentZoom);
                     }
                     isManualLocationMode = !isManualLocationMode;
@@ -1545,7 +2357,7 @@ void loop() {
                         }
                         portEXIT_CRITICAL(&passMutex);
                         
-                        if (!isCacheValid) {
+                        if (!isCacheValid && !g_orbitCalculating) {
                             triggerPrediction = true;
                             portENTER_CRITICAL(&passMutex);
                             predictionsReady = false;
@@ -1571,13 +2383,14 @@ void loop() {
                 } else if (M5Cardputer.Keyboard.isKeyPressed('w')) {
                     if (!HalWifi::isConnected()) {
                         manualWifiToggle = true;
-                        xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+                        xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
                     } else {
                         WiFi.disconnect(true);
                         WiFi.mode(WIFI_OFF);
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed('s')) {
                     appState = STATE_SAT_SELECT;
+                    currentSatTab = TAB_ENCYCLOPEDIA;
                     entrySelectedSatellites.clear();
                     for (int i = 0; i < NUM_SATELLITES; i++) {
                         if (g_satellites[i].selected) {
@@ -1669,7 +2482,7 @@ void loop() {
                         
                         manualWifiToggle = true; // Stay connected since user explicitly set it up
                         xTaskCreatePinnedToCore(
-                            networkTask, "NetworkTask", 8192, params, 1, NULL, 0
+                            networkTask, "NetworkTask", 16384, params, 1, NULL, 0
                         );
                     } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
                         if (wifiPasswordLen > 0) {
@@ -1704,9 +2517,9 @@ void loop() {
                     }
                 }
             } else if (appState == STATE_SAT_SELECT) {
-                if (deleteConfirmIndex >= 0) {
+                if (deleteConfirmIndex >= 0 && currentSatTab == TAB_ENCYCLOPEDIA) {
                     if (deleteConfirmIndex < NUM_BUILTIN_SATELLITES) {
-                        deleteConfirmIndex = -1; // Force reset to protect built-in satellites
+                        deleteConfirmIndex = -1;
                     } else if (M5Cardputer.Keyboard.isKeyPressed('y')) {
                         if (deleteConfirmIndex >= NUM_BUILTIN_SATELLITES && deleteConfirmIndex < NUM_SATELLITES) {
                             for (int i = deleteConfirmIndex; i < NUM_SATELLITES - 1; i++) {
@@ -1722,111 +2535,236 @@ void loop() {
                     } else if (M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed(27)) {
                         deleteConfirmIndex = -1;
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) {
-                    if (!HalWifi::isConnected()) {
-                        manualWifiToggle = true;
-                        downloadErrorMsg = "Connecting to WiFi...";
-                        drawSatSelectPage();
-                        earth_renderer->getCanvas()->pushSprite(0, 0);
-                        xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
-                    } else {
-                        WiFi.disconnect(true);
-                        WiFi.mode(WIFI_OFF);
-                        downloadErrorMsg = "WiFi Disconnected.";
-                    }
-                } else if (satSelectedIndex == NUM_SATELLITES) {
-                    // Inputting NORAD ID
-                    if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
-                        if (noradInput.length() > 0) noradInput.remove(noradInput.length() - 1);
-                        downloadErrorMsg = "";
-                    } else if (M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
-                        appState = STATE_MAIN;
-                    } else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
-                        if (satSelectedIndex > 0) satSelectedIndex--;
-                    } else if (M5Cardputer.Keyboard.isKeyPressed('.')) {
-                        satSelectedIndex = 0;
-                    } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
-                        if (noradInput.length() == 5 && !isDownloadingCustom) {
-                            isDownloadingCustom = true;
-                            drawSatSelectPage();
-                            earth_renderer->getCanvas()->pushSprite(0, 0);
-                            
-                            int id = noradInput.toInt();
-                            TLEData loaded_tle;
-                            if (TLEUpdater::getTLE(id, loaded_tle)) {
-                                SatProfile p;
-                                p.noradId = id;
-                                p.name = loaded_tle.name;
-                                p.color = TFT_WHITE;
-                                p.baseScore = 0;
-                                p.stdMag = 3.0;
-                                p.selected = true; // Auto select newly added custom sat
-                                p.iconType = ICON_SATELLITE;
-                                p.tle = loaded_tle;
-                                p.calc.init(p.tle);
-                                p.description = "Custom added satellite.\n\nPress 'd' to delete this satellite.";
-                                p.type = SAT_TYPE_VISUAL;
-                                if (NUM_SATELLITES < MAX_SATELLITES) {
-                                    g_satellites[NUM_SATELLITES++] = p;
-                                    saveCustomSatellites();
-                                }
-                                noradInput = "";
-                                
-                            } else {
-                                if (WiFi.status() != WL_CONNECTED) {
-                                    downloadErrorMsg = "Error: WiFi not connected! Press 'w' on main screen.";
-                                } else {
-                                    downloadErrorMsg = "Error: Download failed or ID not found.";
-                                }
-                            }
-                            isDownloadingCustom = false;
+                } else if (M5Cardputer.Keyboard.isKeyPressed(',') || M5Cardputer.Keyboard.isKeyPressed('/')) {
+                    currentSatTab = (currentSatTab == TAB_ENCYCLOPEDIA) ? TAB_RECENT_LAUNCH : TAB_ENCYCLOPEDIA;
+                    noradInput = "";
+                    downloadErrorMsg = "";
+                    if (currentSatTab == TAB_ENCYCLOPEDIA) {
+                        if (g_recentLaunchFocusMode) {
+                            g_recentLaunchFocusMode = false;
+                            recentLaunchActiveBatchId = "";
+                            g_repSatInitialized = false;
+                            portENTER_CRITICAL(&passMutex);
+                            predictionsReady = false;
+                            lastPredictionBaseTime = 0;
+                            portEXIT_CRITICAL(&passMutex);
+                            triggerPrediction = true;
                         }
                     } else {
-                        for (auto c : M5Cardputer.Keyboard.keysState().word) {
-                            if (c >= '0' && c <= '9' && noradInput.length() < 5) {
-                                noradInput += c;
-                                downloadErrorMsg = "";
+                        bool hasSelected = false;
+                        for (const auto& item : g_recentLaunches) {
+                            if (item.selected) {
+                                g_recentLaunchFocusMode = true;
+                                recentLaunchActiveBatchId = item.batchId;
+                                initRecentLaunchCalcs(item);
+                                hasSelected = true;
+                                break;
+                            }
+                        }
+                        if (!hasSelected) {
+                            g_recentLaunchFocusMode = false;
+                            recentLaunchActiveBatchId = "";
+                            g_repSatInitialized = false;
+                        }
+                    }
+                } else if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) {
+                    if (currentSatTab == TAB_RECENT_LAUNCH) {
+                        if (g_dataUpdating || g_wifiConnecting) {
+                            recentLaunchErrorMsg = "System Busy... Wait.";
+                            drawSatSelectPage();
+                            earth_renderer->getCanvas()->pushSprite(0, 0);
+                        } else if (!recentLaunchDownloading) {
+                            recentLaunchDownloading = true;
+                            recentLaunchErrorMsg = "Connecting WiFi...";
+                            drawSatSelectPage();
+                            earth_renderer->getCanvas()->pushSprite(0, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 8192, NULL, 1, NULL, 0);
+                            if (res != pdPASS) {
+                                recentLaunchDownloading = false;
+                                recentLaunchErrorMsg = "Task Init Failed!";
+                                drawSatSelectPage();
+                                earth_renderer->getCanvas()->pushSprite(0, 0);
+                            }
+                        }
+                    } else {
+                        if (recentLaunchDownloading) {
+                            downloadErrorMsg = "Recent Launch Busy...";
+                            drawSatSelectPage();
+                            earth_renderer->getCanvas()->pushSprite(0, 0);
+                        } else if (!HalWifi::isConnected()) {
+                            manualWifiToggle = true;
+                            downloadErrorMsg = "Connecting to WiFi...";
+                            drawSatSelectPage();
+                            earth_renderer->getCanvas()->pushSprite(0, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+                            if (res != pdPASS) {
+                                downloadErrorMsg = "Task Init Failed!";
+                                drawSatSelectPage();
+                                earth_renderer->getCanvas()->pushSprite(0, 0);
+                            }
+                        } else {
+                            WiFi.disconnect(true);
+                            WiFi.mode(WIFI_OFF);
+                            downloadErrorMsg = "WiFi Disconnected.";
+                        }
+                    }
+                } else if (currentSatTab == TAB_RECENT_LAUNCH) {
+                    if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
+                        if (recentLaunchInObjectsView) {
+                            recentLaunchInObjectsView = false;
+                            g_level3Objects.clear();
+                            g_level3Objects.shrink_to_fit();
+                        } else {
+                            appState = STATE_MAIN;
+                        }
+                    } else if (M5Cardputer.Keyboard.isKeyPressed('o') || M5Cardputer.Keyboard.isKeyPressed('O')) {
+                        if (!recentLaunchInObjectsView && recentLaunchSelectedIndex >= 0 && recentLaunchSelectedIndex < (int)g_recentLaunches.size()) {
+                            recentLaunchInObjectsView = true;
+                            recentLaunchObjectPage = 0;
+                            loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], 0);
+                        }
+                    } else if (M5Cardputer.Keyboard.isKeyPressed('[')) {
+                        if (recentLaunchInObjectsView && recentLaunchSelectedIndex >= 0) {
+                            if (recentLaunchObjectPage > 0) {
+                                recentLaunchObjectPage--;
+                                loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], recentLaunchObjectPage);
+                            }
+                        }
+                    } else if (M5Cardputer.Keyboard.isKeyPressed(']')) {
+                        if (recentLaunchInObjectsView && recentLaunchSelectedIndex >= 0) {
+                            int maxPage = (g_recentLaunches[recentLaunchSelectedIndex].satelliteCount - 1) / 5;
+                            if (recentLaunchObjectPage < maxPage) {
+                                recentLaunchObjectPage++;
+                                loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], recentLaunchObjectPage);
+                            }
+                        }
+                    } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                        if (recentLaunchSelectedIndex >= 0 && recentLaunchSelectedIndex < (int)g_recentLaunches.size()) {
+                            bool prevSelected = g_recentLaunches[recentLaunchSelectedIndex].selected;
+                            for (size_t i = 0; i < g_recentLaunches.size(); i++) {
+                                g_recentLaunches[i].selected = false;
+                            }
+                            g_recentLaunches[recentLaunchSelectedIndex].selected = !prevSelected;
+                            if (g_recentLaunches[recentLaunchSelectedIndex].selected) {
+                                g_recentLaunchFocusMode = true;
+                                recentLaunchActiveBatchId = g_recentLaunches[recentLaunchSelectedIndex].batchId;
+                                initRecentLaunchCalcs(g_recentLaunches[recentLaunchSelectedIndex]);
+                            } else {
+                                g_recentLaunchFocusMode = false;
+                                recentLaunchActiveBatchId = "";
+                                g_repSatInitialized = false;
+                            }
+                            portENTER_CRITICAL(&passMutex);
+                            predictionsReady = false;
+                            lastPredictionBaseTime = 0;
+                            portEXIT_CRITICAL(&passMutex);
+                            triggerPrediction = true;
+                        }
+                    } else if (M5Cardputer.Keyboard.isKeyPressed(';')) { // UP
+                        if (!recentLaunchInObjectsView) {
+                            if (recentLaunchSelectedIndex > 0) recentLaunchSelectedIndex--;
+                            else if (!g_recentLaunches.empty()) recentLaunchSelectedIndex = g_recentLaunches.size() - 1;
+                        }
+                    } else if (M5Cardputer.Keyboard.isKeyPressed('.')) { // DOWN
+                        if (!recentLaunchInObjectsView) {
+                            if (!g_recentLaunches.empty()) {
+                                recentLaunchSelectedIndex = (recentLaunchSelectedIndex + 1) % g_recentLaunches.size();
                             }
                         }
                     }
                 } else {
-                    if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
-                        appState = STATE_MAIN;
-                        // 检查选中的卫星是否发生变化
-                        bool selectionChanged = false;
-                        std::vector<int> currentSelected;
-                        for (int i = 0; i < NUM_SATELLITES; i++) {
-                            if (g_satellites[i].selected) {
-                                currentSelected.push_back(g_satellites[i].noradId);
+                    // TAB_ENCYCLOPEDIA
+                    if (satSelectedIndex == NUM_SATELLITES) {
+                        // Inputting NORAD ID
+                        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+                            if (noradInput.length() > 0) noradInput.remove(noradInput.length() - 1);
+                            downloadErrorMsg = "";
+                        } else if (M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
+                            appState = STATE_MAIN;
+                        } else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
+                            if (satSelectedIndex > 0) satSelectedIndex--;
+                        } else if (M5Cardputer.Keyboard.isKeyPressed('.')) {
+                            satSelectedIndex = 0;
+                        } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                            if (noradInput.length() == 5 && !isDownloadingCustom) {
+                                isDownloadingCustom = true;
+                                drawSatSelectPage();
+                                earth_renderer->getCanvas()->pushSprite(0, 0);
+                                
+                                int id = noradInput.toInt();
+                                TLEData loaded_tle;
+                                if (TLEUpdater::getTLE(id, loaded_tle)) {
+                                    SatProfile p;
+                                    p.noradId = id;
+                                    p.name = loaded_tle.name;
+                                    p.color = TFT_WHITE;
+                                    p.baseScore = 0;
+                                    p.stdMag = 3.0;
+                                    p.selected = true;
+                                    p.iconType = ICON_SATELLITE;
+                                    p.tle = loaded_tle;
+                                    p.calc.init(p.tle);
+                                    p.description = "Custom added satellite.\n\nPress 'd' to delete this satellite.";
+                                    p.type = SAT_TYPE_VISUAL;
+                                    if (NUM_SATELLITES < MAX_SATELLITES) {
+                                        g_satellites[NUM_SATELLITES++] = p;
+                                        saveCustomSatellites();
+                                    }
+                                    noradInput = "";
+                                } else {
+                                    if (WiFi.status() != WL_CONNECTED) {
+                                        downloadErrorMsg = "Error: WiFi not connected! Press 'w' on main screen.";
+                                    } else {
+                                        downloadErrorMsg = "Error: Download failed or ID not found.";
+                                    }
+                                }
+                                isDownloadingCustom = false;
                             }
-                        }
-                        if (currentSelected.size() != entrySelectedSatellites.size()) {
-                            selectionChanged = true;
                         } else {
-                            for (size_t i = 0; i < currentSelected.size(); i++) {
-                                if (currentSelected[i] != entrySelectedSatellites[i]) {
-                                    selectionChanged = true;
-                                    break;
+                            for (auto c : M5Cardputer.Keyboard.keysState().word) {
+                                if (c >= '0' && c <= '9' && noradInput.length() < 5) {
+                                    noradInput += c;
+                                    downloadErrorMsg = "";
                                 }
                             }
                         }
-                        
-                        if (selectionChanged) {
-                            portENTER_CRITICAL(&passMutex);
-                            predictionsReady = false;
-                            lastPredictionBaseTime = 0; // 缓存失效
-                            portEXIT_CRITICAL(&passMutex);
-                            triggerPrediction = true;
+                    } else {
+                        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
+                            appState = STATE_MAIN;
+                            bool selectionChanged = false;
+                            std::vector<int> currentSelected;
+                            for (int i = 0; i < NUM_SATELLITES; i++) {
+                                if (g_satellites[i].selected) {
+                                    currentSelected.push_back(g_satellites[i].noradId);
+                                }
+                            }
+                            if (currentSelected.size() != entrySelectedSatellites.size()) {
+                                selectionChanged = true;
+                            } else {
+                                for (size_t i = 0; i < currentSelected.size(); i++) {
+                                    if (currentSelected[i] != entrySelectedSatellites[i]) {
+                                        selectionChanged = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (selectionChanged) {
+                                portENTER_CRITICAL(&passMutex);
+                                predictionsReady = false;
+                                lastPredictionBaseTime = 0;
+                                portEXIT_CRITICAL(&passMutex);
+                                triggerPrediction = true;
+                            }
+                        } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                            g_satellites[satSelectedIndex].selected = !g_satellites[satSelectedIndex].selected;
+                        } else if (M5Cardputer.Keyboard.isKeyPressed('d') && satSelectedIndex >= NUM_BUILTIN_SATELLITES && satSelectedIndex < NUM_SATELLITES) {
+                            deleteConfirmIndex = satSelectedIndex;
+                        } else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
+                            if (satSelectedIndex > 0) satSelectedIndex--;
+                            else satSelectedIndex = NUM_SATELLITES;
+                        } else if (M5Cardputer.Keyboard.isKeyPressed('.')) {
+                            satSelectedIndex = (satSelectedIndex + 1) % (NUM_SATELLITES + 1);
                         }
-                    } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
-                        g_satellites[satSelectedIndex].selected = !g_satellites[satSelectedIndex].selected;
-                    } else if (M5Cardputer.Keyboard.isKeyPressed('d') && satSelectedIndex >= NUM_BUILTIN_SATELLITES && satSelectedIndex < NUM_SATELLITES) {
-                        deleteConfirmIndex = satSelectedIndex;
-                    } else if (M5Cardputer.Keyboard.isKeyPressed(';')) { // UP arrow
-                        if (satSelectedIndex > 0) satSelectedIndex--;
-                        else satSelectedIndex = NUM_SATELLITES; // Move to Add row
-                    } else if (M5Cardputer.Keyboard.isKeyPressed('.')) { // DOWN arrow
-                        satSelectedIndex = (satSelectedIndex + 1) % (NUM_SATELLITES + 1); // +1 for Add row
                     }
                 }
             }
@@ -1878,6 +2816,7 @@ void loop() {
                 if (gData.timeValid && gData.dateValid && !gnssTimeSynced) {
                     current_unix = convertGNSSDateToUnix(gData.year, gData.month, gData.day, gData.hour, gData.minute, gData.second);
                     gnssTimeSynced = true;
+                    g_timeSynced = true;
                     LOG_I("APP", "Time synced to GNSS UTC: %u", current_unix);
                     
                     // Trigger predictor again with correct time
@@ -1909,101 +2848,128 @@ void loop() {
         float targetYaw = 0.0f;
         int targetOffsetX = 0;
         int targetOffsetY = 0;
-        double targetFocusAlt = 0.0;
+        targetFocusAlt = 0.0;
         
-        earth_renderer->setZoom(currentZoom);
-        
-        if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
-            double tx, ty, tz;
-            if (g_satellites[focusSatIndex].calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
-                double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
-                ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
-                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
-                targetViewLat = geo.lat;
-                targetViewLon = geo.lon;
-                targetFocusAlt = geo.alt;
+        static bool prevSatViewMode = false;
+        if (isSatViewMode) {
+            bool hasFocalPos = false;
+            GeodeticCoord focalGeo;
+            if (g_recentLaunchFocusMode) {
+                if (g_repSatCache.lastGeoValid) {
+                    focalGeo = g_repSatCache.lastGeo;
+                    hasFocalPos = true;
+                }
+            } else if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+                double tx, ty, tz;
+                if (g_satellites[focusSatIndex].calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
+                    double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
+                    ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                    focalGeo = CoordTransform::ecefToGeodetic(ecef);
+                    hasFocalPos = true;
+                }
             }
             
-            targetOffsetX = 0; targetOffsetY = 0; // Keep centered
-            if (attitude && imu) {
+            if (hasFocalPos) {
+                targetFocusAlt = focalGeo.alt;
+                
+                float visualAlt = targetFocusAlt;
+                if (visualAlt > 20000.0f) visualAlt = 20000.0f;
+                if (visualAlt < 0.0f) visualAlt = 0.0f;
+                
+                float adaptiveZoom = 62.0f / (55.0f + sqrtf(visualAlt) * 0.4f);
+                if (!prevSatViewMode) {
+                    currentZoom = adaptiveZoom;
+                }
+                prevSatViewMode = true;
+                
+                if (!(attitude && imu)) {
+                    targetViewLat = focalGeo.lat;
+                    targetViewLon = focalGeo.lon;
+                }
+            } else {
+                targetOffsetX = 0; targetOffsetY = 0;
+                targetFocusAlt = 0;
+            }
+            
+            targetOffsetX = 0; targetOffsetY = 0;
+            if (attitude && imu && hasFocalPos) {
                 if (!isImuLocked) {
                     AttitudeData att = attitude->getAttitude();
                     lockedPitch = att.pitch - basePitch;
                     lockedRoll = att.roll - baseRoll;
                 }
-                // At zoom=1: full IMU effect (globe rotates). At zoom>=2: tiny tilt, satellite stays centered.
-                // t = 0 at zoom=1, t = 1 at zoom>=2
-                float t = currentZoom - 1.0f;
+                
+                float visualAlt = targetFocusAlt;
+                if (visualAlt > 20000.0f) visualAlt = 20000.0f;
+                if (visualAlt < 0.0f) visualAlt = 0.0f;
+                float adaptiveZoom = 62.0f / (55.0f + sqrtf(visualAlt) * 0.4f);
+                
+                float minZoom = adaptiveZoom;
+                float t = currentZoom - minZoom;
                 if (t < 0.0f) t = 0.0f;
                 if (t > 1.0f) t = 1.0f;
-                float zoomScale = t / currentZoom;
+                float globeFactor = 1.0f - t;
+                
+                targetViewLat = focalGeo.lat - lockedPitch * globeFactor;
+                targetViewLon = focalGeo.lon - lockedRoll * globeFactor;
+                
+                if (targetViewLat > 90.0) targetViewLat = 90.0;
+                if (targetViewLat < -90.0) targetViewLat = -90.0;
+                
+                float zoomScale = t;
                 targetPitch = -lockedPitch * zoomScale;
                 targetRoll = -lockedRoll * zoomScale;
                 targetYaw = 0;
-
-                // Dynamic camera tilt constraint to prevent the focal satellite from flying off-screen.
-                // We keep the maximum physical screen offset to 15 pixels.
-                float maxOffsetPixels = 15.0f;
-                float currentEarthRadius = 55.0f * currentZoom;
-                float ratio = maxOffsetPixels / currentEarthRadius;
-                if (ratio > 1.0f) ratio = 1.0f;
-                float maxAngle = asinf(ratio) * RAD_TO_DEG;
+                
+                float maxAngle = 75.0f;
                 
                 if (targetPitch > maxAngle) targetPitch = maxAngle;
                 if (targetPitch < -maxAngle) targetPitch = -maxAngle;
                 if (targetRoll > maxAngle) targetRoll = maxAngle;
                 if (targetRoll < -maxAngle) targetRoll = -maxAngle;
             }
-        } else if (isManualLocationMode) {
-            targetViewLat = baseUserLat;
-            targetViewLon = baseUserLon;
-            targetOffsetX = 0; targetOffsetY = 0;
-            targetFocusAlt = 0;
-        } else if (attitude && imu) {
-            if (!isImuLocked) {
-                AttitudeData att = attitude->getAttitude();
-                lockedPitch = att.pitch;
-                lockedRoll = att.roll;
+        } else {
+            prevSatViewMode = false;
+            if (isManualLocationMode) {
+                targetViewLat = baseUserLat;
+                targetViewLon = baseUserLon;
+                targetOffsetX = 0; targetOffsetY = 0;
+                targetFocusAlt = 0;
+            } else if (attitude && imu) {
+                if (!isImuLocked) {
+                    AttitudeData att = attitude->getAttitude();
+                    lockedPitch = att.pitch;
+                    lockedRoll = att.roll;
+                }
+                
+                float t = currentZoom - 0.95f;
+                if (t < 0.0f) t = 0.0f;
+                if (t > 1.0f) t = 1.0f;
+                float globeFactor = 1.0f - t;
+                
+                targetViewLat = baseUserLat - lockedPitch * globeFactor;
+                targetViewLon = baseUserLon - lockedRoll * globeFactor;
+                
+                if (targetViewLat > 90.0) targetViewLat = 90.0;
+                if (targetViewLat < -90.0) targetViewLat = -90.0;
+                
+                float zoomScale = t;
+                targetPitch = -lockedPitch * zoomScale;
+                targetRoll = -lockedRoll * zoomScale;
+                targetYaw = 0;
+                targetOffsetX = 0;
+                targetOffsetY = 0;
+                
+                float maxAngle = 75.0f;
+                
+                if (targetPitch > maxAngle) targetPitch = maxAngle;
+                if (targetPitch < -maxAngle) targetPitch = -maxAngle;
+                if (targetRoll > maxAngle) targetRoll = maxAngle;
+                if (targetRoll < -maxAngle) targetRoll = -maxAngle;
             }
-            
-            // t = 0 at zoom=1 (pure globe mode), t = 1 at zoom>=2 (pin-fixed camera mode)
-            float t = currentZoom - 1.0f;
-            if (t < 0.0f) t = 0.0f;
-            if (t > 1.0f) t = 1.0f;
-            float globeFactor = 1.0f - t;
-            
-            // --- Globe mode component (zoom=1) ---
-            // IMU rotates the globe: large movement, user's pin stays on the spinning surface.
-            targetViewLat = baseUserLat - lockedPitch * globeFactor;
-            targetViewLon = baseUserLon - lockedRoll * globeFactor;
-            
-            // Limit view latitude to stay strictly on the Earth body and avoid orthographic projection singularity/distortion at poles
-            if (targetViewLat > 90.0) targetViewLat = 90.0;
-            if (targetViewLat < -90.0) targetViewLat = -90.0;
-            
-            // --- Camera tilt component (zoom>=2) ---
-            // At zoom>=2, user's pin is the focal center. IMU provides tiny camera tilt (t/zoom).
-            // At zoom=2: tilt = pitch/2. At zoom=10: tilt = pitch/10. Pin stays at screen center.
-            float zoomScale = t / currentZoom;
-            targetPitch = -lockedPitch * zoomScale;
-            targetRoll = -lockedRoll * zoomScale;
-            targetYaw = 0;
-            targetOffsetX = 0;
-            targetOffsetY = 0;
-
-            // Dynamic camera tilt constraint to prevent the user pin from flying off-screen.
-            // We keep the maximum physical screen offset to 15 pixels.
-            float maxOffsetPixels = 15.0f;
-            float currentEarthRadius = 55.0f * currentZoom;
-            float ratio = maxOffsetPixels / currentEarthRadius;
-            if (ratio > 1.0f) ratio = 1.0f;
-            float maxAngle = asinf(ratio) * RAD_TO_DEG;
-            
-            if (targetPitch > maxAngle) targetPitch = maxAngle;
-            if (targetPitch < -maxAngle) targetPitch = -maxAngle;
-            if (targetRoll > maxAngle) targetRoll = maxAngle;
-            if (targetRoll < -maxAngle) targetRoll = -maxAngle;
         }
+        
+        earth_renderer->setZoom(currentZoom);
         
         static double smoothViewLat = baseUserLat;
         static double smoothViewLon = baseUserLon;
@@ -2019,7 +2985,7 @@ void loop() {
         if (lonDiff > 180.0) targetViewLon -= 360.0;
         else if (lonDiff < -180.0) targetViewLon += 360.0;
         
-        float dt = isFastForwarding ? 1.0f : 0.15f; // Instant snap when fast forwarding
+        float dt = (isFastForwarding || isSatViewMode) ? 1.0f : 0.15f; // Instant snap when fast forwarding or locked in Sat View to prevent orbital jitter
         
         smoothViewLat += (targetViewLat - smoothViewLat) * dt;
         smoothViewLon += (targetViewLon - smoothViewLon) * dt;
@@ -2082,113 +3048,239 @@ void loop() {
             lastSimTime = simTime;
         }
 
+        double current_gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(simTime));
+        SunPositionData view_sun_pos;
+        SunPositionData observer_sun_pos;
+        if (sun_calc) {
+            view_sun_pos = sun_calc->calculatePosition(simTime, viewLat, viewLon);
+            observer_sun_pos = sun_calc->calculatePosition(simTime, baseUserLat, baseUserLon);
+        }
         static std::vector<SatRenderData> sats;
         sats.clear();
-        sats.reserve(NUM_SATELLITES);
         int orbitsCalculatedThisFrame = 0;
-        
-        for (int i = 0; i < NUM_SATELLITES; i++) {
-            if (!g_satellites[i].selected) {
-                g_satCaches[i].lastGeoValid = false; // Reset cache flag for unselected sat
-                g_satCaches[i].isVisible = false;
-                continue;
+        if (g_recentLaunchFocusMode) {
+            RecentLaunchItem* activeGroup = nullptr;
+            for (auto& item : g_recentLaunches) {
+                if (item.selected && item.batchId == recentLaunchActiveBatchId) {
+                    activeGroup = &item;
+                    break;
+                }
             }
             
-            // 只有在模拟时间改变，或者缓存本来就无效时，才重新进行 SGP4 物理计算和阴影计算
-            bool runCalculation = (timeChanged || !g_satCaches[i].lastGeoValid);
-            
-            if (runCalculation) {
-                double tx, ty, tz;
-                if (g_satellites[i].calc.getTEME(simTime, tx, ty, tz)) {
-                    double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(simTime));
-                    ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
-                    GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
-                    
-                    // Compute shadow state
-                    bool inShadow = false;
+            if (activeGroup && g_repSatInitialized) {
+                sats.reserve(1);
+                bool runCalculation = (timeChanged || !g_repSatCache.lastGeoValid);
+                
+                if (runCalculation) {
+                    double tx, ty, tz;
+                    if (g_repSatCalc.getTEME(simTime, tx, ty, tz)) {
+                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
+                        GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                        
+                        // Compute shadow state
+                        bool inShadow = false;
+                        if (sun_calc) {
+                            SunPositionData& sPos = view_sun_pos;
+                            float latR = geo.lat * DEG_TO_RAD;
+                            float lonR = geo.lon * DEG_TO_RAD;
+                            float subLatR = sPos.subsolarLat * DEG_TO_RAD;
+                            float subLonR = sPos.subsolarLon * DEG_TO_RAD;
+                            float cos_theta = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
+                            if (cos_theta < 0) {
+                                float r = 6371.0f + (float)geo.alt;
+                                float dist_sq = r * r * (1.0f - cos_theta * cos_theta);
+                                inShadow = (dist_sq < 6371.0f * 6371.0f);
+                            }
+                        }
+                        
+                        g_repSatCache.lastGeo = geo;
+                        g_repSatCache.lastInShadow = inShadow;
+                        g_repSatCache.lastGeoValid = true;
+                    } else {
+                        g_repSatCache.lastGeoValid = false;
+                    }
+                }
+                
+                if (g_repSatCache.lastGeoValid) {
+                    bool isVisible = false;
                     if (sun_calc) {
-                        SunPositionData sPos = sun_calc->calculatePosition(simTime, viewLat, viewLon);
-                        float latR = geo.lat * DEG_TO_RAD;
-                        float lonR = geo.lon * DEG_TO_RAD;
+                        GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                        ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_repSatCache.lastGeo);
+                        TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
+                        float el = topo.el;
+                        
+                        if (el > -5.0f && el < 15.0f) {
+                            float r = 1.02f / tanf((el + 10.3f / (el + 5.11f)) * DEG_TO_RAD);
+                            el += r / 60.0f;
+                        }
+                        
+                        SunPositionData& sPos = observer_sun_pos;
+                        float uLatR = baseUserLat * DEG_TO_RAD;
+                        float uLonR = baseUserLon * DEG_TO_RAD;
                         float subLatR = sPos.subsolarLat * DEG_TO_RAD;
                         float subLonR = sPos.subsolarLon * DEG_TO_RAD;
-                        float cos_theta = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
-                        if (cos_theta < 0) {
-                            float r = 6371.0f + (float)geo.alt;
-                            float dist_sq = r * r * (1.0f - cos_theta * cos_theta);
-                            inShadow = (dist_sq < 6371.0f * 6371.0f);
+                        float sun_cos_dist = sinf(uLatR)*sinf(subLatR) + cosf(uLatR)*cosf(subLatR)*cosf(uLonR - subLonR);
+                        float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
+                        bool isNight = sun_alt < -6.0f;
+                        
+                        if (isSatViewMode) {
+                            isVisible = !g_repSatCache.lastInShadow;
+                        } else {
+                            isVisible = (isNight && (el >= 10.0f) && !g_repSatCache.lastInShadow);
+                        }
+                    }
+                    g_repSatCache.isVisible = isVisible;
+                    
+                    SatRenderData data;
+                    data.name = g_repSatName.c_str();
+                    data.iconType = ICON_SATELLITE;
+                    data.currentPos = g_repSatCache.lastGeo;
+                    data.color = TFT_CYAN;
+                    data.isVisible = g_repSatCache.isVisible;
+                    data.isRecentLaunchBatch = true;
+                    data.totalSatellitesInBatch = activeGroup->satelliteCount;
+                    
+                    calculateOrbit(g_repSatCalc, simTime, g_repSatCache.cache, orbitsCalculatedThisFrame, isFastForwarding);
+                    
+                    data.pastOrbit = &(g_repSatCache.cache.past);
+                    data.futureOrbit = &(g_repSatCache.cache.future);
+                    
+                    sats.push_back(data);
+                } else {
+                    g_repSatCache.isVisible = false;
+                }
+            }
+            
+            // Render Level 3 micro satellites if active
+            if (recentLaunchInObjectsView) {
+                for (size_t i = 0; i < g_level3Objects.size(); i++) {
+                    auto& obj = g_level3Objects[i];
+                    bool runCalculation = (timeChanged || !obj.lastGeoValid);
+                    
+                    if (runCalculation) {
+                        double tx, ty, tz;
+                        if (obj.calc.getTEME(simTime, tx, ty, tz)) {
+                            ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
+                            GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                            obj.lastGeo = geo;
+                            obj.lastGeoValid = true;
+                        } else {
+                            obj.lastGeoValid = false;
                         }
                     }
                     
-                    // Cache state
-                    g_satCaches[i].lastGeo = geo;
-                    g_satCaches[i].lastInShadow = inShadow;
-                    g_satCaches[i].lastGeoValid = true;
-                } else {
-                    g_satCaches[i].lastGeoValid = false;
+                    if (obj.lastGeoValid) {
+                        SatRenderData data;
+                        data.name = obj.name.c_str();
+                        data.iconType = ICON_SATELLITE;
+                        data.currentPos = obj.lastGeo;
+                        data.color = TFT_GREEN;
+                        data.isVisible = true;
+                        
+                        calculateOrbit(obj.calc, simTime, obj.cache, orbitsCalculatedThisFrame, isFastForwarding);
+                        
+                        data.pastOrbit = &(obj.cache.past);
+                        data.futureOrbit = &(obj.cache.future);
+                        sats.push_back(data);
+                    }
                 }
             }
-            
-            // 每次都计算卫星对于当前观测者和当前模式下的可见性 (isVisible)
-            if (g_satCaches[i].lastGeoValid) {
-                bool isVisible = false;
-                if (sun_calc) {
-                    GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                    ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_satCaches[i].lastGeo);
-                    TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
-                    float el = topo.el;
-                    
-                    // 同样引入大气折射补偿（与 predictor 一致）
-                    if (el > -5.0f && el < 15.0f) {
-                        float r = 1.02f / tanf((el + 10.3f / (el + 5.11f)) * DEG_TO_RAD);
-                        el += r / 60.0f;
-                    }
-                    
-                    // 2. 观测点是否是晚上
-                    SunPositionData sPos = sun_calc->calculatePosition(simTime, baseUserLat, baseUserLon);
-                    float uLatR = baseUserLat * DEG_TO_RAD;
-                    float uLonR = baseUserLon * DEG_TO_RAD;
-                    float subLatR = sPos.subsolarLat * DEG_TO_RAD;
-                    float subLonR = sPos.subsolarLon * DEG_TO_RAD;
-                    float sun_cos_dist = sinf(uLatR)*sinf(subLatR) + cosf(uLatR)*cosf(subLatR)*cosf(uLonR - subLonR);
-                    float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
-                    bool isNight = sun_alt < -6.0f; // 改为 -6.0f，与过境预测完全一致
-                    
-                    if (isSatViewMode) {
-                        // 卫星视角下，只要不被地球遮挡即亮起
-                        isVisible = !g_satCaches[i].lastInShadow;
+        } else {
+            sats.reserve(NUM_SATELLITES);
+            for (int i = 0; i < NUM_SATELLITES; i++) {
+                if (!g_satellites[i].selected) {
+                    g_satCaches[i].lastGeoValid = false;
+                    g_satCaches[i].isVisible = false;
+                    continue;
+                }
+                
+                bool runCalculation = (timeChanged || !g_satCaches[i].lastGeoValid);
+                
+                if (runCalculation) {
+                    double tx, ty, tz;
+                    if (g_satellites[i].calc.getTEME(simTime, tx, ty, tz)) {
+                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
+                        GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                        
+                        bool inShadow = false;
+                        if (sun_calc) {
+                            SunPositionData& sPos = view_sun_pos;
+                            float latR = geo.lat * DEG_TO_RAD;
+                            float lonR = geo.lon * DEG_TO_RAD;
+                            float subLatR = sPos.subsolarLat * DEG_TO_RAD;
+                            float subLonR = sPos.subsolarLon * DEG_TO_RAD;
+                            float cos_theta = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
+                            if (cos_theta < 0) {
+                                float r = 6371.0f + (float)geo.alt;
+                                float dist_sq = r * r * (1.0f - cos_theta * cos_theta);
+                                inShadow = (dist_sq < 6371.0f * 6371.0f);
+                            }
+                        }
+                        
+                        g_satCaches[i].lastGeo = geo;
+                        g_satCaches[i].lastInShadow = inShadow;
+                        g_satCaches[i].lastGeoValid = true;
                     } else {
-                        // 观测者视角下，必须是晚上、高度角满足过境要求（以 10 度高度角为阈值）、且没被地球遮挡
-                        isVisible = (isNight && (el >= 10.0f) && !g_satCaches[i].lastInShadow);
+                        g_satCaches[i].lastGeoValid = false;
                     }
                 }
-                g_satCaches[i].isVisible = isVisible;
                 
-                if (shouldLogNow && appState == STATE_MAIN) {
-                    log_i("[%s] Lat: %.2f, Lon: %.2f, Alt: %.1f km, Shadow: %s, Visible: %s", 
-                          g_satellites[i].name.c_str(), 
-                          g_satCaches[i].lastGeo.lat, 
-                          g_satCaches[i].lastGeo.lon, 
-                          g_satCaches[i].lastGeo.alt, 
-                          g_satCaches[i].lastInShadow ? "YES" : "NO",
-                          g_satCaches[i].isVisible ? "YES" : "NO");
+                if (g_satCaches[i].lastGeoValid) {
+                    bool isVisible = false;
+                    if (sun_calc) {
+                        GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                        ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_satCaches[i].lastGeo);
+                        TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
+                        float el = topo.el;
+                        
+                        if (el > -5.0f && el < 15.0f) {
+                            float r = 1.02f / tanf((el + 10.3f / (el + 5.11f)) * DEG_TO_RAD);
+                            el += r / 60.0f;
+                        }
+                        
+                        SunPositionData& sPos = observer_sun_pos;
+                        float uLatR = baseUserLat * DEG_TO_RAD;
+                        float uLonR = baseUserLon * DEG_TO_RAD;
+                        float subLatR = sPos.subsolarLat * DEG_TO_RAD;
+                        float subLonR = sPos.subsolarLon * DEG_TO_RAD;
+                        float sun_cos_dist = sinf(uLatR)*sinf(subLatR) + cosf(uLatR)*cosf(subLatR)*cosf(uLonR - subLonR);
+                        float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
+                        bool isNight = sun_alt < -6.0f;
+                        
+                        if (isSatViewMode) {
+                            isVisible = !g_satCaches[i].lastInShadow;
+                        } else {
+                            isVisible = (isNight && (el >= 10.0f) && !g_satCaches[i].lastInShadow);
+                        }
+                    }
+                    g_satCaches[i].isVisible = isVisible;
+                    
+                    if (shouldLogNow && appState == STATE_MAIN) {
+                        log_i("[%s] Lat: %.2f, Lon: %.2f, Alt: %.1f km, Shadow: %s, Visible: %s", 
+                              g_satellites[i].name.c_str(), 
+                              g_satCaches[i].lastGeo.lat, 
+                              g_satCaches[i].lastGeo.lon, 
+                              g_satCaches[i].lastGeo.alt, 
+                              g_satCaches[i].lastInShadow ? "YES" : "NO",
+                              g_satCaches[i].isVisible ? "YES" : "NO");
+                    }
+                    
+                    SatRenderData data;
+                    data.name = g_satellites[i].name.c_str();
+                    data.iconType = g_satellites[i].iconType;
+                    data.currentPos = g_satCaches[i].lastGeo;
+                    data.color = g_satellites[i].color;
+                    data.isVisible = g_satCaches[i].isVisible;
+                    
+                    calculateOrbit(g_satellites[i].calc, simTime, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding);
+                    
+                    data.pastOrbit = &(g_satellites[i].cache.past);
+                    data.futureOrbit = &(g_satellites[i].cache.future);
+                    
+                    sats.push_back(data);
+                } else {
+                    g_satCaches[i].isVisible = false;
                 }
-                
-                SatRenderData data;
-                data.name = g_satellites[i].name.c_str();
-                data.iconType = g_satellites[i].iconType;
-                data.currentPos = g_satCaches[i].lastGeo;
-                data.color = g_satellites[i].color;
-                data.isVisible = g_satCaches[i].isVisible;
-                
-                calculateOrbit(g_satellites[i].calc, simTime, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding);
-                
-                data.pastOrbit = &(g_satellites[i].cache.past);
-                data.futureOrbit = &(g_satellites[i].cache.future);
-                
-                sats.push_back(data);
-            } else {
-                g_satCaches[i].isVisible = false;
             }
         }
         
@@ -2380,9 +3472,28 @@ void loop() {
                     for (int i = 0; i < NUM_SATELLITES; i++) {
                         if (g_satellites[i].name == p.satName) { sIdx = i; break; }
                     }
+                    
+                    SGP4Calc* satCalc = nullptr;
+                    SatelliteType satType = SAT_TYPE_VISUAL;
+                    int noradId = 0;
+                    String downlinkFreq = "";
+                    String uplinkFreq = "";
+                    String tone = "";
+                    
                     if (sIdx != -1) {
+                        satCalc = &(g_satellites[sIdx].calc);
+                        satType = g_satellites[sIdx].type;
+                        noradId = g_satellites[sIdx].noradId;
+                        downlinkFreq = g_satellites[sIdx].downlinkFreq;
+                        uplinkFreq = g_satellites[sIdx].uplinkFreq;
+                        tone = g_satellites[sIdx].tone;
+                    } else if (g_recentLaunchFocusMode) {
+                        satCalc = &g_repSatCalc;
+                    }
+                    
+                    if (satCalc != nullptr) {
                         double tx, ty, tz;
-                        if (g_satellites[sIdx].calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
+                        if (satCalc->getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
                             double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
                             ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
                             GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
@@ -2394,7 +3505,7 @@ void loop() {
                             
                             double tx_prev, ty_prev, tz_prev;
                             double dist_prev = dist;
-                            if (g_satellites[sIdx].calc.getTEME(current_unix + timeMachineOffset - 1, tx_prev, ty_prev, tz_prev)) {
+                            if (satCalc->getTEME(current_unix + timeMachineOffset - 1, tx_prev, ty_prev, tz_prev)) {
                                 double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset - 1));
                                 ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
                                 TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
@@ -2407,7 +3518,7 @@ void loop() {
                             sprintf(azaltBuf, "Az:%03d Alt:%02d", (int)az, (int)el);
                             earth_renderer->getCanvas()->drawString(azaltBuf, 5, 97);
                             
-                            if (g_satellites[sIdx].type == SAT_TYPE_SPACE_STATION && g_satellites[sIdx].noradId == 25544) {
+                            if (satType == SAT_TYPE_SPACE_STATION && noradId == 25544) {
                                 double freq_aprs = 145.825;
                                 double freq_sstv = 145.800;
                                 double shift_aprs = (freq_aprs * -range_rate / 299792.458) * 1000.0;
@@ -2420,28 +3531,27 @@ void loop() {
                                 earth_renderer->getCanvas()->drawString(rx1Buf, 5, 109);
                                 earth_renderer->getCanvas()->drawString(rx2Buf, 5, 121);
                             }
-                            else if (g_satellites[sIdx].type == SAT_TYPE_WEATHER) {
-                                String freq = g_satellites[sIdx].downlinkFreq;
-                                if (freq.length() > 0) {
-                                    double freq_mhz = freq.toDouble();
+                            else if (satType == SAT_TYPE_WEATHER) {
+                                if (downlinkFreq.length() > 0) {
+                                    double freq_mhz = downlinkFreq.toDouble();
                                     double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
                                     char rxBuf[32];
-                                    sprintf(rxBuf, "Rx:%s (%+.1f)", freq.c_str(), shift_khz);
+                                    sprintf(rxBuf, "Rx:%s (%+.1f)", downlinkFreq.c_str(), shift_khz);
                                     earth_renderer->getCanvas()->drawString(rxBuf, 5, 109);
                                 }
                             }
-                            else if (g_satellites[sIdx].type == SAT_TYPE_HAM) {
-                                if (g_satellites[sIdx].downlinkFreq.length() > 0) {
-                                    double freq_mhz = g_satellites[sIdx].downlinkFreq.toDouble();
+                            else if (satType == SAT_TYPE_HAM) {
+                                if (downlinkFreq.length() > 0) {
+                                    double freq_mhz = downlinkFreq.toDouble();
                                     double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
                                     char rxBuf[32];
-                                    sprintf(rxBuf, "Rx:%s (%+.1f)", g_satellites[sIdx].downlinkFreq.c_str(), shift_khz);
+                                    sprintf(rxBuf, "Rx:%s (%+.1f)", downlinkFreq.c_str(), shift_khz);
                                     earth_renderer->getCanvas()->drawString(rxBuf, 5, 109);
                                 }
-                                if (g_satellites[sIdx].uplinkFreq.length() > 0) {
+                                if (uplinkFreq.length() > 0) {
                                     earth_renderer->getCanvas()->setTextColor(TFT_ORANGE);
-                                    String txStr = "Tx:" + g_satellites[sIdx].uplinkFreq;
-                                    if (g_satellites[sIdx].tone.length() > 0) txStr += " T:" + g_satellites[sIdx].tone;
+                                    String txStr = "Tx:" + uplinkFreq;
+                                    if (tone.length() > 0) txStr += " T:" + tone;
                                     earth_renderer->getCanvas()->drawString(txStr.c_str(), 5, 121);
                                 }
                             }
@@ -2670,12 +3780,20 @@ void loop() {
             visibleSatName = g_satellites[focusSatIndex].name;
             visibleSatIconType = g_satellites[focusSatIndex].iconType;
         } else {
-            for (int i = 0; i < NUM_SATELLITES; i++) {
-                if (g_satellites[i].selected && g_satCaches[i].lastGeoValid && g_satCaches[i].isVisible) {
+            if (g_recentLaunchFocusMode) {
+                if (g_repSatCache.lastGeoValid && g_repSatCache.isVisible) {
                     anyVisibleNow = true;
-                    visibleSatName = g_satellites[i].name;
-                    visibleSatIconType = g_satellites[i].iconType;
-                    break;
+                    visibleSatName = g_repSatName;
+                    visibleSatIconType = ICON_SATELLITE;
+                }
+            } else {
+                for (int i = 0; i < NUM_SATELLITES; i++) {
+                    if (g_satellites[i].selected && g_satCaches[i].lastGeoValid && g_satCaches[i].isVisible) {
+                        anyVisibleNow = true;
+                        visibleSatName = g_satellites[i].name;
+                        visibleSatIconType = g_satellites[i].iconType;
+                        break;
+                    }
                 }
             }
         }

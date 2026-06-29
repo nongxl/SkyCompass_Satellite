@@ -23,6 +23,17 @@ struct PassEvent {
     float visibleDuration;  // Duration of visibility in seconds
     
     int score;              // 1 to 5 stars
+    int baseScore = 0;
+    
+    // === Event Engine fields ===
+    uint8_t eventType = 0;   // 0=NONE, 1=ZENITH_PASS, 2=LONG_PASS, 3=BRIGHT_PASS, 4=CONSTELLATION_TRAIN, 5=CONCURRENT_PASS, 6=MOON_PASS, 7=RECENT_LAUNCH
+    int eventBonus = 0;
+    String eventTitle = "";
+    String eventDesc = "";
+    bool satSelected = true;
+    int satIndex = -1;
+    char launchBatch[8] = "";
+    uint32_t epoch = 0;
 };
 
 class ObservationPredictor {
@@ -31,6 +42,9 @@ public:
     
     // Predict passes for a satellite over a given number of days starting from startTime
     std::vector<PassEvent> predictPasses(const TLEData& tle, double stdMag, uint32_t startTime, int daysToPredict);
+    
+    // Post-process predicted passes to check for multi-satellite events (constellation trains, concurrent passes)
+    static void postProcessEvents(std::vector<PassEvent>& passes, uint32_t startTime);
 
 private:
     double _userLat;

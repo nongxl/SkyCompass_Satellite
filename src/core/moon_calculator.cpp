@@ -182,55 +182,14 @@ MoonPositionData MoonCalculator::calculatePosition(uint32_t timestamp, double la
     // 只有在需要时才输出详细计算链条
     if (shouldLog) {
         LOG_I("MoonCalculator", "====== 月亮计算链条 ======");
-//         log_i("[MoonCalculator] Date (UTC): ");
-//         log_i("%s", String(year + 2000).c_str());
-//         log_i("/");
-//         log_i("%s", String(month).c_str());
-//         log_i("/");
-//         log_i("%s", String(day).c_str());
-//         log_i(" ");
-//         log_i("%s", String(hours).c_str());
-//         log_i(":");
-//         log_i("%s", String(minutes).c_str());
-//         log_i(":");
-//         log_i("%s", String(seconds).c_str());
-        
-        // 增加本地时间输出
         TimeData localTime = _positionManager->getLocalTimeData(timestamp);
-//         log_i("[MoonCalculator] Date (Local): ");
-//         log_i("%s", String(localTime.year + 2000).c_str());
-//         log_i("/");
-//         log_i("%s", String(localTime.month).c_str());
-//         log_i("/");
-//         log_i("%s", String(localTime.day).c_str());
-//         log_i(" ");
-//         log_i("%s", String(localTime.hour).c_str());
-//         log_i(":");
-//         log_i("%s", String(localTime.minute).c_str());
-//         log_i(":");
-//         log_i("%s", String(localTime.second).c_str());
-//         log_i("[MoonCalculator] Julian Day: ");
-//         log_i("%s", String(julianDay, 4).c_str());
-//         log_i("[MoonCalculator] Julian Century: ");
-//         log_i("%s", String(jc, 8).c_str());
-//         log_i("[MoonCalculator] Mean Longitude: ");
-//         log_i("%s", String(L, 2).c_str());
-        LOG_I("APP", "°");
-//         log_i("[MoonCalculator] Mean Anomaly: ");
-//         log_i("%s", String(M, 2).c_str());
-        LOG_I("APP", "°");
-//         log_i("[MoonCalculator] Right Ascension (RA): ");
-//         log_i("%s", String(result.ra, 2).c_str());
-        LOG_I("APP", "°");
-//         log_i("[MoonCalculator] Declination (Dec): ");
-//         log_i("%s", String(result.dec, 2).c_str());
-        LOG_I("APP", "°");
-//         log_i("[MoonCalculator] Latitude: ");
-//         log_i("%s", String(latitude, 2).c_str());
-//         log_i("°, Altitude: ");
-//         log_i("%s", String(result.altitude, 2).c_str());
-//         log_i("°, Azimuth: ");
-//         log_i("%s", String(result.azimuth, 2).c_str());
+        LOG_I("MoonCalculator", "Date (Local): %04d/%02d/%02d %02d:%02d:%02d",
+              localTime.year + 2000, localTime.month, localTime.day,
+              localTime.hour, localTime.minute, localTime.second);
+        LOG_I("MoonCalculator", "Julian Day: %.4f, Century: %.8f", julianDay, jc);
+        LOG_I("MoonCalculator", "Mean Longitude: %.2f°, Anomaly: %.2f°", L, M);
+        LOG_I("MoonCalculator", "RA: %.2f°, Dec: %.2f°", result.ra, result.dec);
+        LOG_I("MoonCalculator", "Moon Alt: %.2f°, Az: %.2f°", result.altitude, result.azimuth);
         LOG_I("MoonCalculator", "==========================");
     }
     

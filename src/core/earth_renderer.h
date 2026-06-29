@@ -25,6 +25,8 @@ struct SatRenderData {
     const std::vector<GeodeticCoord>* futureOrbit;
     uint16_t color;
     bool isVisible;
+    bool isRecentLaunchBatch = false;
+    int totalSatellitesInBatch = 0;
 };
 
 class EarthRenderer {
@@ -79,11 +81,6 @@ private:
     
     void updateFocusR() {
         _cameraFocusR = _earthRadius;
-        if (_cameraFocusAlt > 0) {
-            float visualAlt = _cameraFocusAlt;
-            if (visualAlt > 20000.0f) visualAlt = 20000.0f;
-            _cameraFocusR += sqrtf(visualAlt) * 0.4f * _zoom;
-        }
     }
     M5GFX* _display;
     LGFX_Sprite* _canvas;
