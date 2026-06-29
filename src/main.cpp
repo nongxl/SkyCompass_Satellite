@@ -1580,6 +1580,15 @@ void drawSatSelectPage() {
     uint16_t width = canvas->width();
     uint16_t height = canvas->height();
     
+    bool showBanner = false;
+    if (currentSatTab == TAB_RECENT_LAUNCH) {
+        if (recentLaunchDownloading || (recentLaunchDownloadFinishedMs > 0 && (millis() - recentLaunchDownloadFinishedMs < 3000))) {
+            showBanner = true;
+        }
+    }
+    int bottomLimit = showBanner ? (height - 11) : height;
+
+    
     // Background
     canvas->fillRect(0, 0, width, height, canvas->color565(20, 30, 40));
     
@@ -1604,13 +1613,14 @@ void drawSatSelectPage() {
     if (currentSatTab == TAB_ENCYCLOPEDIA) {
         // Left Panel (List)
         int yPos = 25;
-        int itemsPerPage = 6;
+        int itemsPerPage = showBanner ? 6 : 7;
+        int itemSpacing = showBanner ? 16 : 15;
         int startIndex = (satSelectedIndex / itemsPerPage) * itemsPerPage;
         
         for (int i = 0; i < itemsPerPage && (startIndex + i) <= NUM_SATELLITES; i++) {
             int index = startIndex + i;
             if (index == satSelectedIndex) {
-                canvas->fillRect(2, yPos - 2, 82, 15, canvas->color565(0, 120, 255));
+                canvas->fillRect(2, yPos - 2, 82, itemSpacing - 1, canvas->color565(0, 120, 255));
                 canvas->setTextColor(TFT_WHITE);
             } else {
                 canvas->setTextColor(TFT_LIGHTGRAY);
@@ -1628,11 +1638,11 @@ void drawSatSelectPage() {
                 canvas->drawString(text.c_str(), 4, yPos);
             }
             
-            yPos += 16;
+            yPos += itemSpacing;
         }
         
         // Right Panel (Description)
-        canvas->drawFastVLine(85, 20, height-31, TFT_DARKGREY);
+        canvas->drawFastVLine(85, 20, bottomLimit - 20, TFT_DARKGREY);
         
         int rightX = 89;
         int descY = 25;
@@ -1795,9 +1805,9 @@ void drawSatSelectPage() {
             }
             
             if (requiredLines > 0) {
-                radioY = 124 - (requiredLines * 11 + 2);
+                radioY = bottomLimit - (requiredLines * 11 + 2);
             } else {
-                radioY = 124;
+                radioY = bottomLimit;
             }
             
             canvas->setTextColor(TFT_LIGHTGRAY);
@@ -1825,7 +1835,7 @@ void drawSatSelectPage() {
             
             if (satSelectedIndex >= NUM_BUILTIN_SATELLITES && requiredLines == 0) {
                 canvas->setTextColor(TFT_YELLOW);
-                canvas->drawString("Press 'd' to delete", rightX, 112);
+                canvas->drawString("Press 'd' to delete", rightX, bottomLimit - 12);
             }
             
             if (requiredLines > 0) {
@@ -2012,14 +2022,15 @@ void drawSatSelectPage() {
             }
         } else {
             int yPos = 25;
-            int itemsPerPage = 6;
+            int itemsPerPage = showBanner ? 6 : 7;
+            int itemSpacing = showBanner ? 16 : 15;
             int startIndex = (recentLaunchSelectedIndex / itemsPerPage) * itemsPerPage;
             int totalItems = g_recentLaunches.size();
             
             for (int i = 0; i < itemsPerPage && (startIndex + i) < totalItems; i++) {
                 int index = startIndex + i;
                 if (index == recentLaunchSelectedIndex) {
-                    canvas->fillRect(2, yPos - 2, 82, 15, canvas->color565(0, 120, 255));
+                    canvas->fillRect(2, yPos - 2, 82, itemSpacing - 1, canvas->color565(0, 120, 255));
                     canvas->setTextColor(TFT_WHITE);
                 } else {
                     canvas->setTextColor(TFT_LIGHTGRAY);
@@ -2035,10 +2046,10 @@ void drawSatSelectPage() {
                 if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
                 canvas->drawString(nameStr.c_str(), 28, yPos);
                 
-                yPos += 16;
+                yPos += itemSpacing;
             }
             
-            canvas->drawFastVLine(85, 20, height-31, TFT_DARKGREY);
+            canvas->drawFastVLine(85, 20, bottomLimit - 20, TFT_DARKGREY);
             
             int rightX = 89;
             if (recentLaunchSelectedIndex < totalItems) {
@@ -2148,7 +2159,7 @@ void drawSatSelectPage() {
                     }
                     
                     canvas->setTextColor(TFT_LIGHTGRAY);
-                    canvas->drawString("Press 'O' for Objects", rightX, 120);
+                    canvas->drawString("Press 'O' for Objects", rightX, bottomLimit - 8);
                 } else {
                     canvas->setTextColor(TFT_GOLD);
                     String title = item.displayName;
@@ -2189,13 +2200,6 @@ void drawSatSelectPage() {
     }
     
     // Draw Bottom Guide Banner (Only when updating or showing feedback)
-    bool showBanner = false;
-    if (currentSatTab == TAB_RECENT_LAUNCH) {
-        if (recentLaunchDownloading || (recentLaunchDownloadFinishedMs > 0 && (millis() - recentLaunchDownloadFinishedMs < 3000))) {
-            showBanner = true;
-        }
-    }
-    
     if (showBanner) {
         canvas->fillRect(0, height - 11, width, 11, canvas->color565(15, 20, 25));
         canvas->drawFastHLine(0, height - 11, width, TFT_DARKGREY);
