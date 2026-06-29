@@ -1600,15 +1600,73 @@ void drawSatSelectPage() {
     canvas->fillRect(0, 0, width/2, 20, tab1Bg);
     canvas->setTextColor(TFT_WHITE);
     canvas->setTextSize(1);
-    canvas->drawString("Encyclopedia", width/4 - canvas->textWidth("Encyclopedia")/2, 6);
+    canvas->drawString("Encyclopedia", 70 - canvas->textWidth("Encyclopedia")/2, 6);
     
     // Tab 2: Recent Launch
     uint16_t tab2Bg = (currentSatTab == TAB_RECENT_LAUNCH) ? canvas->color565(100, 50, 200) : canvas->color565(30, 40, 50);
     canvas->fillRect(width/2, 0, width/2, 20, tab2Bg);
-    canvas->drawString("Recent Launch", 3 * width/4 - canvas->textWidth("Recent Launch")/2, 6);
+    canvas->drawString("Recent Launch", 166 - canvas->textWidth("Recent Launch")/2, 6);
     
     // Bottom border for Top Bar
     canvas->drawFastHLine(0, 20, width, TFT_DARKGREY);
+    
+    // Draw Top Bar Status Icons
+    {
+        // 1. WiFi Icon on Top-Left
+        bool isConnected = HalWifi::isConnected();
+        bool isConnecting = !isConnected && (g_wifiConnecting || (recentLaunchDownloading && recentLaunchErrorMsg.indexOf("WiFi") >= 0));
+        
+        int wifiX = 10; // Center of WiFi icon
+        int wifiY = 16; // Bottom of WiFi icon
+        
+        if (isConnecting) {
+            int flashStep = (millis() / 250) % 3;
+            uint16_t c0 = (flashStep >= 0) ? TFT_GREEN : TFT_DARKGREY;
+            uint16_t c1 = (flashStep >= 1) ? TFT_GREEN : TFT_DARKGREY;
+            uint16_t c2 = (flashStep >= 2) ? TFT_GREEN : TFT_DARKGREY;
+            
+            canvas->fillCircle(wifiX, wifiY - 1, 1, c0);
+            canvas->drawArc(wifiX, wifiY - 1, 4, 5, 225.0f, 315.0f, c1);
+            canvas->drawArc(wifiX, wifiY - 1, 8, 9, 225.0f, 315.0f, c2);
+        } else {
+            uint16_t wifiColor = isConnected ? TFT_GREEN : TFT_DARKGREY;
+            canvas->fillCircle(wifiX, wifiY - 1, 1, wifiColor);
+            canvas->drawArc(wifiX, wifiY - 1, 4, 5, 225.0f, 315.0f, wifiColor);
+            canvas->drawArc(wifiX, wifiY - 1, 8, 9, 225.0f, 315.0f, wifiColor);
+        }
+        
+        // 2. Battery Icon on Top-Right
+        int batPct = M5Cardputer.Power.getBatteryLevel();
+        if (batPct > 100) batPct = 100;
+        if (batPct < 0) batPct = 0;
+        
+        uint16_t batColor = TFT_GREEN;
+        if (batPct < 10) {
+            batColor = TFT_RED;
+        } else if (batPct < 70) {
+            batColor = TFT_YELLOW;
+        } else {
+            batColor = TFT_GREEN;
+        }
+        
+        int batX = width - 26;
+        int batY = 4;
+        int batW = 20;
+        int batH = 12;
+        
+        // Hollow battery body
+        canvas->drawRect(batX, batY, batW, batH, batColor);
+        // Nipple on the right
+        canvas->fillRect(batX + batW, batY + 4, 2, 4, batColor);
+        
+        // Battery percentage text inside (centered)
+        canvas->setTextColor(batColor);
+        String pctStr = String(batPct);
+        int textX = batX + (batW - canvas->textWidth(pctStr.c_str())) / 2;
+        int textY = batY + 2; // standard char height is 8
+        canvas->drawString(pctStr.c_str(), textX, textY);
+    }
+
     
     if (currentSatTab == TAB_ENCYCLOPEDIA) {
         // Left Panel (List)
@@ -2557,12 +2615,14 @@ void loop() {
                         }
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed('w')) {
-                    if (!HalWifi::isConnected()) {
-                        manualWifiToggle = true;
-                        xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
-                    } else {
-                        WiFi.disconnect(true);
-                        WiFi.mode(WIFI_OFF);
+                    if (!g_networkActive) {
+                        if (!HalWifi::isConnected()) {
+                            manualWifiToggle = true;
+                            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
+                        } else {
+                            WiFi.disconnect(true);
+                            WiFi.mode(WIFI_OFF);
+                        }
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed('s')) {
                     appState = STATE_SAT_SELECT;
@@ -2783,7 +2843,7 @@ void loop() {
                     showListHelp = true;
                 } else if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) {
                     if (currentSatTab == TAB_RECENT_LAUNCH) {
-                        if (g_dataUpdating || g_wifiConnecting) {
+                        if (g_networkActive) {
                             recentLaunchErrorMsg = "System Busy... Wait.";
                             drawSatSelectPage();
                             earth_renderer->getCanvas()->pushSprite(0, 0);
@@ -2792,7 +2852,7 @@ void loop() {
                             recentLaunchErrorMsg = "Connecting WiFi...";
                             drawSatSelectPage();
                             earth_renderer->getCanvas()->pushSprite(0, 0);
-                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 8192, NULL, 1, NULL, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 16384, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 recentLaunchDownloading = false;
                                 recentLaunchErrorMsg = "Task Init Failed!";
@@ -2801,8 +2861,8 @@ void loop() {
                             }
                         }
                     } else {
-                        if (recentLaunchDownloading) {
-                            downloadErrorMsg = "Recent Launch Busy...";
+                        if (g_networkActive) {
+                            downloadErrorMsg = "System Busy... Wait.";
                             drawSatSelectPage();
                             earth_renderer->getCanvas()->pushSprite(0, 0);
                         } else if (!HalWifi::isConnected()) {
@@ -2810,7 +2870,7 @@ void loop() {
                             downloadErrorMsg = "Connecting to WiFi...";
                             drawSatSelectPage();
                             earth_renderer->getCanvas()->pushSprite(0, 0);
-                            BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 downloadErrorMsg = "Task Init Failed!";
                                 drawSatSelectPage();
