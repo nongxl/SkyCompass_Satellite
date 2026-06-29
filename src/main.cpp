@@ -129,6 +129,16 @@ enum SatSelectTab {
     TAB_RECENT_LAUNCH = 1
 };
 
+#include <memory>
+
+struct RecentLaunchRealtimeCache {
+    GeodeticCoord lastGeo;
+    bool lastGeoValid = false;
+    bool lastInShadow = false;
+    bool isVisible = false;
+    OrbitCache cache;
+};
+
 struct RecentLaunchItem {
     String batchId;            // 国际标识符前 5 位 (如 "26042")
     String displayName;        // 智能提取出的星座/卫星公共名称前缀
@@ -139,15 +149,12 @@ struct RecentLaunchItem {
     float inclination = 0.0f;  // 轨道倾角缓存
     float avgAlt = 0.0f;       // 平均高度缓存
     String repSatName;         // 缓存的代表卫星名称
+    
+    std::shared_ptr<SGP4Calc> calc;
+    RecentLaunchRealtimeCache cache;
 };
 
-struct RecentLaunchRealtimeCache {
-    GeodeticCoord lastGeo;
-    bool lastGeoValid = false;
-    bool lastInShadow = false;
-    bool isVisible = false;
-    OrbitCache cache;
-};
+
 
 // 全局变量定义
 static uint32_t parseTleEpoch(const String& line1) {
@@ -224,9 +231,11 @@ struct LazyObjectItem {
 std::vector<LazyObjectItem> g_level3Objects;
 
 
-void initRecentLaunchCalcs(const RecentLaunchItem& item) {
-    g_repSatInitialized = false;
-    g_repSatName = "";
+void initRecentLaunchCalcs(RecentLaunchItem& item) {
+    if (!item.selected) {
+        item.calc.reset();
+        return;
+    }
     File f = LittleFS.open("/tle_recent_raw.txt", "r");
     if (f) {
         while (f.available()) {
@@ -244,18 +253,24 @@ void initRecentLaunchCalcs(const RecentLaunchItem& item) {
                 tle.line1 = line1;
                 tle.line2 = line2;
                 tle.baseScore = 0;
-                g_repSatTLE = tle;
-                g_repSatCalc.init(tle);
-                g_repSatName = name;
-                g_repSatInitialized = true;
-                g_repSatCache.lastGeoValid = false;
-                g_repSatCache.isVisible = false;
+                item.calc = std::make_shared<SGP4Calc>();
+                item.calc->init(tle);
+                item.cache.lastGeoValid = false;
+                item.cache.isVisible = false;
+                
+                if (item.batchId == recentLaunchActiveBatchId) {
+                    g_repSatTLE = tle;
+                    g_repSatCalc = *(item.calc);
+                    g_repSatName = name;
+                    g_repSatInitialized = true;
+                    g_repSatCache = item.cache;
+                }
                 break;
             }
         }
         f.close();
     }
-    LOG_I("RECENT_LAUNCH", "Initialized representative satellite: %s", g_repSatName.c_str());
+    LOG_I("RECENT_LAUNCH", "Initialized representative satellite for batch %s: %s", item.batchId.c_str(), item.repSatName.c_str());
 }
 
 void loadLevel3ObjectsPage(const RecentLaunchItem& item, int page) {
@@ -2283,12 +2298,28 @@ void loop() {
         g_recentLaunches = g_pendingRecentLaunches;
         g_pendingRecentLaunches.clear();
         g_recentLaunchesPending = false;
-        if (g_recentLaunchFocusMode) {
-            for (auto& item : g_recentLaunches) {
+        bool hasSelected = false;
+        for (auto& item : g_recentLaunches) {
+            if (item.selected) {
                 if (item.batchId == recentLaunchActiveBatchId) {
+                    hasSelected = true;
+                }
+                initRecentLaunchCalcs(item);
+            }
+        }
+        if (!hasSelected && g_recentLaunchFocusMode) {
+            for (auto& item : g_recentLaunches) {
+                if (item.selected) {
+                    recentLaunchActiveBatchId = item.batchId;
                     initRecentLaunchCalcs(item);
+                    hasSelected = true;
                     break;
                 }
+            }
+            if (!hasSelected) {
+                g_recentLaunchFocusMode = false;
+                recentLaunchActiveBatchId = "";
+                g_repSatInitialized = false;
             }
         }
         LOG_I("APP", "Applied new recent launches safely on main core.");
@@ -2728,13 +2759,14 @@ void loop() {
                         }
                     } else {
                         bool hasSelected = false;
-                        for (const auto& item : g_recentLaunches) {
+                        for (auto& item : g_recentLaunches) {
                             if (item.selected) {
-                                g_recentLaunchFocusMode = true;
-                                recentLaunchActiveBatchId = item.batchId;
+                                if (!hasSelected) {
+                                    g_recentLaunchFocusMode = true;
+                                    recentLaunchActiveBatchId = item.batchId;
+                                    hasSelected = true;
+                                }
                                 initRecentLaunchCalcs(item);
-                                hasSelected = true;
-                                break;
                             }
                         }
                         if (!hasSelected) {
@@ -2796,7 +2828,11 @@ void loop() {
                             appState = STATE_MAIN;
                         }
                     } else if (M5Cardputer.Keyboard.isKeyPressed('o') || M5Cardputer.Keyboard.isKeyPressed('O')) {
-                        if (!recentLaunchInObjectsView && recentLaunchSelectedIndex >= 0 && recentLaunchSelectedIndex < (int)g_recentLaunches.size()) {
+                        if (recentLaunchInObjectsView) {
+                            recentLaunchInObjectsView = false;
+                            g_level3Objects.clear();
+                            g_level3Objects.shrink_to_fit();
+                        } else if (recentLaunchSelectedIndex >= 0 && recentLaunchSelectedIndex < (int)g_recentLaunches.size()) {
                             recentLaunchInObjectsView = true;
                             recentLaunchObjectPage = 0;
                             loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], 0);
@@ -2818,20 +2854,41 @@ void loop() {
                         }
                     } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
                         if (recentLaunchSelectedIndex >= 0 && recentLaunchSelectedIndex < (int)g_recentLaunches.size()) {
-                            bool prevSelected = g_recentLaunches[recentLaunchSelectedIndex].selected;
-                            for (size_t i = 0; i < g_recentLaunches.size(); i++) {
-                                g_recentLaunches[i].selected = false;
-                            }
-                            g_recentLaunches[recentLaunchSelectedIndex].selected = !prevSelected;
-                            if (g_recentLaunches[recentLaunchSelectedIndex].selected) {
+                            RecentLaunchItem& targetItem = g_recentLaunches[recentLaunchSelectedIndex];
+                            targetItem.selected = !targetItem.selected;
+                            if (targetItem.selected) {
                                 g_recentLaunchFocusMode = true;
-                                recentLaunchActiveBatchId = g_recentLaunches[recentLaunchSelectedIndex].batchId;
-                                initRecentLaunchCalcs(g_recentLaunches[recentLaunchSelectedIndex]);
+                                recentLaunchActiveBatchId = targetItem.batchId;
+                                initRecentLaunchCalcs(targetItem);
                             } else {
-                                g_recentLaunchFocusMode = false;
-                                recentLaunchActiveBatchId = "";
-                                g_repSatInitialized = false;
+                                if (recentLaunchActiveBatchId == targetItem.batchId) {
+                                    bool foundOther = false;
+                                    for (auto& item : g_recentLaunches) {
+                                        if (item.selected) {
+                                            recentLaunchActiveBatchId = item.batchId;
+                                            initRecentLaunchCalcs(item);
+                                            foundOther = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!foundOther) {
+                                        g_recentLaunchFocusMode = false;
+                                        recentLaunchActiveBatchId = "";
+                                        g_repSatInitialized = false;
+                                    }
+                                } else {
+                                    bool hasAny = false;
+                                    for (const auto& item : g_recentLaunches) {
+                                        if (item.selected) { hasAny = true; break; }
+                                    }
+                                    if (!hasAny) {
+                                        g_recentLaunchFocusMode = false;
+                                        recentLaunchActiveBatchId = "";
+                                        g_repSatInitialized = false;
+                                    }
+                                }
                             }
+
                             portENTER_CRITICAL(&passMutex);
                             predictionsReady = false;
                             lastPredictionBaseTime = 0;
@@ -2839,15 +2896,19 @@ void loop() {
                             triggerPrediction = true;
                         }
                     } else if (M5Cardputer.Keyboard.isKeyPressed(';')) { // UP
-                        if (!recentLaunchInObjectsView) {
-                            if (recentLaunchSelectedIndex > 0) recentLaunchSelectedIndex--;
-                            else if (!g_recentLaunches.empty()) recentLaunchSelectedIndex = g_recentLaunches.size() - 1;
+                        if (recentLaunchSelectedIndex > 0) recentLaunchSelectedIndex--;
+                        else if (!g_recentLaunches.empty()) recentLaunchSelectedIndex = g_recentLaunches.size() - 1;
+                        if (recentLaunchInObjectsView) {
+                            recentLaunchObjectPage = 0;
+                            loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], 0);
                         }
                     } else if (M5Cardputer.Keyboard.isKeyPressed('.')) { // DOWN
-                        if (!recentLaunchInObjectsView) {
-                            if (!g_recentLaunches.empty()) {
-                                recentLaunchSelectedIndex = (recentLaunchSelectedIndex + 1) % g_recentLaunches.size();
-                            }
+                        if (!g_recentLaunches.empty()) {
+                            recentLaunchSelectedIndex = (recentLaunchSelectedIndex + 1) % g_recentLaunches.size();
+                        }
+                        if (recentLaunchInObjectsView) {
+                            recentLaunchObjectPage = 0;
+                            loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], 0);
                         }
                     }
                 } else {
@@ -3261,98 +3322,179 @@ void loop() {
         sats.clear();
         int orbitsCalculatedThisFrame = 0;
         if (g_recentLaunchFocusMode) {
-            RecentLaunchItem* activeGroup = nullptr;
             for (auto& item : g_recentLaunches) {
-                if (item.selected && item.batchId == recentLaunchActiveBatchId) {
-                    activeGroup = &item;
-                    break;
-                }
-            }
-            
-            if (activeGroup && g_repSatInitialized) {
-                sats.reserve(1);
-                bool runCalculation = (timeChanged || !g_repSatCache.lastGeoValid);
+                if (!item.selected) continue;
                 
-                if (runCalculation) {
-                    double tx, ty, tz;
-                    if (g_repSatCalc.getTEME(simTime, tx, ty, tz)) {
-                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
-                        GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                if (item.batchId == recentLaunchActiveBatchId) {
+                    if (g_repSatInitialized) {
+                        bool runCalculation = (timeChanged || !g_repSatCache.lastGeoValid);
                         
-                        // Compute shadow state
-                        bool inShadow = false;
-                        if (sun_calc) {
-                            SunPositionData& sPos = view_sun_pos;
-                            float latR = geo.lat * DEG_TO_RAD;
-                            float lonR = geo.lon * DEG_TO_RAD;
-                            float subLatR = sPos.subsolarLat * DEG_TO_RAD;
-                            float subLonR = sPos.subsolarLon * DEG_TO_RAD;
-                            float cos_theta = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
-                            if (cos_theta < 0) {
-                                float r = 6371.0f + (float)geo.alt;
-                                float dist_sq = r * r * (1.0f - cos_theta * cos_theta);
-                                inShadow = (dist_sq < 6371.0f * 6371.0f);
+                        if (runCalculation) {
+                            double tx, ty, tz;
+                            if (g_repSatCalc.getTEME(simTime, tx, ty, tz)) {
+                                ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
+                                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                                
+                                bool inShadow = false;
+                                if (sun_calc) {
+                                    SunPositionData& sPos = view_sun_pos;
+                                    float latR = geo.lat * DEG_TO_RAD;
+                                    float lonR = geo.lon * DEG_TO_RAD;
+                                    float subLatR = sPos.subsolarLat * DEG_TO_RAD;
+                                    float subLonR = sPos.subsolarLon * DEG_TO_RAD;
+                                    float cos_theta = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
+                                    if (cos_theta < 0) {
+                                        float r = 6371.0f + (float)geo.alt;
+                                        float dist_sq = r * r * (1.0f - cos_theta * cos_theta);
+                                        inShadow = (dist_sq < 6371.0f * 6371.0f);
+                                    }
+                                }
+                                
+                                g_repSatCache.lastGeo = geo;
+                                g_repSatCache.lastInShadow = inShadow;
+                                g_repSatCache.lastGeoValid = true;
+                            } else {
+                                g_repSatCache.lastGeoValid = false;
                             }
                         }
                         
-                        g_repSatCache.lastGeo = geo;
-                        g_repSatCache.lastInShadow = inShadow;
-                        g_repSatCache.lastGeoValid = true;
-                    } else {
-                        g_repSatCache.lastGeoValid = false;
-                    }
-                }
-                
-                if (g_repSatCache.lastGeoValid) {
-                    bool isVisible = false;
-                    if (sun_calc) {
-                        GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                        ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_repSatCache.lastGeo);
-                        TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
-                        float el = topo.el;
-                        
-                        if (el > -5.0f && el < 15.0f) {
-                            float r = 1.02f / tanf((el + 10.3f / (el + 5.11f)) * DEG_TO_RAD);
-                            el += r / 60.0f;
-                        }
-                        
-                        SunPositionData& sPos = observer_sun_pos;
-                        float uLatR = baseUserLat * DEG_TO_RAD;
-                        float uLonR = baseUserLon * DEG_TO_RAD;
-                        float subLatR = sPos.subsolarLat * DEG_TO_RAD;
-                        float subLonR = sPos.subsolarLon * DEG_TO_RAD;
-                        float sun_cos_dist = sinf(uLatR)*sinf(subLatR) + cosf(uLatR)*cosf(subLatR)*cosf(uLonR - subLonR);
-                        float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
-                        bool isNight = sun_alt < -6.0f;
-                        
-                        if (isSatViewMode) {
-                            isVisible = !g_repSatCache.lastInShadow;
+                        if (g_repSatCache.lastGeoValid) {
+                            bool isVisible = false;
+                            if (sun_calc) {
+                                GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                                ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_repSatCache.lastGeo);
+                                TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
+                                float el = topo.el;
+                                
+                                if (el > -5.0f && el < 15.0f) {
+                                    float r = 1.02f / tanf((el + 10.3f / (el + 5.11f)) * DEG_TO_RAD);
+                                    el += r / 60.0f;
+                                }
+                                
+                                SunPositionData& sPos = observer_sun_pos;
+                                float uLatR = baseUserLat * DEG_TO_RAD;
+                                float uLonR = baseUserLon * DEG_TO_RAD;
+                                float subLatR = sPos.subsolarLat * DEG_TO_RAD;
+                                float subLonR = sPos.subsolarLon * DEG_TO_RAD;
+                                float sun_cos_dist = sinf(uLatR)*sinf(subLatR) + cosf(uLatR)*cosf(subLatR)*cosf(uLonR - subLonR);
+                                float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
+                                bool isNight = sun_alt < -6.0f;
+                                
+                                if (isSatViewMode) {
+                                    isVisible = !g_repSatCache.lastInShadow;
+                                } else {
+                                    isVisible = (isNight && (el >= 10.0f) && !g_repSatCache.lastInShadow);
+                                }
+                            }
+                            g_repSatCache.isVisible = isVisible;
+                            
+                            SatRenderData data;
+                            data.name = g_repSatName.c_str();
+                            data.iconType = ICON_SATELLITE;
+                            data.currentPos = g_repSatCache.lastGeo;
+                            data.color = TFT_CYAN;
+                            data.isVisible = g_repSatCache.isVisible;
+                            data.isRecentLaunchBatch = true;
+                            data.totalSatellitesInBatch = item.satelliteCount;
+                            data.launchEpoch = item.epoch;
+                            data.simTime = simTime;
+                            
+                            calculateOrbit(g_repSatCalc, simTime, g_repSatCache.cache, orbitsCalculatedThisFrame, isFastForwarding);
+                            
+                            data.pastOrbit = &(g_repSatCache.cache.past);
+                            data.futureOrbit = &(g_repSatCache.cache.future);
+                            data.lastCalcTime = g_repSatCache.cache.lastCalcTime;
+                            
+                            sats.push_back(data);
                         } else {
-                            isVisible = (isNight && (el >= 10.0f) && !g_repSatCache.lastInShadow);
+                            g_repSatCache.isVisible = false;
                         }
                     }
-                    g_repSatCache.isVisible = isVisible;
-                    
-                    SatRenderData data;
-                    data.name = g_repSatName.c_str();
-                    data.iconType = ICON_SATELLITE;
-                    data.currentPos = g_repSatCache.lastGeo;
-                    data.color = TFT_CYAN;
-                    data.isVisible = g_repSatCache.isVisible;
-                    data.isRecentLaunchBatch = true;
-                    data.totalSatellitesInBatch = activeGroup->satelliteCount;
-                    data.launchEpoch = activeGroup->epoch;
-                    data.simTime = simTime;
-                    
-                    calculateOrbit(g_repSatCalc, simTime, g_repSatCache.cache, orbitsCalculatedThisFrame, isFastForwarding);
-                    
-                    data.pastOrbit = &(g_repSatCache.cache.past);
-                    data.futureOrbit = &(g_repSatCache.cache.future);
-                    data.lastCalcTime = g_repSatCache.cache.lastCalcTime;
-                    
-                    sats.push_back(data);
                 } else {
-                    g_repSatCache.isVisible = false;
+                    if (item.calc) {
+                        bool runCalculation = (timeChanged || !item.cache.lastGeoValid);
+                        
+                        if (runCalculation) {
+                            double tx, ty, tz;
+                            if (item.calc->getTEME(simTime, tx, ty, tz)) {
+                                ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
+                                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                                
+                                bool inShadow = false;
+                                if (sun_calc) {
+                                    SunPositionData& sPos = view_sun_pos;
+                                    float latR = geo.lat * DEG_TO_RAD;
+                                    float lonR = geo.lon * DEG_TO_RAD;
+                                    float subLatR = sPos.subsolarLat * DEG_TO_RAD;
+                                    float subLonR = sPos.subsolarLon * DEG_TO_RAD;
+                                    float cos_theta = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
+                                    if (cos_theta < 0) {
+                                        float r = 6371.0f + (float)geo.alt;
+                                        float dist_sq = r * r * (1.0f - cos_theta * cos_theta);
+                                        inShadow = (dist_sq < 6371.0f * 6371.0f);
+                                    }
+                                }
+                                
+                                item.cache.lastGeo = geo;
+                                item.cache.lastInShadow = inShadow;
+                                item.cache.lastGeoValid = true;
+                            } else {
+                                item.cache.lastGeoValid = false;
+                            }
+                        }
+                        
+                        if (item.cache.lastGeoValid) {
+                            bool isVisible = false;
+                            if (sun_calc) {
+                                GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                                ECEFCoord satEcef = CoordTransform::geodeticToECEF(item.cache.lastGeo);
+                                TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
+                                float el = topo.el;
+                                
+                                if (el > -5.0f && el < 15.0f) {
+                                    float r = 1.02f / tanf((el + 10.3f / (el + 5.11f)) * DEG_TO_RAD);
+                                    el += r / 60.0f;
+                                }
+                                
+                                SunPositionData& sPos = observer_sun_pos;
+                                float uLatR = baseUserLat * DEG_TO_RAD;
+                                float uLonR = baseUserLon * DEG_TO_RAD;
+                                float subLatR = sPos.subsolarLat * DEG_TO_RAD;
+                                float subLonR = sPos.subsolarLon * DEG_TO_RAD;
+                                float sun_cos_dist = sinf(uLatR)*sinf(subLatR) + cosf(uLatR)*cosf(subLatR)*cosf(uLonR - subLonR);
+                                float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
+                                bool isNight = sun_alt < -6.0f;
+                                
+                                if (isSatViewMode) {
+                                    isVisible = !item.cache.lastInShadow;
+                                } else {
+                                    isVisible = (isNight && (el >= 10.0f) && !item.cache.lastInShadow);
+                                }
+                            }
+                            item.cache.isVisible = isVisible;
+                            
+                            SatRenderData data;
+                            data.name = item.repSatName.c_str();
+                            data.iconType = ICON_SATELLITE;
+                            data.currentPos = item.cache.lastGeo;
+                            data.color = TFT_CYAN;
+                            data.isVisible = item.cache.isVisible;
+                            data.isRecentLaunchBatch = true;
+                            data.totalSatellitesInBatch = item.satelliteCount;
+                            data.launchEpoch = item.epoch;
+                            data.simTime = simTime;
+                            
+                            calculateOrbit(*(item.calc), simTime, item.cache.cache, orbitsCalculatedThisFrame, isFastForwarding);
+                            
+                            data.pastOrbit = &(item.cache.cache.past);
+                            data.futureOrbit = &(item.cache.cache.future);
+                            data.lastCalcTime = item.cache.cache.lastCalcTime;
+                            
+                            sats.push_back(data);
+                        } else {
+                            item.cache.isVisible = false;
+                        }
+                    }
                 }
             }
             
