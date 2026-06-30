@@ -950,6 +950,12 @@ void fetchFrequencies() {
     }
     if (httpCode == HTTP_CODE_OK) {
         String payload = http.getString();
+        
+        // Reclaim ~40KB heap memory by releasing the SSL client BEFORE executing JSON deserialization
+        http.end();
+        delete client;
+        client = nullptr;
+        
         payload.trim();
         if (payload.length() > 0 && payload.length() < 10240 && payload.startsWith("{")) {
             JsonDocument doc;
@@ -976,8 +982,11 @@ void fetchFrequencies() {
             LOG_I("APP", "Frequencies payload skipped (size: %d)", payload.length());
         }
     }
-    http.end();
-    delete client;
+    
+    if (client) {
+        http.end();
+        delete client;
+    }
 }
 
 String extractPrefix(String name) {
@@ -1099,21 +1108,19 @@ void recentLaunchNetworkTask(void* parameter) {
     
     // 3. Download & Process TLE Stream
     recentLaunchErrorMsg = "Downloading TLEs...";
-    WiFiClientSecure *client = new WiFiClientSecure;
+    WiFiClient *client = new WiFiClient;
     if (!client) {
-        recentLaunchErrorMsg = "SSL Client Init Failed!";
+        recentLaunchErrorMsg = "Client Init Failed!";
         recentLaunchDownloading = false;
         vTaskDelete(NULL);
         return;
     }
-    client->setInsecure();
-    client->setTimeout(30000); // 30 seconds connection and handshake timeout
-    client->setHandshakeTimeout(25); // 25 seconds SSL handshake timeout
+    client->setTimeout(30000); // 30 seconds connection timeout
     
     HTTPClient http;
     http.setTimeout(60000); // 60 seconds HTTP timeout for large TLE stream
-    http.setConnectTimeout(30000); // 30 seconds TCP/SSL connection timeout
-    String url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=tle";
+    http.setConnectTimeout(30000); // 30 seconds TCP connection timeout
+    String url = "http://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=tle";
     http.begin(*client, url);
     int httpCode = http.GET();
     
@@ -1310,10 +1317,7 @@ void networkTask(void* parameter) {
 
         // 4. Fetch TLEs
         bool updated = false;
-        WiFiClientSecure* sharedClient = new WiFiClientSecure;
-        if (sharedClient) {
-            sharedClient->setInsecure();
-        }
+        WiFiClient* sharedClient = new WiFiClient;
         
         for (int i = 0; i < NUM_SATELLITES; i++) {
             TLEData new_tle;
@@ -1892,10 +1896,26 @@ void drawSatSelectPage() {
             canvas->drawArc(wifiX, wifiY - 1, 8, 9, 225.0f, 315.0f, wifiColor);
         }
         
-        // 2. Battery Icon on Top-Right
-        int batPct = M5Cardputer.Power.getBatteryLevel();
-        if (batPct > 100) batPct = 100;
-        if (batPct < 0) batPct = 0;
+        // 2. Battery Icon on Top-Right with hysteresis filtering to prevent jitter
+        static float filteredBat = -1.0f;
+        static int lastDisplayedBat = -1;
+        
+        int rawBat = M5Cardputer.Power.getBatteryLevel();
+        if (rawBat > 100) rawBat = 100;
+        if (rawBat < 0) rawBat = 0;
+        
+        if (filteredBat < 0.0f) {
+            filteredBat = (float)rawBat;
+            lastDisplayedBat = rawBat;
+        } else {
+            // Smooth out high-frequency ADC voltage noise with a first-order low-pass filter
+            filteredBat = filteredBat * 0.98f + (float)rawBat * 0.02f;
+            // Apply 1.0% hysteresis band to prevent the integer display from toggling back-and-forth at boundary values
+            if (fabsf(filteredBat - (float)lastDisplayedBat) >= 1.0f) {
+                lastDisplayedBat = (int)(filteredBat + 0.5f);
+            }
+        }
+        int batPct = lastDisplayedBat;
         
         uint16_t batColor = TFT_GREEN;
         if (batPct < 10) {

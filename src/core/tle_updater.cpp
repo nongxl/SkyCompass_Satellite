@@ -10,7 +10,7 @@ void TLEUpdater::begin() {
     }
 }
 
-bool TLEUpdater::getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds, WiFiClientSecure* sharedClient) {
+bool TLEUpdater::getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds, WiFiClient* sharedClient) {
     uint32_t cacheTime = 0;
     bool hasCache = loadFromCache(noradId, outTle, cacheTime);
     
@@ -84,29 +84,27 @@ bool TLEUpdater::saveToCache(int noradId, const TLEData& tle, uint32_t timestamp
     return true;
 }
 
-bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle, WiFiClientSecure* sharedClient) {
+bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle, WiFiClient* sharedClient) {
     if (noradId == 50463) {
         outTle = TLEManager::getJWST_TLE();
         return true;
     }
     
     bool isLocalClient = false;
-    WiFiClientSecure* client = sharedClient;
+    WiFiClient* client = sharedClient;
     if (!client) {
-        client = new WiFiClientSecure;
+        client = new WiFiClient;
         if (!client) {
-            LOG_I("APP", "Failed to create WiFiClientSecure");
+            LOG_I("APP", "Failed to create WiFiClient");
             return false;
         }
-        client->setInsecure(); // Skip certificate verification
         isLocalClient = true;
     }
-    client->setHandshakeTimeout(15); // 15 seconds SSL handshake timeout
     
     HTTPClient http;
     http.setTimeout(15000); // 15 seconds HTTP timeout
     http.setConnectTimeout(15000); // 15 seconds connection timeout
-    String url = "https://celestrak.org/NORAD/elements/gp.php?CATNR=" + String(noradId) + "&FORMAT=tle";
+    String url = "http://celestrak.org/NORAD/elements/gp.php?CATNR=" + String(noradId) + "&FORMAT=tle";
     
     http.begin(*client, url);
     int httpCode = http.GET();
