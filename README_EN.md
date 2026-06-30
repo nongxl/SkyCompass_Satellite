@@ -179,6 +179,38 @@ The `scratch/` folder hosts development tools, math verifications, and refactori
 | Orbit Speed | Slow periodic changes | Ultra-fast velocity (~90 min to orbit Earth) |
 | Core UX | Spatial pointing & 3D stellar observation | Pass predictions & visible window planner |
 | Data Source | Astronomical Ephemeris formulas | TLE + SGP4 propagation model |
+## Data Layer Architecture
+
+To support CelesTrak's transition to 6-digit Catalog Numbers (100000+) starting in 2026 and the discontinuation of the legacy TLE format, the data layer has been completely refactored to decouple data formats from orbital calculations:
+
+### Architecture Design
+
+```text
+Network / WIFI
+      │
+      ▼
+OrbitDataProvider
+      │
+      ▼
+OrbitParser (TLEParser / JSONParser)
+      │
+      ▼
+OrbitRecord (DTO / Single Source of Truth)
+      │
+      ▼
+SGP4 (Propagation Engine)
+      │
+      ▼
+Application (Earth View / Recommended / HAM / GUI)
+```
+
+### Supported Formats
+
+* **TLE (Legacy)**: Legacy Two-Line Element sets. Automatically compatible with existing offline caches.
+* **CelesTrak GP JSON (Default)**: Modern default exchange format. Supports direct OMM parameter extraction and natively handles 6-digit Catalog Numbers.
+* **OMM (Reserved)**: CCSDS Orbit Mean-Elements Messages. Reserved for future extensions.
+
+The system is fully compatible with future 6-digit Catalog Numbers. It utilizes a pseudo-TLE bridge adapter to reconstruct compatible lines for the SGP4 physical solver, keeping the core database and GUI layers populated with genuine, unaltered 6-digit NORAD satellite IDs.
 
 ## Architecture & Roadmap
 

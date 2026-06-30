@@ -1,4 +1,6 @@
 #include "tle_updater.h"
+#include "sgp4_calc.h"
+#include "orbit_data_provider.h"
 #include "core/log_manager.h"
 #include "../hal/hal_wifi.h"
 
@@ -90,59 +92,12 @@ bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle, WiFiClient* shar
         return true;
     }
     
-    bool isLocalClient = false;
-    WiFiClient* client = sharedClient;
-    if (!client) {
-        client = new WiFiClient;
-        if (!client) {
-            LOG_I("APP", "Failed to create WiFiClient");
-            return false;
-        }
-        isLocalClient = true;
+    OrbitRecord record;
+    if (OrbitDataProvider::loadByCatalogNumber(noradId, record)) {
+        outTle.name = record.name;
+        outTle.baseScore = 0;
+        SGP4Calc::buildPseudoTle(record, outTle.line1, outTle.line2);
+        return true;
     }
-    
-    HTTPClient http;
-    http.setTimeout(15000); // 15 seconds HTTP timeout
-    http.setConnectTimeout(15000); // 15 seconds connection timeout
-    String url = "http://celestrak.org/NORAD/elements/gp.php?CATNR=" + String(noradId) + "&FORMAT=tle";
-    
-    http.begin(*client, url);
-    int httpCode = http.GET();
-    
-    if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-        if (httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-            String newUrl = http.getLocation();
-            http.end();
-            http.begin(*client, newUrl);
-            httpCode = http.GET();
-        }
-    }
-    
-    bool success = false;
-    if (httpCode == HTTP_CODE_OK) {
-        String payload = http.getString();
-        
-        // Split payload by newline
-        int firstNL = payload.indexOf('\n');
-        int secondNL = payload.indexOf('\n', firstNL + 1);
-        
-        if (firstNL > 0 && secondNL > firstNL) {
-            outTle.name = payload.substring(0, firstNL);
-            outTle.line1 = payload.substring(firstNL + 1, secondNL);
-            outTle.line2 = payload.substring(secondNL + 1);
-            
-            outTle.name.trim();
-            outTle.line1.trim();
-            outTle.line2.trim();
-            success = true;
-        }
-    } else {
-        LOG_I("APP", "Failed to fetch TLE for %d. HTTP Code: %d", noradId, httpCode);
-    }
-    
-    http.end();
-    if (isLocalClient) {
-        delete client;
-    }
-    return success;
+    return false;
 }

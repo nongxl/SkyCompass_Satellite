@@ -1,12 +1,11 @@
 #pragma once
-
-#include <Arduino.h>
+#include "orbit_record.h"
 
 struct TLEData {
     String name;
     String line1;
     String line2;
-    int baseScore; // Additional base score for size/brightness
+    int baseScore = 0;
 };
 
 struct FormationPoint {

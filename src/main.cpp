@@ -83,85 +83,9 @@ AttitudeEstimator* attitude = nullptr;
 PositionManager* pos_manager = nullptr;
 SunCalculator* sun_calc = nullptr;
 
-// Cache structures to avoid running heavy SGP4 math every frame
-struct OrbitCache {
-    uint32_t lastCalcTime = 0;
-    std::vector<GeodeticCoord> past;
-    std::vector<GeodeticCoord> future;
-};
-
-enum SatelliteType {
-    SAT_TYPE_VISUAL,
-    SAT_TYPE_HAM,
-    SAT_TYPE_WEATHER,
-    SAT_TYPE_SPACE_STATION,
-    SAT_TYPE_HISTORICAL
-};
-
-struct SatProfile {
-    int noradId;
-    String name;
-    uint16_t color;
-    int baseScore;
-    double stdMag;
-    bool selected;
-    SatIconType iconType;
-    const char* description;
-    String downlinkFreq;
-    String radioMode;
-    String uplinkFreq;
-    String tone;
-    TLEData tle;
-    SGP4Calc calc;
-    OrbitCache cache;
-    SatelliteType type;
-};
-
-struct SatRealtimeCache {
-    GeodeticCoord lastGeo;
-    bool lastGeoValid = false;
-    bool lastInShadow = false;
-    bool isVisible = false;
-};
-
-enum SatSelectTab {
-    TAB_ENCYCLOPEDIA = 0,
-    TAB_RECENT_LAUNCH = 1
-};
-
-#include <memory>
-
-struct RecentLaunchRealtimeCache {
-    GeodeticCoord lastGeo;
-    bool lastGeoValid = false;
-    bool lastInShadow = false;
-    bool isVisible = false;
-    OrbitCache cache;
-};
-
-struct RecentLaunchItem {
-    String batchId;            // 国际标识符前 5 位 (如 "26042")
-    String displayName;        // 智能提取出的星座/卫星公共名称前缀
-    int satelliteCount;        // 组内包含的卫星数
-    bool isGroup;              // 是否为成组任务
-    bool selected;             // 用户是否勾选观测
-    uint32_t epoch = 0;        // TLE 历元时间戳缓存
-    float inclination = 0.0f;  // 轨道倾角缓存
-    float avgAlt = 0.0f;       // 平均高度缓存
-    String repSatName;         // 缓存的代表卫星名称
-    
-    std::shared_ptr<SGP4Calc> calc;
-    RecentLaunchRealtimeCache cache;
-
-    // New fields for Mission Formation Visualization
-    std::vector<FormationPoint> proxyFormation;
-    float occupancy = 0.0f;
-    float occupancyStartPhase = 0.0f;
-    float occupancyEndPhase = 0.0f;
-    float repAlongTrackPhase = 0.0f;
-    String shortName;
-    SatIconType iconType = ICON_SATELLITE;
-};
+#include "core/recent_launch_item.h"
+#include "core/orbit_data_provider.h"
+#include "core/json_parser.h"
 
 
 
@@ -228,15 +152,7 @@ float targetZoom = 0.95f;
 bool recentLaunchInObjectsView = false;
 int recentLaunchObjectPage = 0;
 
-struct LazyObjectItem {
-    String name;
-    TLEData tle;
-    SGP4Calc calc;
-    GeodeticCoord lastGeo;
-    bool lastGeoValid = false;
-    bool isVisible = false;
-    OrbitCache cache;
-};
+
 std::vector<LazyObjectItem> g_level3Objects;
 
 
@@ -466,36 +382,33 @@ void initRecentLaunchCalcs(RecentLaunchItem& item) {
         item.calc.reset();
         return;
     }
-    File f = LittleFS.open("/tle_recent_raw.txt", "r");
+    File f = LittleFS.open("/json_recent_raw.jsonl", "r");
     if (f) {
+        JSONParser parser;
         while (f.available()) {
-            String name = f.readStringUntil('\n'); name.trim();
-            if (name.length() == 0) break;
-            String line1 = f.readStringUntil('\n'); line1.trim();
-            String line2 = f.readStringUntil('\n'); line2.trim();
+            String singleLine = f.readStringUntil('\n');
+            singleLine.trim();
+            if (singleLine.length() == 0) continue;
             
-            if (line1.length() < 14 || line1.charAt(0) != '1' || line2.length() < 14 || line2.charAt(0) != '2') {
-                continue;
-            }
-            if (line1.substring(9, 14) == item.batchId) {
-                TLEData tle;
-                tle.name = name;
-                tle.line1 = line1;
-                tle.line2 = line2;
-                tle.baseScore = 0;
-                item.calc = std::make_shared<SGP4Calc>();
-                item.calc->init(tle);
-                item.cache.lastGeoValid = false;
-                item.cache.isVisible = false;
-                
-                if (item.batchId == recentLaunchActiveBatchId) {
-                    g_repSatTLE = tle;
-                    g_repSatCalc = *(item.calc);
-                    g_repSatName = name;
-                    g_repSatInitialized = true;
-                    g_repSatCache = item.cache;
+            OrbitRecord record;
+            if (parser.parse(singleLine, record)) {
+                if (record.getBatchId() == item.batchId) {
+                    item.calc = std::make_shared<SGP4Calc>();
+                    item.calc->init(record);
+                    item.cache.lastGeoValid = false;
+                    item.cache.isVisible = false;
+                    
+                    if (item.batchId == recentLaunchActiveBatchId) {
+                        g_repSatTLE.name = record.name;
+                        g_repSatTLE.baseScore = 0;
+                        SGP4Calc::buildPseudoTle(record, g_repSatTLE.line1, g_repSatTLE.line2);
+                        g_repSatCalc = *(item.calc);
+                        g_repSatName = record.name;
+                        g_repSatInitialized = true;
+                        g_repSatCache = item.cache;
+                    }
+                    break;
                 }
-                break;
             }
         }
         f.close();
@@ -504,41 +417,7 @@ void initRecentLaunchCalcs(RecentLaunchItem& item) {
 }
 
 void loadLevel3ObjectsPage(const RecentLaunchItem& item, int page) {
-    g_level3Objects.clear();
-    File f = LittleFS.open("/tle_recent_raw.txt", "r");
-    if (!f) return;
-    
-    int skipCount = page * 5;
-    int loadCount = 0;
-    int matchIndex = 0;
-    
-    while (f.available() && loadCount < 5) {
-        String name = f.readStringUntil('\n'); name.trim();
-        if (name.length() == 0) break;
-        String line1 = f.readStringUntil('\n'); line1.trim();
-        String line2 = f.readStringUntil('\n'); line2.trim();
-        if (line1.length() < 14 || line1.charAt(0) != '1' || line2.length() < 14 || line2.charAt(0) != '2') {
-            continue;
-        }
-        
-        if (line1.substring(9, 14) == item.batchId) {
-            if (matchIndex >= skipCount) {
-                LazyObjectItem obj;
-                obj.name = name;
-                obj.tle.name = name;
-                obj.tle.line1 = line1;
-                obj.tle.line2 = line2;
-                obj.calc.init(obj.tle);
-                obj.lastGeoValid = false;
-                obj.isVisible = false;
-                g_level3Objects.push_back(obj);
-                loadCount++;
-            }
-            matchIndex++;
-        }
-    }
-    f.close();
-    LOG_I("RECENT_LAUNCH", "Loaded %d items for page %d (match index starts at %d)", loadCount, page, skipCount);
+    OrbitDataProvider::loadLevel3ObjectsPage(item, page);
 }
 
 void getRepresentativeOrbitParams(const String& line2, float& inclination, float& avgAlt) {
@@ -1106,123 +985,22 @@ void recentLaunchNetworkTask(void* parameter) {
         LOG_I("RECENT_LAUNCH", "Time synced to UTC: %u", current_unix);
     }
     
-    // 3. Download & Process TLE Stream
-    recentLaunchErrorMsg = "Downloading TLEs...";
-    WiFiClient *client = new WiFiClient;
-    if (!client) {
-        recentLaunchErrorMsg = "Client Init Failed!";
-        recentLaunchDownloading = false;
-        vTaskDelete(NULL);
-        return;
-    }
-    client->setTimeout(30000); // 30 seconds connection timeout
+    // 3. Download & Process JSON Stream
+    recentLaunchErrorMsg = "Downloading GP JSON...";
+    std::vector<RecentLaunchItem> tempLaunches;
+    bool success = OrbitDataProvider::downloadRecentLaunches(tempLaunches);
     
-    HTTPClient http;
-    http.setTimeout(60000); // 60 seconds HTTP timeout for large TLE stream
-    http.setConnectTimeout(30000); // 30 seconds TCP connection timeout
-    String url = "http://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=tle";
-    http.begin(*client, url);
-    int httpCode = http.GET();
-    
-    if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-        if (httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-            String newUrl = http.getLocation();
-            http.end();
-            http.begin(*client, newUrl);
-            httpCode = http.GET();
-        }
-    }
-    
-    if (httpCode == HTTP_CODE_OK) {
-        recentLaunchErrorMsg = "Grouping Satellites...";
-        WiFiClient* stream = http.getStreamPtr();
-        
-        File f = LittleFS.open("/tle_recent_raw.txt", "w");
-        int rawTleCount = 0;
-        
-        std::vector<RecentLaunchItem> tempLaunches;
-        tempLaunches.reserve(30);
-        
-        while (stream->connected() || stream->available()) {
-            if (!recentLaunchDownloading) {
-                break;
-            }
-            String name = readValLine(stream);
-            if (name.length() == 0) {
-                if (!stream->available()) break;
-                continue;
-            }
-            String line1 = readValLine(stream);
-            String line2 = readValLine(stream);
-            
-            if (line1.length() < 14 || line1.charAt(0) != '1' || line2.length() < 14 || line2.charAt(0) != '2') {
-                continue;
-            }
-            
-            String batchId = line1.substring(9, 14);
-            
-            if (f) {
-                f.println(name);
-                f.println(line1);
-                f.println(line2);
-                rawTleCount++;
-            }
-            
-            int foundIdx = -1;
-            for (size_t i = 0; i < tempLaunches.size(); i++) {
-                if (tempLaunches[i].batchId == batchId) {
-                    foundIdx = i;
-                    break;
-                }
-            }
-            
-            if (foundIdx != -1) {
-                if (tempLaunches[foundIdx].satelliteCount < 60) {
-                    tempLaunches[foundIdx].satelliteCount++;
-                }
-                tempLaunches[foundIdx].isGroup = true;
-            } else {
-                RecentLaunchItem item;
-                item.batchId = batchId;
-                item.displayName = extractPrefix(name);
-                item.satelliteCount = 1;
-                item.isGroup = false;
-                item.selected = false;
-                item.epoch = parseTleEpoch(line1);
-                getRepresentativeOrbitParams(line2, item.inclination, item.avgAlt);
-                item.repSatName = name;
-                tempLaunches.push_back(item);
-            }
-            vTaskDelay(pdMS_TO_TICKS(2));
-        }
-        
-        if (f) {
-            f.close();
-        }
-        
-        http.end();
-        if (client) {
-            delete client;
-            client = nullptr;
-        }
-        
-        if (recentLaunchDownloading && rawTleCount > 0) {
-            g_pendingRecentLaunches = std::move(tempLaunches);
-            calculateFormationsForItems(g_pendingRecentLaunches);
-            g_recentLaunchesPending = true;
-            recentLaunchSelectedIndex = 0;
-            recentLaunchDownloadSuccess = true;
-            recentLaunchErrorMsg = "Downloaded successfully!";
-            LOG_I("RECENT_LAUNCH", "Loaded %d unique batches saved directly to LittleFS.", g_pendingRecentLaunches.size());
-        }
+    if (success && recentLaunchDownloading && !tempLaunches.empty()) {
+        g_pendingRecentLaunches = std::move(tempLaunches);
+        calculateFormationsForItems(g_pendingRecentLaunches);
+        g_recentLaunchesPending = true;
+        recentLaunchSelectedIndex = 0;
+        recentLaunchDownloadSuccess = true;
+        recentLaunchErrorMsg = "Downloaded successfully!";
+        LOG_I("RECENT_LAUNCH", "Loaded %d unique batches saved directly to LittleFS.", g_pendingRecentLaunches.size());
     } else {
-        recentLaunchErrorMsg = "HTTP Error: " + String(httpCode);
-        LOG_I("RECENT_LAUNCH", "Celestrak fetch failed, code: %d", httpCode);
-        http.end();
-        if (client) {
-            delete client;
-            client = nullptr;
-        }
+        recentLaunchErrorMsg = "Download Failed!";
+        LOG_I("RECENT_LAUNCH", "Celestrak JSON fetch failed");
     }
     
     recentLaunchDownloading = false;
@@ -2417,7 +2195,11 @@ void drawSatSelectPage() {
                     canvas->drawString(stars, width - starsW - 4, 23);
                     
                     canvas->setTextColor(TFT_CYAN);
-                    canvas->drawString(("Batch: " + item.batchId).c_str(), rightX, 33);
+                    String formattedBatch = item.batchId;
+                    if (item.batchId.length() == 5 && isdigit(item.batchId[0]) && isdigit(item.batchId[1])) {
+                        formattedBatch = "20" + item.batchId.substring(0, 2) + "-" + item.batchId.substring(2);
+                    }
+                    canvas->drawString(("Batch: " + formattedBatch).c_str(), rightX, 33);
                     
                     // Age placement on the right
                     char ageBuf[16];
@@ -2446,37 +2228,44 @@ void drawSatSelectPage() {
                     canvas->setTextColor(TFT_LIGHTGRAY);
                     canvas->drawString(("Launch: " + String(dateBuf)).c_str(), rightX, 43);
                     
+                    // Draw representative satellite name
+                    String repSatText = "Rep: " + item.repSatName;
+                    if (repSatText.length() > 22) {
+                        repSatText = repSatText.substring(0, 19) + "...";
+                    }
+                    canvas->drawString(repSatText.c_str(), rightX, 53);
+                    
                     // Display real count of objects and clustered proxies
                     char satsBuf[64];
                     int proxyCount = item.proxyFormation.size();
                     sprintf(satsBuf, "Objects: %d | Proxy: %d", item.satelliteCount, proxyCount);
-                    canvas->drawString(satsBuf, rightX, 53);
+                    canvas->drawString(satsBuf, rightX, 63);
                     
                     char orbitBuf[48];
                     sprintf(orbitBuf, "Orbit: %dkm, %.1f*", (int)avgAlt, inclination);
-                    canvas->drawString(orbitBuf, rightX, 63);
+                    canvas->drawString(orbitBuf, rightX, 73);
                     
                     // Formation State & Occupancy degree
                     canvas->setTextColor(TFT_GREEN);
-                    canvas->drawString("Status:", rightX, 73);
+                    canvas->drawString("Status:", rightX, 83);
                     canvas->setTextColor(TFT_WHITE);
                     const char* formState = "Operational";
                     if (item.occupancy < 15.0f) formState = "Tight Train";
                     else if (item.occupancy < 60.0f) formState = "Train Formation";
                     else if (item.occupancy < 120.0f) formState = "Expanding";
-                    canvas->drawString(formState, rightX + 45, 73);
+                    canvas->drawString(formState, rightX + 45, 83);
                     
                     char occBuf[32];
                     sprintf(occBuf, "Occ: %d*", (int)item.occupancy);
                     canvas->setTextColor(TFT_CYAN);
                     int occW = canvas->textWidth(occBuf);
-                    canvas->drawString(occBuf, width - occW - 4, 94);
+                    canvas->drawString(occBuf, width - occW - 4, 103);
                     
                     // Distribution indicator (8 refined blocks)
                     canvas->setTextColor(TFT_GREEN);
-                    canvas->drawString("Distribution:", rightX, 85);
+                    canvas->drawString("Distribution:", rightX, 93);
                     
-                    int barY = 95;
+                    int barY = 103;
                     int filledCount = (int)((item.occupancy / 360.0f) * 8.0f + 0.5f);
                     if (filledCount < 1 && item.occupancy > 0.0f) filledCount = 1;
                     if (filledCount > 8) filledCount = 8;
@@ -2690,6 +2479,73 @@ void loop() {
     if (millis() - last_update >= 33) {
         last_update = millis();
         
+        // Action keys state from last frame (for edge detection / single-press action)
+        static bool lastSemi = false;
+        static bool lastDot = false;
+        static bool lastComma = false;
+        static bool lastSlash = false;
+        static bool lastO = false;
+        static bool lastV = false;
+        static bool lastEnter = false;
+        static bool lastBack = false;
+        static bool lastEsc = false;
+        static bool lastTick = false;
+        static bool lastBracketL = false;
+        static bool lastBracketR = false;
+        static bool lastC = false;
+        static bool lastR = false;
+        static bool lastW = false;
+        static bool lastS = false;
+        static bool lastH = false;
+        static bool lastG = false;
+        static bool lastY = false;
+        static bool lastN = false;
+        static bool lastD = false;
+
+        bool currSemi = M5Cardputer.Keyboard.isKeyPressed(';');
+        bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
+        bool currComma = M5Cardputer.Keyboard.isKeyPressed(',');
+        bool currSlash = M5Cardputer.Keyboard.isKeyPressed('/');
+        bool currO = M5Cardputer.Keyboard.isKeyPressed('o') || M5Cardputer.Keyboard.isKeyPressed('O');
+        bool currV = M5Cardputer.Keyboard.isKeyPressed('v') || M5Cardputer.Keyboard.isKeyPressed('V');
+        bool currEnter = M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER);
+        bool currBack = M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE);
+        bool currEsc = M5Cardputer.Keyboard.isKeyPressed(27);  // ESC
+        bool currTick = M5Cardputer.Keyboard.isKeyPressed('`');
+        bool currBracketL = M5Cardputer.Keyboard.isKeyPressed('[');
+        bool currBracketR = M5Cardputer.Keyboard.isKeyPressed(']');
+        bool currC = M5Cardputer.Keyboard.isKeyPressed('c') || M5Cardputer.Keyboard.isKeyPressed('C');
+        bool currR = M5Cardputer.Keyboard.isKeyPressed('r') || M5Cardputer.Keyboard.isKeyPressed('R');
+        bool currW = M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W');
+        bool currS = M5Cardputer.Keyboard.isKeyPressed('s') || M5Cardputer.Keyboard.isKeyPressed('S');
+        bool currH = M5Cardputer.Keyboard.isKeyPressed('h') || M5Cardputer.Keyboard.isKeyPressed('H');
+        bool currG = M5Cardputer.Keyboard.isKeyPressed('g') || M5Cardputer.Keyboard.isKeyPressed('G');
+        bool currY = M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y');
+        bool currN = M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed('N');
+        bool currD = M5Cardputer.Keyboard.isKeyPressed('d') || M5Cardputer.Keyboard.isKeyPressed('D');
+
+        bool justSemi = currSemi && !lastSemi;
+        bool justDot = currDot && !lastDot;
+        bool justComma = currComma && !lastComma;
+        bool justSlash = currSlash && !lastSlash;
+        bool justO = currO && !lastO;
+        bool justV = currV && !lastV;
+        bool justEnter = currEnter && !lastEnter;
+        bool justBack = currBack && !lastBack;
+        bool justEsc = currEsc && !lastEsc;
+        bool justTick = currTick && !lastTick;
+        bool justBracketL = currBracketL && !lastBracketL;
+        bool justBracketR = currBracketR && !lastBracketR;
+        bool justC = currC && !lastC;
+        bool justR = currR && !lastR;
+        bool justW = currW && !lastW;
+        bool justS = currS && !lastS;
+        bool justH = currH && !lastH;
+        bool justG = currG && !lastG;
+        bool justY = currY && !lastY;
+        bool justN = currN && !lastN;
+        bool justD = currD && !lastD;
+
         // Handle continuous keyboard input (Time Machine or Manual Location)
         static unsigned long keyHoldStartTime = 0;
         static char lastKey = 0;
@@ -2803,7 +2659,7 @@ void loop() {
         // Handle discrete keyboard input
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
             if (appState == STATE_MAIN) {
-                if (M5Cardputer.Keyboard.isKeyPressed('c')) {
+                if (justC) {
                     if (isSatViewMode) {
                         isSatViewMode = false;
                         targetZoom = 0.95f;
@@ -2817,7 +2673,7 @@ void loop() {
                         portEXIT_CRITICAL(&passMutex);
                         triggerPrediction = true;
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed('r') || M5Cardputer.Keyboard.isKeyPressed('R')) {
+                } else if (justR) {
                     if (!showRecommendations && !showHelp) {
                         timeMachineOffset = 0;
                         if (isManualLocationMode) {
@@ -2831,9 +2687,9 @@ void loop() {
                         portEXIT_CRITICAL(&passMutex);
                         triggerPrediction = true;
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+                } else if (justBack) {
                     showHud = !showHud;
-                } else if (M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
+                } else if (justEsc || justTick) {
                     if (showRecommendations) {
                         if (selectedPassIndex != -1) {
                             selectedPassIndex = -1; // Back to tree
@@ -2850,7 +2706,7 @@ void loop() {
                         targetZoom = 0.95f;
                     }
 
-                } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                } else if (justEnter) {
                     if (appState == STATE_MAIN && !showRecommendations) {
                         showRecommendations = true;
                         passScrollIndex = 0;
@@ -2892,7 +2748,7 @@ void loop() {
                             }
                         }
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed('w')) {
+                } else if (justW) {
                     if (!g_networkActive) {
                         if (!HalWifi::isConnected()) {
                             manualWifiToggle = true;
@@ -2902,7 +2758,7 @@ void loop() {
                             WiFi.mode(WIFI_OFF);
                         }
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed('s')) {
+                } else if (justS) {
                     appState = STATE_SAT_SELECT;
                     currentSatTab = TAB_ENCYCLOPEDIA;
                     entrySelectedSatellites.clear();
@@ -2911,9 +2767,9 @@ void loop() {
                             entrySelectedSatellites.push_back(g_satellites[i].noradId);
                         }
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed('h')) {
+                } else if (justH) {
                     showHelp = !showHelp;
-                } else if (M5Cardputer.Keyboard.isKeyPressed('g') || M5Cardputer.Keyboard.isKeyPressed('G')) {
+                } else if (justG) {
                     if (gnss) {
                         if (gnss->isInStandbyMode()) {
                             gnss->exitStandbyMode();
@@ -2925,7 +2781,7 @@ void loop() {
                             gnssManualMode = false;
                         }
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed('v') || M5Cardputer.Keyboard.isKeyPressed('V')) {
+                } else if (justV) {
                     isSatViewMode = !isSatViewMode;
                     if (isSatViewMode) {
                         bool found = false;
@@ -2958,7 +2814,7 @@ void loop() {
                     }
 
                 }
-                else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
+                else if (justSemi) {
                     if (isSatViewMode && !showRecommendations) {
                         struct FocusTarget {
                             int type; // 0 = Regular Sat, 1 = Recent Launch
@@ -3012,7 +2868,7 @@ void loop() {
                             }
                         }
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed('.')) {
+                } else if (justDot) {
                     if (isSatViewMode && !showRecommendations) {
                         struct FocusTarget {
                             int type; // 0 = Regular Sat, 1 = Recent Launch
@@ -3070,16 +2926,16 @@ void loop() {
 
 
             } else if (appState == STATE_WIFI_SETUP) {
-                if (M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
+                if (justEsc || justTick) {
                     if (wifiIsInputtingPassword) {
                         wifiIsInputtingPassword = false;
                     } else {
                         appState = STATE_MAIN;
                     }
-                } else if (!wifiIsInputtingPassword && M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+                } else if (!wifiIsInputtingPassword && justBack) {
                     appState = STATE_MAIN;
                 } else if (wifiIsInputtingPassword) {
-                    if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                    if (justEnter) {
                         // Connect
                         appState = STATE_MAIN;
                         NetworkParams* params = new NetworkParams();
@@ -3091,7 +2947,7 @@ void loop() {
                         xTaskCreatePinnedToCore(
                             networkTask, "NetworkTask", 16384, params, 1, NULL, 0
                         );
-                    } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+                    } else if (justBack) {
                         if (wifiPasswordLen > 0) {
                             wifiPasswordBuffer[--wifiPasswordLen] = '\0';
                         }
@@ -3104,20 +2960,20 @@ void loop() {
                         }
                     }
                 } else {
-                    if (M5Cardputer.Keyboard.isKeyPressed('r')) {
+                    if (justR) {
                         wifiIsScanning = true;
-                    } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                    } else if (justEnter) {
                         if (!wifiNetworks.empty()) {
                             wifiIsInputtingPassword = true;
                             memset(wifiPasswordBuffer, 0, sizeof(wifiPasswordBuffer));
                             wifiPasswordLen = 0;
                         }
-                    } else if (M5Cardputer.Keyboard.isKeyPressed(';')) { // UP arrow
+                    } else if (justSemi) { // UP arrow
                         if (!wifiNetworks.empty()) {
                             if (wifiSelectedIndex > 0) wifiSelectedIndex--;
                             else wifiSelectedIndex = wifiNetworks.size() - 1;
                         }
-                    } else if (M5Cardputer.Keyboard.isKeyPressed('.')) { // DOWN arrow
+                    } else if (justDot) { // DOWN arrow
                         if (!wifiNetworks.empty()) {
                             wifiSelectedIndex = (wifiSelectedIndex + 1) % wifiNetworks.size();
                         }
@@ -3125,15 +2981,13 @@ void loop() {
                 }
             } else if (appState == STATE_SAT_SELECT) {
                 if (showListHelp) {
-                    if (M5Cardputer.Keyboard.isKeyPressed('h') || M5Cardputer.Keyboard.isKeyPressed('H') || 
-                        M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || 
-                        M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER) || M5Cardputer.Keyboard.isKeyPressed('`')) {
+                    if (justH || justEsc || justBack || justEnter || justTick) {
                         showListHelp = false;
                     }
                 } else if (deleteConfirmIndex >= 0 && currentSatTab == TAB_ENCYCLOPEDIA) {
                     if (deleteConfirmIndex < NUM_BUILTIN_SATELLITES) {
                         deleteConfirmIndex = -1;
-                    } else if (M5Cardputer.Keyboard.isKeyPressed('y')) {
+                    } else if (justY) {
                         if (deleteConfirmIndex >= NUM_BUILTIN_SATELLITES && deleteConfirmIndex < NUM_SATELLITES) {
                             for (int i = deleteConfirmIndex; i < NUM_SATELLITES - 1; i++) {
                                 g_satellites[i] = g_satellites[i + 1];
@@ -3145,10 +2999,10 @@ void loop() {
                             saveCustomSatellites();
                         }
                         deleteConfirmIndex = -1;
-                    } else if (M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed(27)) {
+                    } else if (justN || justEsc) {
                         deleteConfirmIndex = -1;
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed(',') || M5Cardputer.Keyboard.isKeyPressed('/')) {
+                } else if (justComma || justSlash) {
                     currentSatTab = (currentSatTab == TAB_ENCYCLOPEDIA) ? TAB_RECENT_LAUNCH : TAB_ENCYCLOPEDIA;
                     noradInput = "";
                     downloadErrorMsg = "";
@@ -3181,9 +3035,9 @@ void loop() {
                             g_repSatInitialized = false;
                         }
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed('h') || M5Cardputer.Keyboard.isKeyPressed('H')) {
+                } else if (justH) {
                     showListHelp = true;
-                } else if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) {
+                } else if (justW) {
                     if (currentSatTab == TAB_RECENT_LAUNCH) {
                         if (g_networkActive) {
                             recentLaunchErrorMsg = "System Busy... Wait.";
@@ -3225,7 +3079,7 @@ void loop() {
                         }
                     }
                 } else if (currentSatTab == TAB_RECENT_LAUNCH) {
-                    if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
+                    if (justBack || justEsc || justTick) {
                         if (recentLaunchInObjectsView) {
                             recentLaunchInObjectsView = false;
                             g_level3Objects.clear();
@@ -3233,7 +3087,7 @@ void loop() {
                         } else {
                             appState = STATE_MAIN;
                         }
-                    } else if (M5Cardputer.Keyboard.isKeyPressed('o') || M5Cardputer.Keyboard.isKeyPressed('O')) {
+                    } else if (justO) {
                         if (recentLaunchInObjectsView) {
                             recentLaunchInObjectsView = false;
                             g_level3Objects.clear();
@@ -3243,14 +3097,14 @@ void loop() {
                             recentLaunchObjectPage = 0;
                             loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], 0);
                         }
-                    } else if (M5Cardputer.Keyboard.isKeyPressed('[')) {
+                    } else if (justBracketL) {
                         if (recentLaunchInObjectsView && recentLaunchSelectedIndex >= 0) {
                             if (recentLaunchObjectPage > 0) {
                                 recentLaunchObjectPage--;
                                 loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], recentLaunchObjectPage);
                             }
                         }
-                    } else if (M5Cardputer.Keyboard.isKeyPressed(']')) {
+                    } else if (justBracketR) {
                         if (recentLaunchInObjectsView && recentLaunchSelectedIndex >= 0) {
                             int maxPage = (g_recentLaunches[recentLaunchSelectedIndex].satelliteCount - 1) / 5;
                             if (recentLaunchObjectPage < maxPage) {
@@ -3258,7 +3112,7 @@ void loop() {
                                 loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], recentLaunchObjectPage);
                             }
                         }
-                    } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                    } else if (justEnter) {
                         if (recentLaunchSelectedIndex >= 0 && recentLaunchSelectedIndex < (int)g_recentLaunches.size()) {
                             RecentLaunchItem& targetItem = g_recentLaunches[recentLaunchSelectedIndex];
                             targetItem.selected = !targetItem.selected;
@@ -3301,14 +3155,14 @@ void loop() {
                             portEXIT_CRITICAL(&passMutex);
                             triggerPrediction = true;
                         }
-                    } else if (M5Cardputer.Keyboard.isKeyPressed(';')) { // UP
+                    } else if (justSemi) { // UP
                         if (recentLaunchSelectedIndex > 0) recentLaunchSelectedIndex--;
                         else if (!g_recentLaunches.empty()) recentLaunchSelectedIndex = g_recentLaunches.size() - 1;
                         if (recentLaunchInObjectsView) {
                             recentLaunchObjectPage = 0;
                             loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], 0);
                         }
-                    } else if (M5Cardputer.Keyboard.isKeyPressed('.')) { // DOWN
+                    } else if (justDot) { // DOWN
                         if (!g_recentLaunches.empty()) {
                             recentLaunchSelectedIndex = (recentLaunchSelectedIndex + 1) % g_recentLaunches.size();
                         }
@@ -3321,16 +3175,16 @@ void loop() {
                     // TAB_ENCYCLOPEDIA
                     if (satSelectedIndex == NUM_SATELLITES) {
                         // Inputting NORAD ID
-                        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+                        if (justBack) {
                             if (noradInput.length() > 0) noradInput.remove(noradInput.length() - 1);
                             downloadErrorMsg = "";
-                        } else if (M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
+                        } else if (justEsc || justTick) {
                             appState = STATE_MAIN;
-                        } else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
+                        } else if (justSemi) {
                             if (satSelectedIndex > 0) satSelectedIndex--;
-                        } else if (M5Cardputer.Keyboard.isKeyPressed('.')) {
+                        } else if (justDot) {
                             satSelectedIndex = 0;
-                        } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                        } else if (justEnter) {
                             if (noradInput.length() == 5 && !isDownloadingCustom) {
                                 isDownloadingCustom = true;
                                 drawSatSelectPage();
@@ -3374,7 +3228,7 @@ void loop() {
                             }
                         }
                     } else {
-                        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
+                        if (justBack || justEsc || justTick) {
                             appState = STATE_MAIN;
                             bool selectionChanged = false;
                             std::vector<int> currentSelected;
@@ -3400,20 +3254,43 @@ void loop() {
                                 portEXIT_CRITICAL(&passMutex);
                                 triggerPrediction = true;
                             }
-                        } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                        } else if (justEnter) {
                             g_satellites[satSelectedIndex].selected = !g_satellites[satSelectedIndex].selected;
-                        } else if (M5Cardputer.Keyboard.isKeyPressed('d') && satSelectedIndex >= NUM_BUILTIN_SATELLITES && satSelectedIndex < NUM_SATELLITES) {
+                        } else if (justD && satSelectedIndex >= NUM_BUILTIN_SATELLITES && satSelectedIndex < NUM_SATELLITES) {
                             deleteConfirmIndex = satSelectedIndex;
-                        } else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
+                        } else if (justSemi) {
                             if (satSelectedIndex > 0) satSelectedIndex--;
                             else satSelectedIndex = NUM_SATELLITES;
-                        } else if (M5Cardputer.Keyboard.isKeyPressed('.')) {
+                        } else if (justDot) {
                             satSelectedIndex = (satSelectedIndex + 1) % (NUM_SATELLITES + 1);
                         }
                     }
                 }
             }
         }
+
+        // Save action keys state for the next frame
+        lastSemi = currSemi;
+        lastDot = currDot;
+        lastComma = currComma;
+        lastSlash = currSlash;
+        lastO = currO;
+        lastV = currV;
+        lastEnter = currEnter;
+        lastBack = currBack;
+        lastEsc = currEsc;
+        lastTick = currTick;
+        lastBracketL = currBracketL;
+        lastBracketR = currBracketR;
+        lastC = currC;
+        lastR = currR;
+        lastW = currW;
+        lastS = currS;
+        lastH = currH;
+        lastG = currG;
+        lastY = currY;
+        lastN = currN;
+        lastD = currD;
         
         if (appState == STATE_WIFI_SETUP) {
             drawWiFiSetupPage();

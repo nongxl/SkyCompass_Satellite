@@ -183,6 +183,38 @@ SkyCompass Satellite 是 SkyCompass 项目的扩展演化版本，运行在 M5St
 | 轨道   | 缓慢周期变化        | 极高速变化 (约90分钟绕地球一圈)       |
 | 核心体验 | 空间指向与 3D 沉浸观测         | 观测推荐与时间窗口规划       |
 | 数据基座   | 天文历表公式       | TLE + SGP4 轨道传播模型 |
+## 数据层架构 (Data Layer Architecture)
+
+为了兼容 CelesTrak 自 2026 年起引入的 6 位 Catalog Number（100000+）且不再提供传统 TLE 格式的改变，本项目重构了数据层，实现了数据格式与轨道物理计算的完全解耦：
+
+### 架构设计
+
+```text
+Network / WIFI
+      │
+      ▼
+OrbitDataProvider
+      │
+      ▼
+OrbitParser (TLEParser / JSONParser)
+      │
+      ▼
+OrbitRecord (唯一可信数据对象 / DTO)
+      │
+      ▼
+SGP4 (物理计算引擎)
+      │
+      ▼
+Application (Earth View / Recommended / HAM / GUI)
+```
+
+### 支持的数据格式 (Supported Formats)
+
+* **TLE (Legacy)**：传统双行元素法，自动兼容已有的历史卫星本地缓存。
+* **CelesTrak GP JSON (Default)**：新一代默认数据交换格式，支持直接拉取 OMM 参数，原生支持 6 位 Catalog Number。
+* **OMM (Reserved)**：CCSDS 轨道参数电文，已预留扩展接口。
+
+整个系统已经兼容未来六位 Catalog Number，并使用轨道要素逆向构建 Pseudo TLE 的桥接技术，无缝兼容只接收 TLE 的底层 SGP4 物理库，同时保证业务展示层和数据存储层均保存完整、真实的 6 位 NORAD 卫星 ID。
 
 ## 架构拆解与开发路径
 
