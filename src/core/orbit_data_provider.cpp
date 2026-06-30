@@ -247,6 +247,18 @@ bool OrbitDataProvider::loadLevel3ObjectsPage(const RecentLaunchItem& item, int 
         singleLine.trim();
         if (singleLine.length() == 0) continue;
         
+        // Fast pre-filter using substring search to avoid expensive JSON deserialization
+        bool match = false;
+        if (singleLine.indexOf(item.batchId) != -1) {
+            match = true;
+        } else if (item.batchId.length() == 5 && isdigit(item.batchId[0]) && isdigit(item.batchId[1])) {
+            String cosparForm = "20" + item.batchId.substring(0, 2) + "-" + item.batchId.substring(2);
+            if (singleLine.indexOf(cosparForm) != -1) {
+                match = true;
+            }
+        }
+        if (!match) continue;
+        
         OrbitRecord record;
         if (parser.parse(singleLine, record)) {
             if (record.getBatchId() == item.batchId) {

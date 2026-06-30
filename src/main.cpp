@@ -992,6 +992,22 @@ void recentLaunchNetworkTask(void* parameter) {
     
     if (success && recentLaunchDownloading && !tempLaunches.empty()) {
         g_pendingRecentLaunches = std::move(tempLaunches);
+        // Sort recent launches in descending order by actual COSPAR year and flight number (newest first)
+        std::sort(g_pendingRecentLaunches.begin(), g_pendingRecentLaunches.end(), [](const RecentLaunchItem& a, const RecentLaunchItem& b) {
+            auto getTrueYearAndNum = [](const String& id) -> std::pair<int, int> {
+                if (id.length() < 5) return {0, 0};
+                int yr = id.substring(0, 2).toInt();
+                int trueYr = (yr >= 50) ? (1900 + yr) : (2000 + yr);
+                int num = id.substring(2).toInt();
+                return {trueYr, num};
+            };
+            auto valA = getTrueYearAndNum(a.batchId);
+            auto valB = getTrueYearAndNum(b.batchId);
+            if (valA.first != valB.first) {
+                return valA.first > valB.first;
+            }
+            return valA.second > valB.second;
+        });
         calculateFormationsForItems(g_pendingRecentLaunches);
         g_recentLaunchesPending = true;
         recentLaunchSelectedIndex = 0;
@@ -1214,6 +1230,23 @@ void tryLoadRecentLaunchCache() {
     if (tempLaunches.empty()) {
         return;
     }
+    
+    // Sort recent launches in descending order by actual COSPAR year and flight number (newest first)
+    std::sort(tempLaunches.begin(), tempLaunches.end(), [](const RecentLaunchItem& a, const RecentLaunchItem& b) {
+        auto getTrueYearAndNum = [](const String& id) -> std::pair<int, int> {
+            if (id.length() < 5) return {0, 0};
+            int yr = id.substring(0, 2).toInt();
+            int trueYr = (yr >= 50) ? (1900 + yr) : (2000 + yr);
+            int num = id.substring(2).toInt();
+            return {trueYr, num};
+        };
+        auto valA = getTrueYearAndNum(a.batchId);
+        auto valB = getTrueYearAndNum(b.batchId);
+        if (valA.first != valB.first) {
+            return valA.first > valB.first;
+        }
+        return valA.second > valB.second;
+    });
     
     uint32_t nowTime = current_unix + timeMachineOffset;
     bool fresh = false;
@@ -1835,6 +1868,10 @@ void drawSatSelectPage() {
             canvas->setTextColor(selSat.color);
             canvas->drawString(selSat.name.c_str(), rightX + 48, descY + 8);
             
+            // Draw NORAD ID for tracking
+            canvas->setTextColor(TFT_LIGHTGRAY);
+            canvas->drawString(("ID: " + String(selSat.noradId)).c_str(), rightX + 48, descY + 18);
+            
             if (selSat.tle.line1.length() >= 32) {
                 uint32_t currentSimTime = current_unix + timeMachineOffset;
                 uint32_t satEpoch = parseTleEpoch(selSat.tle.line1);
@@ -2197,7 +2234,9 @@ void drawSatSelectPage() {
                     canvas->setTextColor(TFT_CYAN);
                     String formattedBatch = item.batchId;
                     if (item.batchId.length() == 5 && isdigit(item.batchId[0]) && isdigit(item.batchId[1])) {
-                        formattedBatch = "20" + item.batchId.substring(0, 2) + "-" + item.batchId.substring(2);
+                        int yr = item.batchId.substring(0, 2).toInt();
+                        String century = (yr >= 50) ? "19" : "20";
+                        formattedBatch = century + item.batchId.substring(0, 2) + "-" + item.batchId.substring(2);
                     }
                     canvas->drawString(("Batch: " + formattedBatch).c_str(), rightX, 33);
                     
@@ -2226,7 +2265,7 @@ void drawSatSelectPage() {
                         sprintf(dateBuf, "N/A");
                     }
                     canvas->setTextColor(TFT_LIGHTGRAY);
-                    canvas->drawString(("Launch: " + String(dateBuf)).c_str(), rightX, 43);
+                    canvas->drawString(("Epoch: " + String(dateBuf)).c_str(), rightX, 43);
                     
                     // Draw representative satellite name
                     String repSatText = "Rep: " + item.repSatName;
@@ -2280,14 +2319,14 @@ void drawSatSelectPage() {
                     }
                     
                     canvas->setTextColor(TFT_GREEN);
-                    canvas->drawString("Visibility:", rightX, 107);
+                    canvas->drawString("Visibility:", rightX, 113);
                     canvas->setTextColor(TFT_YELLOW);
                     if (avgAlt >= 250 && avgAlt <= 600) {
-                        canvas->drawString("Excellent", rightX + 65, 107);
+                        canvas->drawString("Excellent", rightX + 65, 113);
                     } else if (avgAlt > 0) {
-                        canvas->drawString("Moderate", rightX + 65, 107);
+                        canvas->drawString("Moderate", rightX + 65, 113);
                     } else {
-                        canvas->drawString("N/A", rightX + 65, 107);
+                        canvas->drawString("N/A", rightX + 65, 113);
                     }
                     
                     canvas->setTextColor(TFT_LIGHTGRAY);
@@ -2309,10 +2348,16 @@ void drawSatSelectPage() {
                     for (size_t s = 0; s < g_level3Objects.size(); s++) {
                         auto& obj = g_level3Objects[s];
                         String satName = obj.name;
-                        if (satName.length() > 16) satName = satName.substring(0, 14) + "..";
+                        if (satName.startsWith("STARLINK ")) {
+                            satName = "SL " + satName.substring(9);
+                        }
+                        if (satName.length() > 10) {
+                            satName = satName.substring(0, 8) + "..";
+                        }
+                        String lineText = "- " + satName + " (" + String(obj.orbit.catalogNumber) + ")";
                         
                         canvas->setTextColor(TFT_LIGHTGRAY);
-                        canvas->drawString(("- " + satName).c_str(), rightX, memY + s * 13);
+                        canvas->drawString(lineText.c_str(), rightX, memY + s * 13);
                         
                         if (obj.lastGeoValid) {
                             char hBuf[16];
@@ -3185,7 +3230,7 @@ void loop() {
                         } else if (justDot) {
                             satSelectedIndex = 0;
                         } else if (justEnter) {
-                            if (noradInput.length() == 5 && !isDownloadingCustom) {
+                            if ((noradInput.length() == 5 || noradInput.length() == 6) && !isDownloadingCustom) {
                                 isDownloadingCustom = true;
                                 drawSatSelectPage();
                                 earth_renderer->getCanvas()->pushSprite(0, 0);
@@ -3221,7 +3266,7 @@ void loop() {
                             }
                         } else {
                             for (auto c : M5Cardputer.Keyboard.keysState().word) {
-                                if (c >= '0' && c <= '9' && noradInput.length() < 5) {
+                                if (c >= '0' && c <= '9' && noradInput.length() < 6) {
                                     noradInput += c;
                                     downloadErrorMsg = "";
                                 }
