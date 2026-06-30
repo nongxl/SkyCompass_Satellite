@@ -2351,8 +2351,8 @@ void drawSatSelectPage() {
                         if (satName.startsWith("STARLINK ")) {
                             satName = "SL " + satName.substring(9);
                         }
-                        if (satName.length() > 10) {
-                            satName = satName.substring(0, 8) + "..";
+                        if (satName.length() > 15) {
+                            satName = satName.substring(0, 13) + "..";
                         }
                         String lineText = "- " + satName + " (" + String(obj.orbit.catalogNumber) + ")";
                         
