@@ -31,5 +31,5 @@ public:
     static int calculateTleChecksum(const String& line);
 
 private:
-    Sgp4* sat;
+    Sgp4 sat;
 };

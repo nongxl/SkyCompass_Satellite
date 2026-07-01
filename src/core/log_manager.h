@@ -40,7 +40,7 @@ private:
         
         _moonLogState.lastLogTime = 0;
         _moonLogState.logInterval = 5000; // 月亮5秒
-        _moonLogState.enabled = true;
+        _moonLogState.enabled = false;
         
         _galaxyLogState.lastLogTime = 0;
         _galaxyLogState.logInterval = 5000; // 银河5秒

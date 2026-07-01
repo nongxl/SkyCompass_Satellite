@@ -128,6 +128,9 @@ volatile bool recentLaunchDownloading = false;
 volatile bool recentLaunchDownloadSuccess = false;
 volatile bool g_timeSynced = false;
 
+// Global spinlock to protect g_satellites data structure from concurrent read/write race conditions
+portMUX_TYPE satMutex = portMUX_INITIALIZER_UNLOCKED;
+
 volatile bool g_networkActive = false;
 struct NetworkActiveGuard {
     NetworkActiveGuard() { g_networkActive = true; }
@@ -729,15 +732,26 @@ void predictorTask(void* parameter) {
             for (int i = 0; i < NUM_SATELLITES; i++) {
                 if (triggerPrediction || cancelPrediction) break;
                 
-                if (g_satellites[i].selected) {
-                    const auto& tle = g_satellites[i].tle;
+                bool isSelected = false;
+                TLEData tle;
+                float stdMag = 3.0;
+                
+                portENTER_CRITICAL(&satMutex);
+                isSelected = g_satellites[i].selected;
+                if (isSelected) {
+                    tle = g_satellites[i].tle;
+                    stdMag = g_satellites[i].stdMag;
+                }
+                portEXIT_CRITICAL(&satMutex);
+                
+                if (isSelected) {
                     if (tle.line1.length() < 14 || tle.line2.length() < 14) {
                         completedCount++;
                         predictionProgress = (completedCount * 100) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
                         continue;
                     }
                     
-                    auto passes = predictor.predictPasses(tle, g_satellites[i].stdMag, startTime, 7);
+                    auto passes = predictor.predictPasses(tle, stdMag, startTime, 7);
                     
                     // Cap passes to prevent OOM
                     if (passes.size() > 8) {
@@ -830,10 +844,8 @@ void fetchFrequencies() {
     if (httpCode == HTTP_CODE_OK) {
         String payload = http.getString();
         
-        // Reclaim ~40KB heap memory by releasing the SSL client BEFORE executing JSON deserialization
+        // Reclaim network buffers safely without deleting the client early
         http.end();
-        delete client;
-        client = nullptr;
         
         payload.trim();
         if (payload.length() > 0 && payload.length() < 10240 && payload.startsWith("{")) {
@@ -843,17 +855,26 @@ void fetchFrequencies() {
                 for (int i = 0; i < NUM_SATELLITES; i++) {
                     String idStr = String(g_satellites[i].noradId);
                     if (doc.containsKey(idStr)) {
-                        g_satellites[i].downlinkFreq = doc[idStr]["freq"].as<String>();
-                        g_satellites[i].radioMode = doc[idStr]["mode"].as<String>();
+                        String dl = doc[idStr]["freq"].as<String>();
+                        String rm = doc[idStr]["mode"].as<String>();
+                        String ul = "";
+                        String tn = "";
                         if (doc[idStr].containsKey("uplink")) {
-                            g_satellites[i].uplinkFreq = doc[idStr]["uplink"].as<String>();
+                            ul = doc[idStr]["uplink"].as<String>();
                         }
                         if (doc[idStr].containsKey("tone")) {
-                            g_satellites[i].tone = doc[idStr]["tone"].as<String>();
+                            tn = doc[idStr]["tone"].as<String>();
                         }
+                        
+                        portENTER_CRITICAL(&satMutex);
+                        g_satellites[i].downlinkFreq = dl;
+                        g_satellites[i].radioMode = rm;
+                        g_satellites[i].uplinkFreq = ul;
+                        g_satellites[i].tone = tn;
                         if (g_satellites[i].type == SAT_TYPE_VISUAL) {
                             g_satellites[i].type = SAT_TYPE_HAM;
                         }
+                        portEXIT_CRITICAL(&satMutex);
                     }
                 }
             }
@@ -1117,8 +1138,14 @@ void networkTask(void* parameter) {
             TLEData new_tle;
             if (TLEUpdater::getTLE(g_satellites[i].noradId, new_tle, 2 * 24 * 3600, sharedClient)) {
                 new_tle.baseScore = g_satellites[i].baseScore;
+                SGP4Calc tempCalc;
+                tempCalc.init(new_tle);
+                
+                portENTER_CRITICAL(&satMutex);
                 g_satellites[i].tle = new_tle;
-                g_satellites[i].calc.init(g_satellites[i].tle);
+                g_satellites[i].calc = tempCalc;
+                portEXIT_CRITICAL(&satMutex);
+                
                 updated = true;
             }
             vTaskDelay(pdMS_TO_TICKS(10)); // Yield CPU to prevent Task Watchdog starvation
@@ -1793,7 +1820,10 @@ void drawSatSelectPage() {
         int rightX = 89;
         int descY = 25;
         if (satSelectedIndex < NUM_SATELLITES) {
-            SatProfile& selSat = g_satellites[satSelectedIndex];
+            SatProfile selSat;
+            portENTER_CRITICAL(&satMutex);
+            selSat = g_satellites[satSelectedIndex];
+            portEXIT_CRITICAL(&satMutex);
             
             // Draw 3x Scaled Icon
             int iconX = rightX + 21;
@@ -2351,8 +2381,8 @@ void drawSatSelectPage() {
                         if (satName.startsWith("STARLINK ")) {
                             satName = "SL " + satName.substring(9);
                         }
-                        if (satName.length() > 15) {
-                            satName = satName.substring(0, 13) + "..";
+                        if (satName.length() > 14) {
+                            satName = satName.substring(0, 12) + "..";
                         }
                         String lineText = "- " + satName + " (" + String(obj.orbit.catalogNumber) + ")";
                         
@@ -2590,6 +2620,29 @@ void loop() {
         bool justY = currY && !lastY;
         bool justN = currN && !lastN;
         bool justD = currD && !lastD;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD;
+
+        if (showHelp) {
+            if (millis() < 3000) {
+                showHelp = false;
+            } else if (hasAnyKeyJustPressed) {
+                showHelp = false;
+                currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = false;
+                justSemi = justDot = justComma = justSlash = justO = justV = justEnter = justBack = justEsc = justTick = justBracketL = justBracketR = justC = justR = justW = justS = justH = justG = justY = justN = justD = false;
+                hasAnyKeyJustPressed = false;
+            }
+        }
+        
+        if (showListHelp) {
+            if (millis() < 3000) {
+                showListHelp = false;
+            } else if (hasAnyKeyJustPressed) {
+                showListHelp = false;
+                currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = false;
+                justSemi = justDot = justComma = justSlash = justO = justV = justEnter = justBack = justEsc = justTick = justBracketL = justBracketR = justC = justR = justW = justS = justH = justG = justY = justN = justD = false;
+                hasAnyKeyJustPressed = false;
+            }
+        }
 
         // Handle continuous keyboard input (Time Machine or Manual Location)
         static unsigned long keyHoldStartTime = 0;
