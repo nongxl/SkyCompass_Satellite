@@ -135,7 +135,8 @@ bool EarthRenderer::projectOrthographic(double lat, double lon, double alt, doub
     
     float z_actual = z_pitched + _cameraFocusR;
     
-    if (z_actual < 0) {
+    float z_limit = _cameraFocusR * (1.0f - cosf(pitchRad));
+    if (z_actual < z_limit) {
         if (alt <= 0) return false; // On or below surface, strictly occluded
         // For altitude > 0, check if it's occluded by the Earth body
         float distSq = x * x + y_pitched * y_pitched;
@@ -197,11 +198,6 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
             
             float cos_c = sin_cLat * sin_lat + cos_cLat * cos_lat * cos_dLon;
             
-            if (cos_c < 0.0f) {
-                prevVisible = false;
-                continue;
-            }
-            
             float r = (float)_earthRadius;
             float x = r * cos_lat * sin_dLon;
             float y = r * (cos_cLat * sin_lat - sin_cLat * cos_lat * cos_dLon);
@@ -211,7 +207,8 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
             float z_pitched = y * sin_pitch + z_temp * cos_pitch;
             float z_actual = z_pitched + _cameraFocusR;
             
-            if (z_actual >= 0) {
+            float z_limit = _cameraFocusR * (1.0f - cos_pitch);
+            if (z_actual >= z_limit) {
                 float y_pitched = y * cos_pitch - z_temp * sin_pitch;
                 
                 float rotatedX = x * cos_roll - y_pitched * sin_roll;
@@ -939,13 +936,9 @@ void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
         float cos_dist = sin_subLat * sin_lat + cos_subLat * cos_lat * cos_lon_subLon;
         
         if (cos_dist <= 0.05f) {
-            // 2. Early occlusion check: check if on front hemisphere (visible to camera)
+            // 2. Complete orthographic projection
             float cos_dLon = cos_lon * cos_cLon + sin_lon * sin_cLon;
             float cos_c = sin_cLat * sin_lat + cos_cLat * cos_lat * cos_dLon;
-            
-            if (cos_c < 0.0f) continue;
-            
-            // 3. Complete orthographic projection
             float sin_dLon = sin_lon * cos_cLon - cos_lon * sin_cLon;
             
             float x = r * cos_lat * sin_dLon;
@@ -956,7 +949,8 @@ void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
             float z_pitched = y * sin_pitch + z_temp * cos_pitch;
             float z_actual = z_pitched + _cameraFocusR;
             
-            if (z_actual >= 0.0f) {
+            float z_limit = _cameraFocusR * (1.0f - cos_pitch);
+            if (z_actual >= z_limit) {
                 float y_pitched = y * cos_pitch - z_temp * sin_pitch;
                 float rotatedX = x * cos_roll - y_pitched * sin_roll;
                 float rotatedY = x * sin_roll + y_pitched * cos_roll;
