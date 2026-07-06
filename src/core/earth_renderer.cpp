@@ -1074,7 +1074,10 @@ inline void blendPixelAdd(LGFX_Sprite* canvas, int x, int y, uint8_t r, uint8_t 
     if (!buf) return;
     
     int index = y * width + x;
-    uint16_t oldCol = buf[index];
+    uint16_t rawCol = buf[index];
+    
+    // Byte swap from Big Endian (display format) to Little Endian (CPU format)
+    uint16_t oldCol = (rawCol >> 8) | (rawCol << 8);
     
     // Extract RGB 565 components (r: 5 bits, g: 6 bits, b: 5 bits)
     uint8_t r_o = (oldCol >> 11) & 0x1F;
@@ -1095,7 +1098,10 @@ inline void blendPixelAdd(LGFX_Sprite* canvas, int x, int y, uint8_t r, uint8_t 
     if (g_new > 63) g_new = 63;
     if (b_new > 31) b_new = 31;
     
-    buf[index] = (r_new << 11) | (g_new << 5) | b_new;
+    uint16_t newCol = (r_new << 11) | (g_new << 5) | b_new;
+    
+    // Byte swap back to Big Endian (display format)
+    buf[index] = (newCol >> 8) | (newCol << 8);
 }
 
 inline void drawLineAdd(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, uint8_t r, uint8_t g, uint8_t b, float alpha) {
