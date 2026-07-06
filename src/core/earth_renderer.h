@@ -76,6 +76,8 @@ public:
     // Set whether time machine is fast forwarding to optimize rendering load
     void setFastForwarding(bool ff) { _isFastForwarding = ff; }
 
+    void setDrawDecorations(bool draw) { _drawDecorations = draw; }
+
     void setZoom(float zoom) {
         _zoom = zoom;
         _earthRadius = (int)(55.0f * _zoom);
@@ -133,6 +135,7 @@ private:
     // Rendering configs
     bool _observerConstrained = true;
     bool _isFastForwarding = false;
+    bool _drawDecorations = true;
 
     // Helper functions for orthographic projection
     bool projectOrthographic(double lat, double lon, double alt, double centerLat, double centerLon, int& outX, int& outY);

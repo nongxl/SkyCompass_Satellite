@@ -374,7 +374,7 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
     
     // Draw user location as a map pin 📍
     int ux, uy;
-    if (userLat <= 90.0 && projectOrthographic(userLat, userLon, 0, centerLat, centerLon, ux, uy)) {
+    if (_drawDecorations && userLat <= 90.0 && projectOrthographic(userLat, userLon, 0, centerLat, centerLon, ux, uy)) {
         int headX = ux;
         int headY = uy - 6;
         _canvas->fillTriangle(ux, uy, headX - 3, headY + 1, headX + 3, headY + 1, TFT_RED);
@@ -477,26 +477,28 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
     }
     
     // Draw Pole Anchors
-    int px, py;
-    if (projectOrthographic(90, 0, 0, centerLat, centerLon, px, py)) {
-        _canvas->drawLine(px - 2, py, px + 2, py, TFT_CYAN);
-        _canvas->drawLine(px, py - 2, px, py + 2, TFT_CYAN);
-        int ax, ay;
-        if (projectOrthographic(90, 0, 800, centerLat, centerLon, ax, ay)) {
-            _canvas->drawLine(px, py, ax, ay, TFT_CYAN);
+    if (_drawDecorations) {
+        int px, py;
+        if (projectOrthographic(90, 0, 0, centerLat, centerLon, px, py)) {
+            _canvas->drawLine(px - 2, py, px + 2, py, TFT_CYAN);
+            _canvas->drawLine(px, py - 2, px, py + 2, TFT_CYAN);
+            int ax, ay;
+            if (projectOrthographic(90, 0, 800, centerLat, centerLon, ax, ay)) {
+                _canvas->drawLine(px, py, ax, ay, TFT_CYAN);
+            }
+            _canvas->setTextColor(TFT_CYAN);
+            _canvas->drawString("N", px + 4, py - 4);
         }
-        _canvas->setTextColor(TFT_CYAN);
-        _canvas->drawString("N", px + 4, py - 4);
-    }
-    if (projectOrthographic(-90, 0, 0, centerLat, centerLon, px, py)) {
-        _canvas->drawLine(px - 2, py, px + 2, py, _display->color565(100, 100, 255));
-        _canvas->drawLine(px, py - 2, px, py + 2, _display->color565(100, 100, 255));
-        int ax, ay;
-        if (projectOrthographic(-90, 0, 800, centerLat, centerLon, ax, ay)) {
-            _canvas->drawLine(px, py, ax, ay, _display->color565(100, 100, 255));
+        if (projectOrthographic(-90, 0, 0, centerLat, centerLon, px, py)) {
+            _canvas->drawLine(px - 2, py, px + 2, py, _display->color565(100, 100, 255));
+            _canvas->drawLine(px, py - 2, px, py + 2, _display->color565(100, 100, 255));
+            int ax, ay;
+            if (projectOrthographic(-90, 0, 800, centerLat, centerLon, ax, ay)) {
+                _canvas->drawLine(px, py, ax, ay, _display->color565(100, 100, 255));
+            }
+            _canvas->setTextColor(_display->color565(100, 100, 255));
+            _canvas->drawString("S", px + 4, py - 4);
         }
-        _canvas->setTextColor(_display->color565(100, 100, 255));
-        _canvas->drawString("S", px + 4, py - 4);
     }
     
     // Draw Dynamic North Arrow

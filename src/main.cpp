@@ -459,7 +459,7 @@ SatProfile g_satellites[MAX_SATELLITES] = {
     {50463, "JWST", TFT_GOLD, 0, 10.0, false, ICON_DEEPSPACE, "James Webb Space Telescope. Located at L2 point 1.5 million km away, observing in infrared.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {53807, "BlueWalker 3", TFT_WHITE, 0, 1.0, false, ICON_BLUEWALKER3, "AST SpaceMobile's prototype. Features a massive 64 sqm array, very bright and controversial.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {118, "Ablestar R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ablestar rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {25732, "CZ-4B R/B", TFT_ORANGE, 0, 4.0, true, ICON_ROCKET, "Long March 4B rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {25732, "CZ-4B R/B", TFT_ORANGE, 0, 4.0, false, ICON_ROCKET, "Long March 4B rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {6155, "Centaur R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Centaur rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {28499, "Ariane 5 R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ariane 5 rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {41882, "Fengyun-4A", TFT_BLUE, 0, 10.0, false, ICON_WEATHER, "Chinese geostationary meteorological satellite, located 35,786 km above the equator.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
@@ -471,7 +471,7 @@ SatProfile g_satellites[MAX_SATELLITES] = {
     {42956, "Iridium 127", TFT_WHITE, 0, 4.0, false, ICON_COMMUNICATION, "Iridium NEXT network. The original 1st-gen Iridium satellites produced legendary 'flares' up to mag -8.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {57165, "Meteor-M2", TFT_WHITE, 0, 3.5, false, ICON_WEATHER, "Russian meteorological satellite transmitting LRPT weather images.", "137.100", "LRPT", "", "", {}, {}, {}, SAT_TYPE_WEATHER},
     {27607, "SO-50", TFT_GREEN, 0, 6.5, false, ICON_COMMUNICATION, "SaudiSat 1C (SO-50). A long-lived, highly active FM voice repeater amateur satellite, very popular for quick handheld contacts.", "145.850", "FM", "436.795", "67.0", {}, {}, {}, SAT_TYPE_HAM},
-    {43017, "AO-91", TFT_MAGENTA, 0, 6.0, true, ICON_COMMUNICATION, "RadFxSat (AO-91). A Fox-1B series amateur radio satellite carrying a U/V FM voice repeater.", "145.960", "FM", "435.250", "67.0", {}, {}, {}, SAT_TYPE_HAM}
+    {43017, "AO-91", TFT_MAGENTA, 0, 6.0, false, ICON_COMMUNICATION, "RadFxSat (AO-91). A Fox-1B series amateur radio satellite carrying a U/V FM voice repeater.", "145.960", "FM", "435.250", "67.0", {}, {}, {}, SAT_TYPE_HAM}
 };
 
 // We use a simulated time starting near the TLE epoch for Phase 3 offline testing
@@ -1332,6 +1332,9 @@ void imuTask(void* pvParameters) {
     }
 }
 
+volatile bool g_loadingFinished = false;
+volatile int g_loadingProgress = 18;
+
 void drawStartupScreen(int progressPercentage) {
     if (!earth_renderer) return;
     
@@ -1343,14 +1346,24 @@ void drawStartupScreen(int progressPercentage) {
         roll = att.roll;
     }
     
-    // Temporarily configure camera attitude for the startup screen
-    earth_renderer->setCameraAttitude(pitch, roll, 0.0f);
+    // Set camera attitude to 0 (looking straight down) to pivot around the center of the Earth sphere
+    earth_renderer->setCameraAttitude(0.0f, 0.0f, 0.0f);
     earth_renderer->setObserverConstrained(false);
+    earth_renderer->setDrawDecorations(false);
+    
+    // Center of projection shifts with IMU pitch/roll to rotate the globe around its center
+    double viewLat = baseUserLat - pitch;
+    double viewLon = baseUserLon - roll;
+    if (viewLat > 90.0) viewLat = 90.0;
+    if (viewLat < -90.0) viewLat = -90.0;
+    if (viewLon > 180.0) viewLon -= 360.0;
+    if (viewLon < -180.0) viewLon += 360.0;
     
     // Draw the background Earth globe (no satellites list)
-    earth_renderer->render(baseUserLat, baseUserLon, baseUserLat, baseUserLon, {});
+    earth_renderer->setUnixTime(current_unix == 0 ? 1783300000 : current_unix);
+    earth_renderer->render(viewLat, viewLon, baseUserLat, baseUserLon, {});
     
-    M5Canvas* canvas = earth_renderer->getCanvas();
+    LGFX_Sprite* canvas = earth_renderer->getCanvas();
     if (!canvas) return;
     
     // Draw overlay UI
@@ -1368,14 +1381,6 @@ void drawStartupScreen(int progressPercentage) {
     
     // Push to screen
     canvas->pushSprite(0, 0);
-}
-
-void yieldAndRenderStartup(int progressPercentage, uint32_t durationMs) {
-    uint32_t start = millis();
-    while (millis() - start < durationMs) {
-        drawStartupScreen(progressPercentage);
-        delay(10);
-    }
 }
 
 void setup() {
@@ -1409,310 +1414,324 @@ void setup() {
             NULL,
             3, // High priority
             NULL,
-            0  // Pinned to Core 0 (same core as networking and protocol tasks)
+            0  // Pinned to Core 0
         );
     }
     
-    // Initialize Position & Sun Calculator
-    pos_manager = new PositionManager(gnss);
-    pos_manager->begin(); 
+    // Reset loader state
+    g_loadingFinished = false;
+    g_loadingProgress = 18;
     
-    // Load cached position from Preferences
-    Preferences posPrefs;
-    if (posPrefs.begin("position", true)) {
-        if (posPrefs.isKey("cached_lat")) {
-            baseUserLat = posPrefs.getDouble("cached_lat", 39.90);
-            baseUserLon = posPrefs.getDouble("cached_lon", 116.40);
-            baseUserAlt = posPrefs.getDouble("cached_alt", 0.0);
-            isManualLocationMode = posPrefs.getBool("use_manual_pos", false);
-            gnssLocationFixed = true; // Mark as fixed since we loaded a valid cached location!
+    // Spawn background loader task on Core 0 to parse TLEs off the UI thread
+    xTaskCreatePinnedToCore(
+        [](void* p) {
+            // Initialize Position & Sun Calculator
+            pos_manager = new PositionManager(gnss);
+            pos_manager->begin(); 
             
-            // Sync loaded position to pos_manager
-            PositionData pos = {baseUserLat, baseUserLon, baseUserAlt};
-            if (isManualLocationMode) {
-                pos_manager->setManualPosition(pos);
-                pos_manager->enableManualPosition(true);
-            } else {
-                pos_manager->setPosition(pos);
-                pos_manager->enableManualPosition(false);
-            }
-            
-            LOG_I("APP", "Loaded cached position: lat=%.6f, lon=%.6f, alt=%.1f, useManual=%d", 
-                  baseUserLat, baseUserLon, baseUserAlt, isManualLocationMode);
-        }
-        posPrefs.end();
-    }
-    
-    sun_calc = new SunCalculator(pos_manager);
-    sun_calc->begin();
-    
-    // Setup LittleFS for TLE Cache
-    TLEUpdater::begin();
-    
-    // One-off cache cleanup to clear the previous stale cache bug
-    if (!LittleFS.exists("/cache_cleared_v2.txt")) {
-        for (int i = 0; i < NUM_SATELLITES; i++) {
-            String tlePath = "/tle_" + String(g_satellites[i].noradId) + ".txt";
-            String catPath = "/cat_" + String(g_satellites[i].noradId) + ".json";
-            if (LittleFS.exists(tlePath)) LittleFS.remove(tlePath);
-            if (LittleFS.exists(catPath)) LittleFS.remove(catPath);
-        }
-        File f = LittleFS.open("/cache_cleared_v2.txt", "w");
-        if (f) {
-            f.println("cleared");
-            f.close();
-        }
-    }
-    
-    // Set default offline time first so getTLE works properly if needed
-    current_unix = 0; // We start at 0 so TLEUpdater uses cache regardless of age
-    
-    // Offline initialization: Try to load from cache
-    for (int i = 0; i < NUM_SATELLITES; i++) {
-        TLEData loaded_tle;
-        if (TLEUpdater::getTLE(g_satellites[i].noradId, loaded_tle)) {
-            loaded_tle.baseScore = g_satellites[i].baseScore;
-            g_satellites[i].tle = loaded_tle;
-        } else {
-            // Fallback for first 3 if no cache
-            if (i == 0) g_satellites[i].tle = TLEManager::getISS_TLE();
-            else if (i == 1) g_satellites[i].tle = TLEManager::getTiangong_TLE();
-            else if (i == 2) g_satellites[i].tle = TLEManager::getHubble_TLE();
-            else if (g_satellites[i].noradId == 50463) g_satellites[i].tle = TLEManager::getJWST_TLE();
-            else if (g_satellites[i].noradId == 27607) g_satellites[i].tle = TLEManager::getSO50_TLE();
-            else if (g_satellites[i].noradId == 43017) g_satellites[i].tle = TLEManager::getAO91_TLE();
-        }
-        
-        if (g_satellites[i].tle.line1.length() > 0) {
-            g_satellites[i].calc.init(g_satellites[i].tle);
-        }
-    }
-    
-    // Update progress bar to 50%
-    if (earth_renderer && earth_renderer->getCanvas()) {
-        earth_renderer->getCanvas()->fillRect(37, 90, 85, 4, TFT_GREEN);
-        earth_renderer->getCanvas()->pushSprite(0, 0);
-    }
-    
-    // Find the latest TLE Epoch as the initial system time anchor
-    uint32_t latestEpoch = TLEManager::getMockTimeAnchor();
-    for (int i = 0; i < NUM_SATELLITES; i++) {
-        if (g_satellites[i].tle.line1.length() >= 32) {
-            uint32_t ep = parseTleEpoch(g_satellites[i].tle.line1);
-            if (ep > latestEpoch) {
-                latestEpoch = ep;
-            }
-        }
-    }
-    current_unix = latestEpoch;
-    LOG_I("APP", "Offline boot: Loaded cached TLEs. System time anchor set to: %u", current_unix);
-    
-    // Load Custom Satellites from Preferences
-    Preferences prefs;
-    prefs.begin("satellites", true);
-    String customIds = prefs.getString("customIds", "");
-    prefs.end();
-    
-    bool needsSaveCleanup = false;
-    if (customIds.length() > 0) {
-        int start = 0;
-        int end = customIds.indexOf(',');
-        while (start < customIds.length()) {
-            String idStr;
-            if (end == -1) {
-                idStr = customIds.substring(start);
-                start = customIds.length();
-            } else {
-                idStr = customIds.substring(start, end);
-                start = end + 1;
-                end = customIds.indexOf(',', start);
-            }
-            
-            int id = idStr.toInt();
-            if (id > 0) {
-                bool isPreset = false;
-                for (int pIdx = 0; pIdx < NUM_BUILTIN_SATELLITES; pIdx++) {
-                    if (g_satellites[pIdx].noradId == id) {
-                        isPreset = true;
-                        break;
+            // Load cached position from Preferences
+            Preferences posPrefs;
+            if (posPrefs.begin("position", true)) {
+                if (posPrefs.isKey("cached_lat")) {
+                    baseUserLat = posPrefs.getDouble("cached_lat", 39.90);
+                    baseUserLon = posPrefs.getDouble("cached_lon", 116.40);
+                    baseUserAlt = posPrefs.getDouble("cached_alt", 0.0);
+                    isManualLocationMode = posPrefs.getBool("use_manual_pos", false);
+                    gnssLocationFixed = true; // Mark as fixed since we loaded a valid cached location!
+                    
+                    // Sync loaded position to pos_manager
+                    PositionData pos = {baseUserLat, baseUserLon, baseUserAlt};
+                    if (isManualLocationMode) {
+                        pos_manager->setManualPosition(pos);
+                        pos_manager->enableManualPosition(true);
+                    } else {
+                        pos_manager->setPosition(pos);
+                        pos_manager->enableManualPosition(false);
                     }
+                    
+                    LOG_I("APP", "Loaded cached position: lat=%.6f, lon=%.6f, alt=%.1f, useManual=%d", 
+                          baseUserLat, baseUserLon, baseUserAlt, isManualLocationMode);
                 }
-                if (isPreset) {
-                    needsSaveCleanup = true;
-                    continue;
+                posPrefs.end();
+            }
+            
+            sun_calc = new SunCalculator(pos_manager);
+            sun_calc->begin();
+            
+            // Setup LittleFS for TLE Cache
+            TLEUpdater::begin();
+            
+            // One-off cache cleanup to clear the previous stale cache bug
+            if (!LittleFS.exists("/cache_cleared_v2.txt")) {
+                for (int i = 0; i < NUM_SATELLITES; i++) {
+                    String tlePath = "/tle_" + String(g_satellites[i].noradId) + ".txt";
+                    String catPath = "/cat_" + String(g_satellites[i].noradId) + ".json";
+                    if (LittleFS.exists(tlePath)) LittleFS.remove(tlePath);
+                    if (LittleFS.exists(catPath)) LittleFS.remove(catPath);
+                }
+                File f = LittleFS.open("/cache_cleared_v2.txt", "w");
+                if (f) {
+                    f.println("cleared");
+                    f.close();
+                }
+            }
+            
+            // Set default offline time first so getTLE works properly if needed
+            current_unix = 0; // We start at 0 so TLEUpdater uses cache regardless of age
+            
+            // Offline TLE Cache Loading
+            for (int i = 0; i < NUM_SATELLITES; i++) {
+                TLEData loaded_tle;
+                if (TLEUpdater::getTLE(g_satellites[i].noradId, loaded_tle)) {
+                    loaded_tle.baseScore = g_satellites[i].baseScore;
+                    g_satellites[i].tle = loaded_tle;
+                } else {
+                    // Fallback for first 3 if no cache
+                    if (i == 0) g_satellites[i].tle = TLEManager::getISS_TLE();
+                    else if (i == 1) g_satellites[i].tle = TLEManager::getTiangong_TLE();
+                    else if (i == 2) g_satellites[i].tle = TLEManager::getHubble_TLE();
+                    else if (g_satellites[i].noradId == 50463) g_satellites[i].tle = TLEManager::getJWST_TLE();
+                    else if (g_satellites[i].noradId == 27607) g_satellites[i].tle = TLEManager::getSO50_TLE();
+                    else if (g_satellites[i].noradId == 43017) g_satellites[i].tle = TLEManager::getAO91_TLE();
                 }
                 
-                LOG_I("APP", "Loading Custom: %d", id);
-                TLEData loaded_tle;
-                if (TLEUpdater::getTLE(id, loaded_tle)) {
-                    SatProfile p;
-                    p.noradId = id;
-                    p.name = loaded_tle.name;
-                    p.color = TFT_WHITE;
-                    p.baseScore = 0;
-                    p.selected = true;
-                    p.iconType = ICON_SATELLITE;
-                    p.description = "Custom added satellite.\n\nPress 'd' to delete this satellite.";
-                    p.tle = loaded_tle;
-                    p.calc.init(p.tle);
-                    p.type = SAT_TYPE_VISUAL;
-                    if (NUM_SATELLITES < MAX_SATELLITES) {
-                        g_satellites[NUM_SATELLITES++] = p;
+                if (g_satellites[i].tle.line1.length() > 0) {
+                    g_satellites[i].calc.init(g_satellites[i].tle);
+                }
+                
+                // Slowly progress progress to 50%
+                g_loadingProgress = 18 + (int)(32.0f * (float)i / (float)NUM_SATELLITES);
+            }
+            
+            g_loadingProgress = 50;
+            
+            // Find the latest TLE Epoch as the initial system time anchor
+            uint32_t latestEpoch = TLEManager::getMockTimeAnchor();
+            for (int i = 0; i < NUM_SATELLITES; i++) {
+                if (g_satellites[i].tle.line1.length() >= 32) {
+                    uint32_t ep = parseTleEpoch(g_satellites[i].tle.line1);
+                    if (ep > latestEpoch) {
+                        latestEpoch = ep;
                     }
                 }
             }
-        }
-    }
-    
-    if (needsSaveCleanup) {
-        LOG_I("APP", "Built-in satellites found in custom list. Performing Preferences cleanup.");
-        saveCustomSatellites();
-    }
-    
-    // Update progress bar to 80%
-    if (earth_renderer && earth_renderer->getCanvas()) {
-        earth_renderer->getCanvas()->fillRect(37, 90, 136, 4, TFT_GREEN);
-        earth_renderer->getCanvas()->pushSprite(0, 0);
-    }
-    
-    // Start predictor task on Core 0 for offline data (UI runs on Core 1)
-    xTaskCreatePinnedToCore(
-        predictorTask,
-        "PredictorTask",
-        16384,
-        NULL,
-        1,
-        &predictorTaskHandle,
-        0
-    );
-    
-    // Start network task on Core 0 to handle WiFi and TLE fetching in background
-    // Auto connects at boot and auto disconnects when done
-    manualWifiToggle = false;
-    xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
-
-    // Initialize Chain Mono on Serial2 (Grove Port) at setup tail
-    // This allows the Chain Mono module's internal MCU enough time to boot up completely.
-#if ENABLE_CHAIN_MONO
-    bool skipMonoProbe = false;
-    if (M5.getBoard() == m5::board_t::board_M5Cardputer) {
-        skipMonoProbe = true;
-        LOG_I("APP", "Original Cardputer detected. Grove pins are used for internal I2C. Skipping Mono probe.");
-    }
-    if (gnss && !skipMonoProbe) {
-        GnssConfig gnssCfg = gnss->getConfig();
-        if (gnssCfg.rxPin == 2) {
-            skipMonoProbe = true;
-            LOG_I("APP", "Grove port is occupied by GNSS (pin 2/1). Skipping Chain Mono probe.");
-        }
-    }
-
-    bool foundChain = false;
-    uint8_t usedRx = 2;
-    uint8_t usedTx = 1;
-    uint16_t device_nums = 0;
-    
-    if (!skipMonoProbe) {
-        LOG_I("APP", "Initializing Chain Mono on Serial2 (Auto-detecting pins)...");
-        
-        // Attempt Config A: RX=2, TX=1 (Standard G2=RX, G1=TX for host)
-        M5Chain.begin(&Serial2, 115200, 2, 1);
-        delay(100);
-        int retry = 2;
-        while (retry > 0) {
-            if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
-                foundChain = true;
-                usedRx = 2;
-                usedTx = 1;
-                break;
-            }
-            retry--;
-            if (retry > 0) delay(50);
-        }
-        
-        // Attempt Config B: RX=1, TX=2 (Swapped G1=RX, G2=TX for host)
-        if (!foundChain) {
-            LOG_I("APP", "Chain Mono not found on RX=2,TX=1. Swapping pins (RX=1,TX=2) and retrying...");
-            Serial2.end();
-            delay(50);
-            M5Chain.begin(&Serial2, 115200, 1, 2);
-            delay(100);
-            retry = 2;
-            while (retry > 0) {
-                if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
-                    foundChain = true;
-                    usedRx = 1;
-                    usedTx = 2;
-                    break;
-                }
-                retry--;
-                if (retry > 0) delay(50);
-            }
-        }
-        
-        if (foundChain) {
-            LOG_I("APP", "Chain Mono successfully detected on RX=%d, TX=%d! Device count: %d", usedRx, usedTx, device_nums);
-            device_info_t *infos = (device_info_t *)malloc(sizeof(device_info_t) * device_nums);
-            if (infos != nullptr) {
-                memset(infos, 0, sizeof(device_info_t) * device_nums); // Safe guard!
-                device_list_t devices;
-                devices.count = device_nums;
-                devices.devices = infos;
-                if (M5Chain.getDeviceList(&devices, 150)) {
-                    for (uint8_t i = 0; i < devices.count; i++) {
-                        if (devices.devices[i].device_type == CHAIN_MONO_TYPE_CODE) {
-                            mono_id = devices.devices[i].id;
-                            isMonoInitialized = true;
-                            break;
+            current_unix = latestEpoch;
+            LOG_I("APP", "Offline boot: Loaded cached TLEs. System time anchor set to: %u", current_unix);
+            
+            // Load Custom Satellites from Preferences
+            Preferences prefs;
+            prefs.begin("satellites", true);
+            String customIds = prefs.getString("customIds", "");
+            prefs.end();
+            
+            bool needsSaveCleanup = false;
+            if (customIds.length() > 0) {
+                int start = 0;
+                int end = customIds.indexOf(',');
+                while (start < customIds.length()) {
+                    String idStr;
+                    if (end == -1) {
+                        idStr = customIds.substring(start);
+                        start = customIds.length();
+                    } else {
+                        idStr = customIds.substring(start, end);
+                        start = end + 1;
+                        end = customIds.indexOf(',', start);
+                    }
+                    
+                    int id = idStr.toInt();
+                    if (id > 0) {
+                        bool isPreset = false;
+                        for (int pIdx = 0; pIdx < NUM_BUILTIN_SATELLITES; pIdx++) {
+                            if (g_satellites[pIdx].noradId == id) {
+                                isPreset = true;
+                                break;
+                            }
+                        }
+                        if (isPreset) {
+                            needsSaveCleanup = true;
+                            continue;
+                        }
+                        
+                        LOG_I("APP", "Loading Custom: %d", id);
+                        TLEData loaded_tle;
+                        if (TLEUpdater::getTLE(id, loaded_tle)) {
+                            SatProfile p;
+                            p.noradId = id;
+                            p.name = loaded_tle.name;
+                            p.color = TFT_WHITE;
+                            p.baseScore = 0;
+                            p.selected = true;
+                            p.iconType = ICON_SATELLITE;
+                            p.description = "Custom added satellite.\n\nPress 'd' to delete this satellite.";
+                            p.tle = loaded_tle;
+                            p.calc.init(p.tle);
+                            p.type = SAT_TYPE_VISUAL;
+                            if (NUM_SATELLITES < MAX_SATELLITES) {
+                                g_satellites[NUM_SATELLITES++] = p;
+                            }
                         }
                     }
                 }
-                free(infos);
             }
-        }
-    }
-    
-    if (isMonoInitialized) {
-        LOG_I("APP", "Chain Mono found on Grove port. ID: %d", mono_id);
-        M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
-        M5Chain.setMonoRotation(mono_id, MONO_ROTATION_0, &operation_status);
-        M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_7, &operation_status);
-        M5Chain.setMonoClear(mono_id, &operation_status);
-        
-        // 既然已经找到并占用了 Mono，就把 GNSS 的 Grove 探测永久关掉，防干扰
-        if (gnss) {
-            GnssConfig gnssCfg = gnss->getConfig();
-            gnssCfg.enableGroveProbe = false;
-            gnss->setConfig(gnssCfg);
-        }
-    } else {
-        if (!skipMonoProbe) {
-            LOG_I("APP", "Chain Mono module not detected. Releasing Grove pins for GNSS.");
-            Serial2.end();
             
-            // Late probe for Grove GNSS since Grove port is free
+            if (needsSaveCleanup) {
+                LOG_I("APP", "Built-in satellites found in custom list. Performing Preferences cleanup.");
+                saveCustomSatellites();
+            }
+            
+            g_loadingProgress = 80;
+            
+            // Start predictor task on Core 0 for offline data (UI runs on Core 1)
+            xTaskCreatePinnedToCore(
+                predictorTask,
+                "PredictorTask",
+                16384,
+                NULL,
+                1,
+                &predictorTaskHandle,
+                0
+            );
+            
+            // Start network task on Core 0 to handle WiFi and TLE fetching in background
+            manualWifiToggle = false;
+            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
+
+            // Initialize Chain Mono on Serial2 (Grove Port)
+#if ENABLE_CHAIN_MONO
+            bool skipMonoProbe = false;
+            if (M5.getBoard() == m5::board_t::board_M5Cardputer) {
+                skipMonoProbe = true;
+                LOG_I("APP", "Original Cardputer detected. Grove pins are used for internal I2C. Skipping Mono probe.");
+            }
+            if (gnss && !skipMonoProbe) {
+                GnssConfig gnssCfg = gnss->getConfig();
+                if (gnssCfg.rxPin == 2) {
+                    skipMonoProbe = true;
+                    LOG_I("APP", "Grove port is occupied by GNSS (pin 2/1). Skipping Chain Mono probe.");
+                }
+            }
+
+            bool foundChain = false;
+            uint8_t usedRx = 2;
+            uint8_t usedTx = 1;
+            uint16_t device_nums = 0;
+            
+            if (!skipMonoProbe) {
+                LOG_I("APP", "Initializing Chain Mono on Serial2 (Auto-detecting pins)...");
+                M5Chain.begin(&Serial2, 115200, 2, 1);
+                delay(100);
+                int retry = 2;
+                while (retry > 0) {
+                    if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
+                        foundChain = true;
+                        usedRx = 2;
+                        usedTx = 1;
+                        break;
+                    }
+                    retry--;
+                    if (retry > 0) delay(50);
+                }
+                
+                if (!foundChain) {
+                    LOG_I("APP", "Chain Mono not found on RX=2,TX=1. Swapping pins (RX=1,TX=2) and retrying...");
+                    Serial2.end();
+                    delay(50);
+                    M5Chain.begin(&Serial2, 115200, 1, 2);
+                    delay(100);
+                    retry = 2;
+                    while (retry > 0) {
+                        if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
+                            foundChain = true;
+                            usedRx = 1;
+                            usedTx = 2;
+                            break;
+                        }
+                        retry--;
+                        if (retry > 0) delay(50);
+                    }
+                }
+                
+                if (foundChain) {
+                    LOG_I("APP", "Chain Mono successfully detected on RX=%d, TX=%d! Device count: %d", usedRx, usedTx, device_nums);
+                    device_info_t *infos = (device_info_t *)malloc(sizeof(device_info_t) * device_nums);
+                    if (infos != nullptr) {
+                        memset(infos, 0, sizeof(device_info_t) * device_nums);
+                        device_list_t devices;
+                        devices.count = device_nums;
+                        devices.devices = infos;
+                        if (M5Chain.getDeviceList(&devices, 150)) {
+                            for (uint8_t i = 0; i < devices.count; i++) {
+                                if (devices.devices[i].device_type == CHAIN_MONO_TYPE_CODE) {
+                                    mono_id = devices.devices[i].id;
+                                    isMonoInitialized = true;
+                                    break;
+                                }
+                            }
+                        }
+                        free(infos);
+                    }
+                }
+            }
+            
+            if (isMonoInitialized) {
+                LOG_I("APP", "Chain Mono found on Grove port. ID: %d", mono_id);
+                M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
+                M5Chain.setMonoRotation(mono_id, MONO_ROTATION_0, &operation_status);
+                M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_7, &operation_status);
+                M5Chain.setMonoClear(mono_id, &operation_status);
+                
+                if (gnss) {
+                    GnssConfig gnssCfg = gnss->getConfig();
+                    gnssCfg.enableGroveProbe = false;
+                    gnss->setConfig(gnssCfg);
+                }
+            } else {
+                if (!skipMonoProbe) {
+                    LOG_I("APP", "Chain Mono module not detected. Releasing Grove pins for GNSS.");
+                    Serial2.end();
+                    if (gnss) {
+                        LOG_I("APP", "Triggering late GNSS Grove port probe...");
+                        gnss->probeGrove();
+                    }
+                } else {
+                    LOG_I("APP", "Skipped Chain Mono probe as Grove is occupied by GNSS.");
+                }
+            }
+#else
+            isMonoInitialized = false;
             if (gnss) {
-                LOG_I("APP", "Triggering late GNSS Grove port probe...");
+                LOG_I("APP", "Chain Mono is disabled. Probing Grove port late for GNSS.");
                 gnss->probeGrove();
             }
-        } else {
-            LOG_I("APP", "Skipped Chain Mono probe as Grove is occupied by GNSS.");
-        }
-    }
-#else
-    isMonoInitialized = false;
-    if (gnss) {
-        LOG_I("APP", "Chain Mono is disabled. Probing Grove port late for GNSS.");
-        gnss->probeGrove();
-    }
 #endif
-    tryLoadRecentLaunchCache();
+            tryLoadRecentLaunchCache();
+            
+            g_loadingProgress = 100;
+            g_loadingFinished = true;
+            vTaskDelete(NULL);
+        },
+        "SetupLoader",
+        16384,
+        NULL,
+        2, // Slightly lower than IMU but higher than predictor
+        NULL,
+        0
+    );
     
-    // Update progress bar to 100% and show complete
-    if (earth_renderer && earth_renderer->getCanvas()) {
-        earth_renderer->getCanvas()->fillRect(37, 90, 166, 4, TFT_GREEN);
-        earth_renderer->getCanvas()->pushSprite(0, 0);
-        delay(50);
+    // Smooth 30 FPS rendering loop on Core 1 (main setup thread)
+    while (!g_loadingFinished) {
+        drawStartupScreen(g_loadingProgress);
+        delay(33); // ~30 FPS
+    }
+    
+    // Draw the final complete state and pause slightly to show completion
+    drawStartupScreen(100);
+    delay(50);
+    
+    // Restore decorations for main system view
+    if (earth_renderer) {
+        earth_renderer->setDrawDecorations(true);
     }
 }
 
