@@ -372,6 +372,10 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
     // Draw city light pollution on the dark side
     drawLightPollution(centerLat, centerLon);
     
+    // Draw atmosphere and polar effects
+    drawAirglow(centerLat, centerLon);
+    drawAuroras(centerLat, centerLon);
+    
     // Draw user location as a map pin 📍
     int ux, uy;
     if (_drawDecorations && userLat <= 90.0 && projectOrthographic(userLat, userLon, 0, centerLat, centerLon, ux, uy)) {
@@ -1055,5 +1059,169 @@ void EarthRenderer::drawSatelliteIcon(int x, int y, SatIconType iconType, uint16
         _canvas->fillRect(x - 1, y - 1, 3, 3, darkGrayCol);
         _canvas->fillRect(x - 5, y - 1, 3, 3, color);
         _canvas->drawLine(x - 2, y, x - 1, y, hamLightGray);
+    }
+}
+
+void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
+    float pitchRad = _cameraPitch * DEG_TO_RAD;
+    float rollRad = -_cameraRoll * DEG_TO_RAD;
+    float center_y_pitched = _cameraFocusR * sinf(pitchRad);
+    float center_rotatedX = -center_y_pitched * sinf(rollRad);
+    float center_rotatedY = center_y_pitched * cosf(rollRad);
+    int circleX = _centerX + _centerOffsetX + (int)center_rotatedX;
+    int circleY = _centerY + _centerOffsetY - (int)center_rotatedY;
+
+    float timePhase = millis() * 0.002f;
+    uint32_t seed = 98765;
+    
+    // Draw dithered gas particles around the circumference (every 2 degrees = 180 slices)
+    for (int deg = 0; deg < 360; deg += 2) {
+        float rad = deg * DEG_TO_RAD;
+        
+        // Base airglow noise
+        float noise = 0.8f * sinf(rad * 4.0f + timePhase) + 
+                      0.4f * cosf(rad * 8.0f - timePhase * 1.5f);
+                      
+        // Draw 3 layers of particles with different random offsets and fading colors
+        for (int p = 0; p < 3; p++) {
+            // LCG fast random
+            seed = seed * 1664525UL + 1013904223UL;
+            float r_offset = p * 1.2f + (seed % 100) * 0.01f * 1.5f;
+            float r = _earthRadius + 1.0f + noise + r_offset;
+            
+            int x = circleX + (int)(r * cosf(rad));
+            int y = circleY - (int)(r * sinf(rad));
+            
+            // Fading factor
+            float factor = 1.0f - (r_offset / 5.5f);
+            if (factor < 0.0f) factor = 0.0f;
+            
+            uint8_t g = (uint8_t)(110 * factor);
+            uint8_t b = (uint8_t)(35 * factor);
+            
+            if (g > 0) {
+                uint16_t color = _display->color565(0, g, b);
+                _canvas->drawPixel(x, y, color);
+            }
+        }
+    }
+}
+
+void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
+    int step = _isFastForwarding ? 8 : 4;
+    int heightSteps = _isFastForwarding ? 6 : 10;
+    float timePhase = millis() * 0.0015f;
+    uint32_t seed = 54321;
+    
+    // 1. North Pole Aurora (Fluorescent Green and Purple ribbon curtain)
+    {
+        for (int lon = 0; lon < 360; lon += step) {
+            float lonRad = lon * DEG_TO_RAD;
+            
+            // Lat/Lon wave noise
+            float latNoise = 2.0f * sinf(lonRad * 3.0f + timePhase) + 
+                             1.0f * cosf(lonRad * 7.0f - timePhase * 1.2f);
+            float drawLat = 69.0f + latNoise;
+            
+            float lonNoise = 3.0f * cosf(lonRad * 2.0f + timePhase * 0.8f);
+            float drawLon = lon + lonNoise;
+            
+            float heightNoise = 15.0f * sinf(lonRad * 5.0f + timePhase * 1.5f);
+            float alt_bot = 70.0f;
+            float alt_top = 180.0f + heightNoise;
+            
+            int xb, yb, xt, yt;
+            bool vis_b = projectOrthographic(drawLat, drawLon, alt_bot, centerLat, centerLon, xb, yb);
+            bool vis_t = projectOrthographic(drawLat, drawLon, alt_top, centerLat, centerLon, xt, yt);
+            
+            if (vis_b && vis_t) {
+                uint16_t greenCore = _display->color565(10, 160, 40);
+                uint16_t greenDim = _display->color565(5, 80, 20);
+                uint16_t purpleCore = _display->color565(120, 20, 120);
+                uint16_t purpleDim = _display->color565(60, 10, 60);
+                
+                // Interpolate vertically in 2D screen space
+                for (int s = 0; s <= heightSteps; s++) {
+                    float t = (float)s / (float)heightSteps;
+                    int x = xb + (int)(t * (xt - xb));
+                    int y = yb + (int)(t * (yt - yb));
+                    
+                    uint16_t coreCol = (t < 0.5f) ? greenCore : purpleCore;
+                    uint16_t dimCol = (t < 0.5f) ? greenDim : purpleDim;
+                    
+                    // Draw core particle
+                    _canvas->drawPixel(x, y, coreCol);
+                    
+                    // Dithered surrounding glow particles
+                    seed = seed * 1664525UL + 1013904223UL;
+                    int dx1 = ((int)(seed % 3)) - 1;
+                    seed = seed * 1664525UL + 1013904223UL;
+                    int dy1 = ((int)(seed % 3)) - 1;
+                    _canvas->drawPixel(x + dx1, y + dy1, coreCol);
+                    
+                    seed = seed * 1664525UL + 1013904223UL;
+                    int dx2 = ((int)(seed % 5)) - 2;
+                    seed = seed * 1664525UL + 1013904223UL;
+                    int dy2 = ((int)(seed % 5)) - 2;
+                    _canvas->drawPixel(x + dx2, y + dy2, dimCol);
+                }
+            }
+        }
+    }
+    
+    // 2. South Pole Aurora (Fluorescent Green and Blue ribbon curtain)
+    {
+        for (int lon = 0; lon < 360; lon += step) {
+            float lonRad = lon * DEG_TO_RAD;
+            
+            // Lat/Lon wave noise
+            float latNoise = 2.0f * sinf(lonRad * 3.0f - timePhase * 1.1f) + 
+                             1.0f * cosf(lonRad * 6.0f + timePhase * 0.9f);
+            float drawLat = -69.0f + latNoise;
+            
+            float lonNoise = 3.0f * sinf(lonRad * 2.0f - timePhase * 0.7f);
+            float drawLon = lon + lonNoise;
+            
+            float heightNoise = 15.0f * cosf(lonRad * 5.0f - timePhase * 1.3f);
+            float alt_bot = 70.0f;
+            float alt_top = 180.0f + heightNoise;
+            
+            int xb, yb, xt, yt;
+            bool vis_b = projectOrthographic(drawLat, drawLon, alt_bot, centerLat, centerLon, xb, yb);
+            bool vis_t = projectOrthographic(drawLat, drawLon, alt_top, centerLat, centerLon, xt, yt);
+            
+            if (vis_b && vis_t) {
+                uint16_t greenCore = _display->color565(10, 160, 40);
+                uint16_t greenDim = _display->color565(5, 80, 20);
+                uint16_t blueCore = _display->color565(10, 80, 160);
+                uint16_t blueDim = _display->color565(5, 40, 80);
+                
+                // Interpolate vertically in 2D screen space
+                for (int s = 0; s <= heightSteps; s++) {
+                    float t = (float)s / (float)heightSteps;
+                    int x = xb + (int)(t * (xt - xb));
+                    int y = yb + (int)(t * (yt - yb));
+                    
+                    uint16_t coreCol = (t < 0.5f) ? greenCore : blueCore;
+                    uint16_t dimCol = (t < 0.5f) ? greenDim : blueDim;
+                    
+                    // Draw core particle
+                    _canvas->drawPixel(x, y, coreCol);
+                    
+                    // Dithered surrounding glow particles
+                    seed = seed * 1664525UL + 1013904223UL;
+                    int dx1 = ((int)(seed % 3)) - 1;
+                    seed = seed * 1664525UL + 1013904223UL;
+                    int dy1 = ((int)(seed % 3)) - 1;
+                    _canvas->drawPixel(x + dx1, y + dy1, coreCol);
+                    
+                    seed = seed * 1664525UL + 1013904223UL;
+                    int dx2 = ((int)(seed % 5)) - 2;
+                    seed = seed * 1664525UL + 1013904223UL;
+                    int dy2 = ((int)(seed % 5)) - 2;
+                    _canvas->drawPixel(x + dx2, y + dy2, dimCol);
+                }
+            }
+        }
     }
 }
