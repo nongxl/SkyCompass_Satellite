@@ -7,7 +7,7 @@
 class OrbitDataProvider {
 public:
     // 从缓存或网络加载指定 Catalog Number 卫星
-    static bool loadByCatalogNumber(uint32_t catNum, OrbitRecord& record);
+    static bool loadByCatalogNumber(uint32_t catNum, OrbitRecord& record, bool forceRefresh = false);
     
     // 下载 Recent Launches 并以 JSONL 形式流式保存，并在内存中流式建构 RecentLaunchItem 列表
     static bool downloadRecentLaunches(std::vector<RecentLaunchItem>& tempLaunches);

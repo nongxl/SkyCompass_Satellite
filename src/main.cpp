@@ -468,7 +468,7 @@ SatProfile g_satellites[MAX_SATELLITES] = {
     {4382, "DFH-1", TFT_RED, 0, 6.0, true, ICON_DFH1, "Dong Fang Hong I. China's first satellite launched in 1970, still orbiting today as a silent monument.\n\nLaunch: 1970-04-24\nStatus: Inactive\nComms: Unavailable\nHAM: Not Supported", "20.009", "Beacon", "", "", {}, {}, {}, SAT_TYPE_HISTORICAL},
     {25994, "Terra", TFT_PINK, 0, 3.0, false, ICON_SATELLITE, "NASA's flagship Earth Observing System satellite.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {27424, "Aqua", TFT_MAGENTA, 0, 3.0, false, ICON_SATELLITE, "NASA Earth observation satellite focusing on the water cycle.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {43166, "Iridium 127", TFT_WHITE, 0, 4.0, false, ICON_COMMUNICATION, "Iridium NEXT network. The original 1st-gen Iridium satellites produced legendary 'flares' up to mag -8.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
+    {42956, "Iridium 127", TFT_WHITE, 0, 4.0, false, ICON_COMMUNICATION, "Iridium NEXT network. The original 1st-gen Iridium satellites produced legendary 'flares' up to mag -8.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
     {57165, "Meteor-M2", TFT_WHITE, 0, 3.5, false, ICON_WEATHER, "Russian meteorological satellite transmitting LRPT weather images.", "137.100", "LRPT", "", "", {}, {}, {}, SAT_TYPE_WEATHER},
     {27607, "SO-50", TFT_GREEN, 0, 6.5, false, ICON_COMMUNICATION, "SaudiSat 1C (SO-50). A long-lived, highly active FM voice repeater amateur satellite, very popular for quick handheld contacts.", "145.850", "FM", "436.795", "67.0", {}, {}, {}, SAT_TYPE_HAM},
     {43017, "AO-91", TFT_MAGENTA, 0, 6.0, true, ICON_COMMUNICATION, "RadFxSat (AO-91). A Fox-1B series amateur radio satellite carrying a U/V FM voice repeater.", "145.960", "FM", "435.250", "67.0", {}, {}, {}, SAT_TYPE_HAM}
@@ -827,6 +827,7 @@ void fetchFrequencies() {
     WiFiClientSecure *client = new WiFiClientSecure;
     if (!client) return;
     client->setInsecure();
+    client->setTimeout(5);
     
     HTTPClient http;
     http.setTimeout(15000);
@@ -966,8 +967,16 @@ int drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int w, int l
     return lines;
 }
 
-void recentLaunchNetworkTask(void* parameter) {
+struct WiFiDisconnectGuard {
+    ~WiFiDisconnectGuard() {
+        LOG_I("RECENT_LAUNCH", "Recent Launch task complete. Turning off WiFi to save power.");
+        HalWifi::disconnect();
+    }
+};
+
+void recentLaunchNetworkTaskImpl() {
     NetworkActiveGuard guard;
+    WiFiDisconnectGuard wifiGuard;
     recentLaunchDownloading = true;
     recentLaunchDownloadSuccess = false;
     recentLaunchErrorMsg = "";
@@ -981,7 +990,6 @@ void recentLaunchNetworkTask(void* parameter) {
         if (ssid.length() == 0) {
             recentLaunchErrorMsg = "No WiFi Configured!";
             recentLaunchDownloading = false;
-            vTaskDelete(NULL);
             return;
         }
         
@@ -991,7 +999,6 @@ void recentLaunchNetworkTask(void* parameter) {
         if (!HalWifi::isConnected()) {
             recentLaunchErrorMsg = "WiFi Connect Failed!";
             recentLaunchDownloading = false;
-            vTaskDelete(NULL);
             return;
         }
     }
@@ -1041,11 +1048,14 @@ void recentLaunchNetworkTask(void* parameter) {
     }
     
     recentLaunchDownloading = false;
-    g_networkActive = false;
+}
+
+void recentLaunchNetworkTask(void* parameter) {
+    recentLaunchNetworkTaskImpl();
     vTaskDelete(NULL);
 }
 
-void networkTask(void* parameter) {
+void networkTaskImpl(void* parameter) {
     NetworkActiveGuard guard;
     g_wifiConnecting = true;
     g_dataUpdating = false;
@@ -1071,8 +1081,6 @@ void networkTask(void* parameter) {
         wifiIsInputtingPassword = false;
         g_wifiConnecting = false;
         g_dataUpdating = false;
-        g_networkActive = false;
-        vTaskDelete(NULL);
         return;
     }
 
@@ -1089,8 +1097,6 @@ void networkTask(void* parameter) {
         wifiIsInputtingPassword = false;
         g_wifiConnecting = false;
         g_dataUpdating = false;
-        g_networkActive = false;
-        vTaskDelete(NULL);
         return;
     }
     
@@ -1106,8 +1112,6 @@ void networkTask(void* parameter) {
             downloadErrorMsg = "WiFi Connected! Syncing time...";
         }
         
-        // Online timezone removed per user request (relies on offline grid)
-        
         // 2. Fetch NTP
         HalWifi::syncNTPTime();
         
@@ -1120,13 +1124,6 @@ void networkTask(void* parameter) {
         }
 
         if (appState == STATE_SAT_SELECT) {
-            downloadErrorMsg = "WiFi Connected! Syncing frequencies...";
-        }
-
-        // 3.5 Fetch Frequencies
-        fetchFrequencies();
-
-        if (appState == STATE_SAT_SELECT) {
             downloadErrorMsg = "WiFi Connected! Syncing TLEs...";
         }
 
@@ -1136,7 +1133,8 @@ void networkTask(void* parameter) {
         
         for (int i = 0; i < NUM_SATELLITES; i++) {
             TLEData new_tle;
-            if (TLEUpdater::getTLE(g_satellites[i].noradId, new_tle, 2 * 24 * 3600, sharedClient)) {
+            uint32_t maxAge = manualWifiToggle ? 0 : (2 * 24 * 3600);
+            if (TLEUpdater::getTLE(g_satellites[i].noradId, new_tle, maxAge, sharedClient)) {
                 new_tle.baseScore = g_satellites[i].baseScore;
                 SGP4Calc tempCalc;
                 tempCalc.init(new_tle);
@@ -1154,6 +1152,13 @@ void networkTask(void* parameter) {
         if (sharedClient) {
             delete sharedClient;
         }
+
+        if (appState == STATE_SAT_SELECT) {
+            downloadErrorMsg = "WiFi Connected! Syncing frequencies...";
+        }
+
+        // 3.5 Fetch Frequencies
+        fetchFrequencies();
         
         if (updated) {
             LOG_I("APP", "TLE Data is ready and models updated!");
@@ -1188,7 +1193,10 @@ void networkTask(void* parameter) {
     g_wifiConnecting = false;
     g_timeSynced = true; // Fallback to allow offline mock calculations if WiFi failed/finished
     triggerPrediction = true; // Wake up the prediction loop immediately
-    g_networkActive = false;
+}
+
+void networkTask(void* parameter) {
+    networkTaskImpl(parameter);
     vTaskDelete(NULL);
 }
 
@@ -1337,6 +1345,22 @@ void setup() {
     earth_renderer = new EarthRenderer(&M5Cardputer.Display);
     earth_renderer->begin();
 
+    // Draw initial loading screen instantly to avoid black screen during setup
+    if (earth_renderer && earth_renderer->getCanvas()) {
+        earth_renderer->getCanvas()->fillRect(0, 0, 240, 135, earth_renderer->getCanvas()->color565(15, 20, 25));
+        earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
+        earth_renderer->getCanvas()->setTextSize(2);
+        earth_renderer->getCanvas()->drawString("SkyCompass", 120 - earth_renderer->getCanvas()->textWidth("SkyCompass") / 2, 35);
+        
+        earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
+        earth_renderer->getCanvas()->setTextSize(1);
+        earth_renderer->getCanvas()->drawString("Loading Satellite Orbit Models...", 120 - earth_renderer->getCanvas()->textWidth("Loading Satellite Orbit Models...") / 2, 70);
+        
+        earth_renderer->getCanvas()->drawRect(35, 88, 170, 8, TFT_DARKGREY);
+        earth_renderer->getCanvas()->fillRect(37, 90, 30, 4, TFT_GREEN); // initial 18% progress
+        earth_renderer->getCanvas()->pushSprite(0, 0);
+    }
+
     // Initialize IMU
     if (imu && imu->begin()) {
         attitude = new AttitudeEstimator(imu);
@@ -1360,11 +1384,52 @@ void setup() {
     pos_manager = new PositionManager(gnss);
     pos_manager->begin(); 
     
+    // Load cached position from Preferences
+    Preferences posPrefs;
+    if (posPrefs.begin("position", true)) {
+        if (posPrefs.isKey("cached_lat")) {
+            baseUserLat = posPrefs.getDouble("cached_lat", 39.90);
+            baseUserLon = posPrefs.getDouble("cached_lon", 116.40);
+            baseUserAlt = posPrefs.getDouble("cached_alt", 0.0);
+            isManualLocationMode = posPrefs.getBool("use_manual_pos", false);
+            gnssLocationFixed = true; // Mark as fixed since we loaded a valid cached location!
+            
+            // Sync loaded position to pos_manager
+            PositionData pos = {baseUserLat, baseUserLon, baseUserAlt};
+            if (isManualLocationMode) {
+                pos_manager->setManualPosition(pos);
+                pos_manager->enableManualPosition(true);
+            } else {
+                pos_manager->setPosition(pos);
+                pos_manager->enableManualPosition(false);
+            }
+            
+            LOG_I("APP", "Loaded cached position: lat=%.6f, lon=%.6f, alt=%.1f, useManual=%d", 
+                  baseUserLat, baseUserLon, baseUserAlt, isManualLocationMode);
+        }
+        posPrefs.end();
+    }
+    
     sun_calc = new SunCalculator(pos_manager);
     sun_calc->begin();
     
     // Setup LittleFS for TLE Cache
     TLEUpdater::begin();
+    
+    // One-off cache cleanup to clear the previous stale cache bug
+    if (!LittleFS.exists("/cache_cleared_v2.txt")) {
+        for (int i = 0; i < NUM_SATELLITES; i++) {
+            String tlePath = "/tle_" + String(g_satellites[i].noradId) + ".txt";
+            String catPath = "/cat_" + String(g_satellites[i].noradId) + ".json";
+            if (LittleFS.exists(tlePath)) LittleFS.remove(tlePath);
+            if (LittleFS.exists(catPath)) LittleFS.remove(catPath);
+        }
+        File f = LittleFS.open("/cache_cleared_v2.txt", "w");
+        if (f) {
+            f.println("cleared");
+            f.close();
+        }
+    }
     
     // Set default offline time first so getTLE works properly if needed
     current_unix = 0; // We start at 0 so TLEUpdater uses cache regardless of age
@@ -1390,9 +1455,24 @@ void setup() {
         }
     }
     
-    // Set default offline time to mock anchor if still 0
-    current_unix = TLEManager::getMockTimeAnchor();
-    LOG_I("APP", "Offline boot: Loaded cached TLEs. Using Mock Time Anchor.");
+    // Update progress bar to 50%
+    if (earth_renderer && earth_renderer->getCanvas()) {
+        earth_renderer->getCanvas()->fillRect(37, 90, 85, 4, TFT_GREEN);
+        earth_renderer->getCanvas()->pushSprite(0, 0);
+    }
+    
+    // Find the latest TLE Epoch as the initial system time anchor
+    uint32_t latestEpoch = TLEManager::getMockTimeAnchor();
+    for (int i = 0; i < NUM_SATELLITES; i++) {
+        if (g_satellites[i].tle.line1.length() >= 32) {
+            uint32_t ep = parseTleEpoch(g_satellites[i].tle.line1);
+            if (ep > latestEpoch) {
+                latestEpoch = ep;
+            }
+        }
+    }
+    current_unix = latestEpoch;
+    LOG_I("APP", "Offline boot: Loaded cached TLEs. System time anchor set to: %u", current_unix);
     
     // Load Custom Satellites from Preferences
     Preferences prefs;
@@ -1454,6 +1534,12 @@ void setup() {
     if (needsSaveCleanup) {
         LOG_I("APP", "Built-in satellites found in custom list. Performing Preferences cleanup.");
         saveCustomSatellites();
+    }
+    
+    // Update progress bar to 80%
+    if (earth_renderer && earth_renderer->getCanvas()) {
+        earth_renderer->getCanvas()->fillRect(37, 90, 136, 4, TFT_GREEN);
+        earth_renderer->getCanvas()->pushSprite(0, 0);
     }
     
     // Start predictor task on Core 0 for offline data (UI runs on Core 1)
@@ -1588,6 +1674,13 @@ void setup() {
     }
 #endif
     tryLoadRecentLaunchCache();
+    
+    // Update progress bar to 100% and show complete
+    if (earth_renderer && earth_renderer->getCanvas()) {
+        earth_renderer->getCanvas()->fillRect(37, 90, 166, 4, TFT_GREEN);
+        earth_renderer->getCanvas()->pushSprite(0, 0);
+        delay(50);
+    }
 }
 
 void drawWiFiSetupPage() {
@@ -2424,7 +2517,7 @@ void drawSatSelectPage() {
                 canvas->drawString("Update Success: TLE cache overwritten!", 4, height - 9);
             } else {
                 canvas->setTextColor(TFT_RED);
-                String failMsg = "Update Failed: " + recentLaunchErrorMsg;
+                String failMsg = (recentLaunchErrorMsg.indexOf("Busy") != -1) ? recentLaunchErrorMsg : ("Update Failed: " + recentLaunchErrorMsg);
                 if (canvas->textWidth(failMsg.c_str()) > width - 8) {
                     failMsg = failMsg.substring(0, 35) + "...";
                 }
@@ -2505,6 +2598,26 @@ void drawSatSelectPage() {
 }
 
 void loop() {
+    // Sync coordinates and manual mode from pos_manager to main.cpp global variables
+    if (pos_manager) {
+        PositionData currentPos = pos_manager->getPosition();
+        double oldLat = baseUserLat;
+        double oldLon = baseUserLon;
+        
+        baseUserLat = currentPos.latitude;
+        baseUserLon = currentPos.longitude;
+        baseUserAlt = currentPos.altitude;
+        isManualLocationMode = pos_manager->isManualPositionEnabled();
+        
+        if (abs(baseUserLat - oldLat) > 0.0001 || abs(baseUserLon - oldLon) > 0.0001) {
+            portENTER_CRITICAL(&passMutex);
+            lastPredictionBaseTime = 0; // 缓存失效
+            predictionsReady = false;
+            portEXIT_CRITICAL(&passMutex);
+            triggerPrediction = true;
+        }
+    }
+
     if (g_recentLaunchesPending) {
         g_recentLaunches = std::move(g_pendingRecentLaunches);
         g_pendingRecentLaunches.clear();
@@ -2697,6 +2810,19 @@ void loop() {
                         lastPredictionBaseTime = 0; // 缓存失效
                         predictionsReady = false;
                         portEXIT_CRITICAL(&passMutex);
+                        
+                        if (pos_manager) {
+                            PositionData pos = {baseUserLat, baseUserLon, baseUserAlt};
+                            pos_manager->setManualPosition(pos);
+                        }
+                        Preferences posPrefs;
+                        if (posPrefs.begin("position", false)) {
+                            posPrefs.putDouble("cached_lat", baseUserLat);
+                            posPrefs.putDouble("cached_lon", baseUserLon);
+                            posPrefs.putDouble("cached_alt", baseUserAlt);
+                            posPrefs.putBool("use_manual_pos", true);
+                            posPrefs.end();
+                        }
                     }
                 }
                 
@@ -2764,6 +2890,14 @@ void loop() {
                     }
 
                     isManualLocationMode = !isManualLocationMode;
+                    if (pos_manager) {
+                        pos_manager->enableManualPosition(isManualLocationMode);
+                    }
+                    Preferences posPrefs;
+                    if (posPrefs.begin("position", false)) {
+                        posPrefs.putBool("use_manual_pos", isManualLocationMode);
+                        posPrefs.end();
+                    }
                     if (!isManualLocationMode) {
                         portENTER_CRITICAL(&passMutex);
                         predictionsReady = false;
@@ -2778,6 +2912,18 @@ void loop() {
                             baseUserLat = 39.90; // Beijing default
                             baseUserLon = 116.40;
                             baseUserAlt = 0.0;
+                            
+                            if (pos_manager) {
+                                PositionData pos = {baseUserLat, baseUserLon, baseUserAlt};
+                                pos_manager->setManualPosition(pos);
+                            }
+                            Preferences posPrefs;
+                            if (posPrefs.begin("position", false)) {
+                                posPrefs.putDouble("cached_lat", baseUserLat);
+                                posPrefs.putDouble("cached_lon", baseUserLon);
+                                posPrefs.putDouble("cached_alt", baseUserAlt);
+                                posPrefs.end();
+                            }
                         }
                         portENTER_CRITICAL(&passMutex);
                         lastPredictionBaseTime = 0; // 按 r 重置时，缓存失效，强制重新计算
@@ -3139,6 +3285,7 @@ void loop() {
                     if (currentSatTab == TAB_RECENT_LAUNCH) {
                         if (g_networkActive) {
                             recentLaunchErrorMsg = "System Busy... Wait.";
+                            recentLaunchDownloadFinishedMs = millis();
                             drawSatSelectPage();
                             earth_renderer->getCanvas()->pushSprite(0, 0);
                         } else if (!recentLaunchDownloading) {
@@ -3424,6 +3571,23 @@ void loop() {
                     baseUserLat = gData.latitude;
                     baseUserLon = gData.longitude;
                     gnssLocationFixed = true; // Mark that we have a real location
+                    
+                    // Sync to pos_manager
+                    if (pos_manager) {
+                        PositionData pos = {baseUserLat, baseUserLon, baseUserAlt};
+                        pos_manager->setPosition(pos);
+                    }
+                    
+                    // Save GNSS location to Preferences
+                    Preferences posPrefs;
+                    if (posPrefs.begin("position", false)) {
+                        posPrefs.putDouble("cached_lat", baseUserLat);
+                        posPrefs.putDouble("cached_lon", baseUserLon);
+                        posPrefs.putDouble("cached_alt", baseUserAlt);
+                        posPrefs.putBool("use_manual_pos", false);
+                        posPrefs.end();
+                    }
+                    
                     if (abs(baseUserLat - oldLat) > 0.0001 || abs(baseUserLon - oldLon) > 0.0001) {
                         portENTER_CRITICAL(&passMutex);
                         lastPredictionBaseTime = 0; // 缓存失效
@@ -3780,6 +3944,10 @@ void loop() {
                             data.launchEpoch = item.epoch;
                             data.simTime = simTime;
                             
+                            // Visual effects fields
+                            data.isSelected = (isSatViewMode && g_recentLaunchFocusMode);
+                            data.calc = &g_repSatCalc;
+                            
                             calculateOrbit(g_repSatCalc, simTime, g_repSatCache.cache, orbitsCalculatedThisFrame, isFastForwarding);
                             
                             data.pastOrbit = &(g_repSatCache.cache.past);
@@ -4026,6 +4194,11 @@ void loop() {
                     data.currentPos = g_satCaches[i].lastGeo;
                     data.color = g_satellites[i].color;
                     data.isVisible = g_satCaches[i].isVisible;
+                    
+                    // Visual effects fields
+                    data.isSelected = (isSatViewMode && (focusSatIndex == i));
+                    data.calc = &(g_satellites[i].calc);
+                    data.simTime = simTime;
                     
                     calculateOrbit(g_satellites[i].calc, simTime, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding);
                     

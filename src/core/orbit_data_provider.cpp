@@ -68,11 +68,11 @@ static String readNextJsonObject(WiFiClient* stream) {
 }
 
 // Load single satellite from cache or network
-bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record) {
+bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record, bool forceRefresh) {
     char path[32];
     sprintf(path, "/cat_%u.json", (unsigned int)catNum);
     
-    if (LittleFS.exists(path)) {
+    if (!forceRefresh && LittleFS.exists(path)) {
         File f = LittleFS.open(path, "r");
         if (f) {
             String content = f.readString();

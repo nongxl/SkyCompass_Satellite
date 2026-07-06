@@ -4,6 +4,7 @@
 #include "earth_renderer.h"
 #include "earth_data.h"
 #include "light_points_data.h"
+#include "sgp4_calc.h"
 #include <math.h>
 
 #define DEG_TO_RAD 0.017453292519943295769236907684886
@@ -195,6 +196,11 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
             float sin_dLon = sin_lon * cos_cLon - cos_lon * sin_cLon;
             
             float cos_c = sin_cLat * sin_lat + cos_cLat * cos_lat * cos_dLon;
+            
+            if (cos_c < 0.0f) {
+                prevVisible = false;
+                continue;
+            }
             
             float r = (float)_earthRadius;
             float x = r * cos_lat * sin_dLon;
@@ -787,81 +793,72 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
             }
         }
     
+    // Draw Fading Motion Trail for the selected satellite (rolling history of past frames)
+    if (sat.isSelected && sat.calc) {
+        const size_t MAX_TRAIL_STEPS = 4; // reduced from 8 to make trail collapse faster
+        struct TrailHistoryEntry {
+            uint32_t simTime = 0;
+            String name = "";
+        };
+        static std::vector<TrailHistoryEntry> history;
+        
+        static String lastSelectedName = "";
+        String currentName = sat.name ? sat.name : "";
+        if (currentName != lastSelectedName) {
+            history.clear();
+            lastSelectedName = currentName;
+        }
+        
+        // Add current frame to rolling history every render frame
+        TrailHistoryEntry entry;
+        entry.simTime = sat.simTime;
+        entry.name = currentName;
+        history.insert(history.begin(), entry);
+        if (history.size() > MAX_TRAIL_STEPS) {
+            history.resize(MAX_TRAIL_STEPS);
+        }
+        
+        // Draw the trail using the historical simulated times of the past N frames
+        for (size_t i = 1; i < history.size(); i++) {
+            uint32_t t_past = history[i].simTime;
+            double tx, ty, tz;
+            if (sat.calc->getTEME(t_past, tx, ty, tz)) {
+                double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t_past));
+                ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                
+                int tx_screen, ty_screen;
+                if (projectOrthographic(geo.lat, geo.lon, geo.alt, centerLat, centerLon, tx_screen, ty_screen)) {
+                    bool shadow = false;
+                    if (!_isFastForwarding) {
+                        shadow = isSatelliteInShadow(geo.lat, geo.lon, geo.alt, _subsolarLat, _subsolarLon, _hasSunData);
+                    }
+                    
+                    float fadeFactor = (1.0f - (float)i / (float)MAX_TRAIL_STEPS) * 0.6f;
+                    uint16_t trailCol = shadow ? _display->color565(60, 60, 70) : sat.color;
+                    trailCol = scaleColor(trailCol, fadeFactor);
+                    
+                    drawSatelliteIcon(tx_screen, ty_screen, sat.iconType, trailCol, shadow, fadeFactor);
+                }
+            }
+        }
+    }
+
     // Draw Satellite Current Position
     int sx, sy;
     if (projectOrthographic(sat.currentPos.lat, sat.currentPos.lon, sat.currentPos.alt, centerLat, centerLon, sx, sy)) {
         // Render colorful if visible to observer, otherwise render gray
         uint16_t drawColor = isVisibleToObserver ? sat.color : _display->color565(100, 100, 100);
         bool renderDark = !isVisibleToObserver;
+        float intensity = 1.0f;
         
-        if (sat.iconType == ICON_STATION) {
-            // 空间站 (核心舱+大太阳能帆板)
-            _canvas->fillRect(sx - 2, sy - 1, 5, 3, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
-            _canvas->fillRect(sx - 7, sy - 3, 4, 7, drawColor);
-            _canvas->fillRect(sx + 4, sy - 3, 4, 7, drawColor);
-        } else if (sat.iconType == ICON_ROCKET) {
-            // 火箭残骸 (圆柱体+尾喷口)
-            _canvas->fillRect(sx - 2, sy - 4, 5, 8, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
-            _canvas->fillTriangle(sx - 2, sy - 4, sx + 2, sy - 4, sx, sy - 7, drawColor);
-            _canvas->fillRect(sx - 2, sy + 4, 2, 2, TFT_ORANGE); // Engine 1
-            _canvas->fillRect(sx + 1, sy + 4, 2, 2, TFT_ORANGE); // Engine 2
-        } else if (sat.iconType == ICON_TELESCOPE) {
-            // 望远镜 (长圆筒+镜头盖+小帆板)
-            _canvas->fillRect(sx - 2, sy - 3, 5, 7, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
-            _canvas->fillRect(sx - 3, sy - 4, 7, 2, renderDark ? _display->color565(50,50,50) : TFT_LIGHTGRAY);
-            _canvas->fillRect(sx - 6, sy, 3, 2, drawColor);
-            _canvas->fillRect(sx + 4, sy, 3, 2, drawColor);
-        } else if (sat.iconType == ICON_DEEPSPACE) {
-            // 深空天体 (星芒图标)
-            _canvas->drawLine(sx, sy - 5, sx, sy + 5, drawColor);
-            _canvas->drawLine(sx - 5, sy, sx + 5, sy, drawColor);
-            _canvas->drawLine(sx - 2, sy - 2, sx + 2, sy + 2, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
-            _canvas->drawLine(sx - 2, sy + 2, sx + 2, sy - 2, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
-        } else if (sat.iconType == ICON_DFH1) {
-            // 东方红一号 (圆形舱体+4根斜天线)
-            _canvas->fillCircle(sx, sy, 3, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
-            _canvas->drawLine(sx - 2, sy - 2, sx - 6, sy - 6, drawColor);
-            _canvas->drawLine(sx + 2, sy - 2, sx + 6, sy - 6, drawColor);
-            _canvas->drawLine(sx - 2, sy + 2, sx - 6, sy + 6, drawColor);
-            _canvas->drawLine(sx + 2, sy + 2, sx + 6, sy + 6, drawColor);
-        } else if (sat.iconType == ICON_BLUEWALKER3) {
-            // BlueWalker 3 (中间核心+左右超大平板天线)
-            _canvas->fillRect(sx - 1, sy - 1, 3, 3, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
-            _canvas->fillRect(sx - 7, sy - 3, 5, 7, drawColor);
-            _canvas->fillRect(sx + 3, sy - 3, 5, 7, drawColor);
-            _canvas->drawFastVLine(sx - 5, sy - 3, 7, TFT_BLACK);
-            _canvas->drawFastVLine(sx + 5, sy - 3, 7, TFT_BLACK);
-            _canvas->drawFastHLine(sx - 7, sy, 5, TFT_BLACK);
-            _canvas->drawFastHLine(sx + 3, sy, 5, TFT_BLACK);
-        } else if (sat.iconType == ICON_WEATHER) {
-            // 气象卫星 (舱体+左大帆板+右红外/光学扫描突起)
-            _canvas->fillRect(sx - 1, sy - 2, 3, 5, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
-            _canvas->drawLine(sx - 2, sy, sx - 6, sy - 2, drawColor);
-            _canvas->fillRect(sx - 8, sy - 4, 3, 3, drawColor);
-            _canvas->drawFastHLine(sx + 2, sy, 2, drawColor);
-            _canvas->drawPixel(sx + 3, sy - 1, drawColor);
-        } else if (sat.iconType == ICON_NAVIGATION) {
-            // 导航卫星 (舱体+对称长条帆板+下部螺旋天线)
-            _canvas->fillRect(sx - 1, sy - 2, 3, 5, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
-            _canvas->drawFastHLine(sx - 6, sy, 5, TFT_LIGHTGRAY);
-            _canvas->drawFastHLine(sx + 2, sy, 5, TFT_LIGHTGRAY);
-            _canvas->fillRect(sx - 8, sy - 1, 3, 3, drawColor);
-            _canvas->fillRect(sx + 6, sy - 1, 3, 3, drawColor);
-            _canvas->drawFastVLine(sx, sy + 3, 2, drawColor);
-            _canvas->drawPixel(sx, sy + 5, drawColor);
-        } else if (sat.iconType == ICON_COMMUNICATION) {
-            // 通信卫星 (圆/多面体舱体+顶部V形天线+底部碟形锅天线)
-            _canvas->fillCircle(sx, sy, 2, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
-            _canvas->drawLine(sx, sy - 2, sx - 3, sy - 6, drawColor);
-            _canvas->drawLine(sx, sy - 2, sx + 3, sy - 6, drawColor);
-            _canvas->drawFastVLine(sx, sy + 2, 2, drawColor);
-            _canvas->drawFastHLine(sx - 2, sy + 4, 5, drawColor);
-        } else {
-            // 普通卫星 (小盒子+单侧或不对称帆板)
-            _canvas->fillRect(sx - 1, sy - 1, 3, 3, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
-            _canvas->fillRect(sx - 5, sy - 1, 3, 3, drawColor);
-            _canvas->drawLine(sx - 2, sy, sx - 1, sy, TFT_LIGHTGRAY);
+        // Apply breathing blink effect matching Mono speed and keeping a dim shadow at minimum brightness
+        if (sat.isSelected && isVisibleToObserver) {
+            intensity = 0.65f + 0.35f * sinf((float)millis() * 0.0025f);
+            drawColor = scaleColor(drawColor, intensity);
         }
+        
+        drawSatelliteIcon(sx, sy, sat.iconType, drawColor, renderDark, intensity);
         
         _canvas->setTextColor(drawColor);
         _canvas->setTextSize(1);
@@ -984,3 +981,83 @@ void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
     }
 }
 
+void EarthRenderer::drawSatelliteIcon(int x, int y, SatIconType iconType, uint16_t color, bool renderDark, float intensity) {
+    auto getScaled = [&](uint16_t baseCol) -> uint16_t {
+        if (intensity >= 0.99f) return baseCol;
+        return scaleColor(baseCol, intensity);
+    };
+
+    uint16_t darkGrayCol = getScaled(renderDark ? _display->color565(80,80,80) : TFT_WHITE);
+    uint16_t lightGrayCol = getScaled(renderDark ? _display->color565(50,50,50) : TFT_LIGHTGRAY);
+    uint16_t orangeCol = getScaled(TFT_ORANGE);
+    uint16_t hamLightGray = getScaled(TFT_LIGHTGRAY);
+
+    if (iconType == ICON_STATION) {
+        // Space Station (Core module + big solar panels)
+        _canvas->fillRect(x - 2, y - 1, 5, 3, darkGrayCol);
+        _canvas->fillRect(x - 7, y - 3, 4, 7, color);
+        _canvas->fillRect(x + 4, y - 3, 4, 7, color);
+    } else if (iconType == ICON_ROCKET) {
+        // Rocket Debris (Cylinder + nozzle + engine flame)
+        _canvas->fillRect(x - 2, y - 4, 5, 8, darkGrayCol);
+        _canvas->fillTriangle(x - 2, y - 4, x + 2, y - 4, x, y - 7, color);
+        _canvas->fillRect(x - 2, y + 4, 2, 2, orangeCol); // Engine 1
+        _canvas->fillRect(x + 1, y + 4, 2, 2, orangeCol); // Engine 2
+    } else if (iconType == ICON_TELESCOPE) {
+        // Space Telescope (Tube + lens cover + solar panel)
+        _canvas->fillRect(x - 2, y - 3, 5, 7, darkGrayCol);
+        _canvas->fillRect(x - 3, y - 4, 7, 2, lightGrayCol);
+        _canvas->fillRect(x - 6, y, 3, 2, color);
+        _canvas->fillRect(x + 4, y, 3, 2, color);
+    } else if (iconType == ICON_DEEPSPACE) {
+        // Deep Space (Star flare)
+        _canvas->drawLine(x, y - 5, x, y + 5, color);
+        _canvas->drawLine(x - 5, y, x + 5, y, color);
+        _canvas->drawLine(x - 2, y - 2, x + 2, y + 2, darkGrayCol);
+        _canvas->drawLine(x - 2, y + 2, x + 2, y - 2, darkGrayCol);
+    } else if (iconType == ICON_DFH1) {
+        // DongFangHong-1 (Spherical body + 4 antennas)
+        _canvas->fillCircle(x, y, 3, darkGrayCol);
+        _canvas->drawLine(x - 2, y - 2, x - 6, y - 6, color);
+        _canvas->drawLine(x + 2, y - 2, x + 6, y - 6, color);
+        _canvas->drawLine(x - 2, y + 2, x - 6, y + 6, color);
+        _canvas->drawLine(x + 2, y + 2, x + 6, y + 6, color);
+    } else if (iconType == ICON_BLUEWALKER3) {
+        // BlueWalker 3 (Center array + left/right huge flat solar arrays)
+        _canvas->fillRect(x - 1, y - 1, 3, 3, darkGrayCol);
+        _canvas->fillRect(x - 7, y - 3, 5, 7, color);
+        _canvas->fillRect(x + 3, y - 3, 5, 7, color);
+        _canvas->drawFastVLine(x - 5, y - 3, 7, TFT_BLACK);
+        _canvas->drawFastVLine(x + 5, y - 3, 7, TFT_BLACK);
+        _canvas->drawFastHLine(x - 7, y, 5, TFT_BLACK);
+        _canvas->drawFastHLine(x + 3, y, 5, TFT_BLACK);
+    } else if (iconType == ICON_WEATHER) {
+        // Weather Sat (Body + left panel + right instrument mount)
+        _canvas->fillRect(x - 1, y - 2, 3, 5, darkGrayCol);
+        _canvas->drawLine(x - 2, y, x - 6, y - 2, color);
+        _canvas->fillRect(x - 8, y - 4, 3, 3, color);
+        _canvas->drawFastHLine(x + 2, y, 2, color);
+        _canvas->drawPixel(x + 3, y - 1, color);
+    } else if (iconType == ICON_NAVIGATION) {
+        // Navigation Sat (Body + symmetric flat solar wings + lower helical antenna)
+        _canvas->fillRect(x - 1, y - 2, 3, 5, darkGrayCol);
+        _canvas->drawFastHLine(x - 6, y, 5, hamLightGray);
+        _canvas->drawFastHLine(x + 2, y, 5, hamLightGray);
+        _canvas->fillRect(x - 8, y - 1, 3, 3, color);
+        _canvas->fillRect(x + 6, y - 1, 3, 3, color);
+        _canvas->drawFastVLine(x, y + 3, 2, color);
+        _canvas->drawPixel(x, y + 5, color);
+    } else if (iconType == ICON_COMMUNICATION) {
+        // Comm Sat (Spherical core + top V-shape antenna + bottom dish antenna)
+        _canvas->fillCircle(x, y, 2, darkGrayCol);
+        _canvas->drawLine(x, y - 2, x - 3, y - 6, color);
+        _canvas->drawLine(x, y - 2, x + 3, y - 6, color);
+        _canvas->drawFastVLine(x, y + 2, 2, color);
+        _canvas->drawFastHLine(x - 2, y + 4, 5, color);
+    } else {
+        // Generic Sat (Tiny cube + single solar wing)
+        _canvas->fillRect(x - 1, y - 1, 3, 3, darkGrayCol);
+        _canvas->fillRect(x - 5, y - 1, 3, 3, color);
+        _canvas->drawLine(x - 2, y, x - 1, y, hamLightGray);
+    }
+}

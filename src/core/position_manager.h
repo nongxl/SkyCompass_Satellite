@@ -103,10 +103,22 @@ public:
     void setManualPosition(PositionData position);
 
     /**
+     * @brief 设置当前位置数据（如由GNSS模块直接更新）
+     * @param position 位置数据
+     */
+    void setPosition(PositionData position);
+
+    /**
      * @brief 启用/禁用手动位置
      * @param enable 是否启用手动位置
      */
     void enableManualPosition(bool enable);
+
+    /**
+     * @brief 检查是否启用了手动位置
+     * @return 是否启用
+     */
+    bool isManualPositionEnabled() const { return _useManualPosition; }
 
     /**
      * @brief 检查是否有有效的位置数据

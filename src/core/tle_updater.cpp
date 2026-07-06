@@ -12,6 +12,27 @@ void TLEUpdater::begin() {
     }
 }
 
+static uint32_t parseTleEpoch(const String& line1) {
+    if (line1.length() < 32) return 0;
+    String yrStr = line1.substring(18, 20);
+    String dayStr = line1.substring(20, 32);
+    int yr = yrStr.toInt();
+    double days = dayStr.toDouble();
+    
+    int year = (yr < 57) ? (2000 + yr) : (1900 + yr);
+    
+    auto isLeap = [](int y) {
+        return (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+    };
+    
+    uint32_t seconds = 0;
+    for (int y = 1970; y < year; ++y) {
+        seconds += isLeap(y) ? 366 * 86400 : 365 * 86400;
+    }
+    seconds += (uint32_t)((days - 1.0) * 86400.0);
+    return seconds;
+}
+
 bool TLEUpdater::getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds, WiFiClient* sharedClient) {
     uint32_t cacheTime = 0;
     bool hasCache = loadFromCache(noradId, outTle, cacheTime);
@@ -24,10 +45,18 @@ bool TLEUpdater::getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds, Wi
         return true;
     }
     
-    // If we have network and cache is old, or no cache exists
+    // If we have network and cache is old, or no cache exists, OR the TLE epoch itself is stale
     if (HalWifi::isConnected()) {
-        if (!hasCache || (now > 0 && (now - cacheTime) > maxAgeSeconds)) {
-            LOG_I("APP", "Cache for %d is missing or old. Fetching from network...", noradId);
+        uint32_t tleEpoch = 0;
+        if (hasCache) {
+            tleEpoch = parseTleEpoch(outTle.line1);
+        }
+        
+        bool cacheIsOld = !hasCache || (now > 0 && (now - cacheTime) > maxAgeSeconds);
+        bool tleIsStale = hasCache && (now > 0 && tleEpoch > 0 && (now - tleEpoch) > 3 * 24 * 3600 && (now - cacheTime) > 1 * 3600);
+        
+        if (cacheIsOld || tleIsStale) {
+            LOG_I("APP", "Cache for %d is missing, old, or TLE epoch is stale. Fetching from network...", noradId);
             TLEData newTle;
             if (fetchFromNetwork(noradId, newTle, sharedClient)) {
                 outTle = newTle;
@@ -93,7 +122,7 @@ bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle, WiFiClient* shar
     }
     
     OrbitRecord record;
-    if (OrbitDataProvider::loadByCatalogNumber(noradId, record)) {
+    if (OrbitDataProvider::loadByCatalogNumber(noradId, record, true)) {
         outTle.name = record.name;
         outTle.baseScore = 0;
         SGP4Calc::buildPseudoTle(record, outTle.line1, outTle.line2);

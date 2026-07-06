@@ -5,6 +5,8 @@
 #include "coord_transform.h"
 #include "tle_data.h"
 
+class SGP4Calc;
+
 enum SatIconType {
     ICON_SATELLITE,
     ICON_STATION,
@@ -46,6 +48,10 @@ struct SatRenderData {
     float occupancyEndPhase = 0.0f;
     float repAlongTrackPhase = 0.0f;
     const char* shortName = nullptr;
+    
+    // Target tracking visual effects
+    bool isSelected = false;
+    SGP4Calc* calc = nullptr;
 };
 
 class EarthRenderer {
@@ -136,4 +142,5 @@ private:
     void drawContinents(double centerLat, double centerLon);
     void drawLightPollution(double centerLat, double centerLon);
     void drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon);
+    void drawSatelliteIcon(int x, int y, SatIconType iconType, uint16_t color, bool renderDark, float intensity = 1.0f);
 };

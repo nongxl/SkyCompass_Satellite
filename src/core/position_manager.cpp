@@ -232,6 +232,22 @@ void PositionManager::enableManualTime(bool enable) {
  */
 void PositionManager::setManualPosition(PositionData position) {
     _manualPosition = position;
+    
+    Preferences prefs;
+    if (prefs.begin("position", false)) {
+        prefs.putDouble("cached_lat", position.latitude);
+        prefs.putDouble("cached_lon", position.longitude);
+        prefs.putDouble("cached_alt", position.altitude);
+        prefs.end();
+    }
+}
+
+/**
+ * @brief 设置当前位置数据（如由GNSS模块直接更新）
+ * @param position 位置数据
+ */
+void PositionManager::setPosition(PositionData position) {
+    _position = position;
 }
 
 /**
@@ -240,6 +256,12 @@ void PositionManager::setManualPosition(PositionData position) {
  */
 void PositionManager::enableManualPosition(bool enable) {
     _useManualPosition = enable;
+    
+    Preferences prefs;
+    if (prefs.begin("position", false)) {
+        prefs.putBool("use_manual_pos", enable);
+        prefs.end();
+    }
 }
 
 /**
