@@ -1153,20 +1153,15 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     int circleX = _centerX + _centerOffsetX + (int)center_rotatedX;
     int circleY = _centerY + _centerOffsetY - (int)center_rotatedY;
 
-    float timePhase = millis() * 0.002f;
-    uint32_t seed = 98765;
-    
-    // Draw N layers of concentric circles - jittered scatter points for a hazy mist look
-    int N = _isFastForwarding ? 4 : 8;
-    float thickness = 9.0f; // thickness of airglow
-    float maxAlpha = 0.55f; // maximum opacity
+    // Draw N layers of perfect concentric circles (no noise, no lines, just dense pixels for a smooth glass cover!)
+    int N = _isFastForwarding ? 5 : 10;
+    float thickness = 10.0f; // thickness of airglow
+    float maxAlpha = 0.50f; // maximum opacity
     
     // Cyan-blue atmospheric gas color
     uint8_t r_val = 0;
     uint8_t g_val = 140;
     uint8_t b_val = 220;
-
-    int stepDeg = _isFastForwarding ? 4 : 2; // step in degrees
 
     for (int i = 0; i < N; i++) {
         float t = (float)i / N;
@@ -1174,24 +1169,15 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
         float alpha = ((t < 0.7f) ? (0.2f + 0.8f * (t / 0.7f)) : (1.0f - (t - 0.7f) / 0.3f)) * maxAlpha;
         
         // Starts 2.5 pixels above the Earth surface to clear the tight surface look
-        float baseR = _earthRadius + 2.5f + t * thickness;
+        float r = _earthRadius + 2.5f + t * thickness;
         
-        for (int deg = 0; deg < 360; deg += stepDeg) {
-            // Fast LCG random jitter to break up any radial spikes or polygon lines!
-            seed = seed * 1664525UL + 1013904223UL;
-            float jitterRad = ((int)(seed % 100) - 50) * 0.0003f; // small angle jitter (~0.8 deg range)
-            
-            seed = seed * 1664525UL + 1013904223UL;
-            float jitterR = ((int)(seed % 100) - 50) * 0.015f;    // small radius jitter (~0.75px range)
-            
-            float rad = deg * DEG_TO_RAD + jitterRad;
-            
-            // Noise based on angle and time
-            float noise = 0.5f * sinf(rad * 4.0f + timePhase + i * 0.5f);
-            float r = baseR + noise + jitterR;
-            
-            int x = circleX + (int)(r * cosf(rad));
-            int y = circleY - (int)(r * sinf(rad));
+        // Step size of 1.0f / r draws exactly one pixel per step, creating a perfectly solid circle!
+        // For fast forwarding, draw with 1.5f step to reduce pixel blending overhead
+        float stepRad = (_isFastForwarding ? 1.5f : 1.0f) / r;
+        
+        for (float rad = 0.0f; rad < TWO_PI_F; rad += stepRad) {
+            int x = circleX + (int)(r * cosf(rad) + 0.5f);
+            int y = circleY - (int)(r * sinf(rad) + 0.5f);
             
             blendPixelAdd(_canvas, x, y, r_val, g_val, b_val, alpha);
         }
