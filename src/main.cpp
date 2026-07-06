@@ -1332,6 +1332,52 @@ void imuTask(void* pvParameters) {
     }
 }
 
+void drawStartupScreen(int progressPercentage) {
+    if (!earth_renderer) return;
+    
+    float pitch = 0.0f;
+    float roll = 0.0f;
+    if (attitude) {
+        AttitudeData att = attitude->getAttitude();
+        pitch = att.pitch;
+        roll = att.roll;
+    }
+    
+    // Temporarily configure camera attitude for the startup screen
+    earth_renderer->setCameraAttitude(pitch, roll, 0.0f);
+    earth_renderer->setObserverConstrained(false);
+    
+    // Draw the background Earth globe (no satellites list)
+    earth_renderer->render(baseUserLat, baseUserLon, baseUserLat, baseUserLon, {});
+    
+    M5Canvas* canvas = earth_renderer->getCanvas();
+    if (!canvas) return;
+    
+    // Draw overlay UI
+    canvas->setTextColor(TFT_WHITE);
+    canvas->setTextSize(2);
+    canvas->drawString("SkyCompass", 120 - canvas->textWidth("SkyCompass") / 2, 20);
+    
+    canvas->setTextColor(TFT_YELLOW);
+    canvas->setTextSize(1);
+    canvas->drawString("Loading Satellite Orbit Models...", 120 - canvas->textWidth("Loading Satellite Orbit Models...") / 2, 50);
+    
+    // Draw progress bar
+    canvas->drawRect(35, 108, 170, 8, TFT_DARKGREY);
+    canvas->fillRect(37, 110, (int)(166.0f * (progressPercentage / 100.0f)), 4, TFT_GREEN);
+    
+    // Push to screen
+    canvas->pushSprite(0, 0);
+}
+
+void yieldAndRenderStartup(int progressPercentage, uint32_t durationMs) {
+    uint32_t start = millis();
+    while (millis() - start < durationMs) {
+        drawStartupScreen(progressPercentage);
+        delay(10);
+    }
+}
+
 void setup() {
     
     Serial.begin(115200);
@@ -1346,20 +1392,7 @@ void setup() {
     earth_renderer->begin();
 
     // Draw initial loading screen instantly to avoid black screen during setup
-    if (earth_renderer && earth_renderer->getCanvas()) {
-        earth_renderer->getCanvas()->fillRect(0, 0, 240, 135, earth_renderer->getCanvas()->color565(15, 20, 25));
-        earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
-        earth_renderer->getCanvas()->setTextSize(2);
-        earth_renderer->getCanvas()->drawString("SkyCompass", 120 - earth_renderer->getCanvas()->textWidth("SkyCompass") / 2, 35);
-        
-        earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
-        earth_renderer->getCanvas()->setTextSize(1);
-        earth_renderer->getCanvas()->drawString("Loading Satellite Orbit Models...", 120 - earth_renderer->getCanvas()->textWidth("Loading Satellite Orbit Models...") / 2, 70);
-        
-        earth_renderer->getCanvas()->drawRect(35, 88, 170, 8, TFT_DARKGREY);
-        earth_renderer->getCanvas()->fillRect(37, 90, 30, 4, TFT_GREEN); // initial 18% progress
-        earth_renderer->getCanvas()->pushSprite(0, 0);
-    }
+    drawStartupScreen(18);
 
     // Initialize IMU
     if (imu && imu->begin()) {
