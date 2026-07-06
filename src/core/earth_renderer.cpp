@@ -1110,8 +1110,10 @@ inline void drawLineAdd(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, uin
     int steps = dx > dy ? dx : dy;
     if (steps == 0) {
         blendPixelAdd(canvas, x0, y0, r, g, b, alpha);
-        blendPixelAdd(canvas, x0, y0 - 1, r, g, b, alpha * 0.5f);
-        blendPixelAdd(canvas, x0, y0 + 1, r, g, b, alpha * 0.5f);
+        blendPixelAdd(canvas, x0, y0 - 1, r, g, b, alpha * 0.7f);
+        blendPixelAdd(canvas, x0, y0 + 1, r, g, b, alpha * 0.7f);
+        blendPixelAdd(canvas, x0, y0 - 2, r, g, b, alpha * 0.35f);
+        blendPixelAdd(canvas, x0, y0 + 2, r, g, b, alpha * 0.35f);
         return;
     }
     for (int i = 0; i <= steps; i++) {
@@ -1119,8 +1121,10 @@ inline void drawLineAdd(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, uin
         int x = x0 + (int)(t * (x1 - x0) + 0.5f);
         int y = y0 + (int)(t * (y1 - y0) + 0.5f);
         blendPixelAdd(canvas, x, y, r, g, b, alpha);
-        blendPixelAdd(canvas, x, y - 1, r, g, b, alpha * 0.5f);
-        blendPixelAdd(canvas, x, y + 1, r, g, b, alpha * 0.5f);
+        blendPixelAdd(canvas, x, y - 1, r, g, b, alpha * 0.7f);
+        blendPixelAdd(canvas, x, y + 1, r, g, b, alpha * 0.7f);
+        blendPixelAdd(canvas, x, y - 2, r, g, b, alpha * 0.35f);
+        blendPixelAdd(canvas, x, y + 2, r, g, b, alpha * 0.35f);
     }
 }
 
@@ -1137,8 +1141,8 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     
     // Draw N layers of concentric circles - reduced for performance
     int N = _isFastForwarding ? 2 : 3;
-    float thickness = 7.0f; // thickness of airglow
-    float maxAlpha = 0.55f; // maximum opacity
+    float thickness = 10.0f; // thickness of airglow
+    float maxAlpha = 0.60f; // maximum opacity
     
     // Cyan-blue atmospheric gas color
     uint8_t r_val = 0;
@@ -1148,7 +1152,9 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     for (int i = 0; i < N; i++) {
         float t = (float)i / N;
         float alpha = powf(1.0f - t, 2.0f) * maxAlpha;
-        float baseR = _earthRadius + 0.5f + t * thickness;
+        
+        // Starts 2.5 pixels above the Earth surface to clear the tight surface look
+        float baseR = _earthRadius + 2.5f + t * thickness;
         
         // Calculate angular step to draw a solid ring without gaps
         float stepRad = (_isFastForwarding ? 3.6f : 2.4f) / baseR;
@@ -1161,21 +1167,26 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
             int x = circleX + (int)(r * cosf(rad));
             int y = circleY - (int)(r * sinf(rad));
             
+            // Draw cross-shaped soft brush for volumetric thickness
             blendPixelAdd(_canvas, x, y, r_val, g_val, b_val, alpha);
+            blendPixelAdd(_canvas, x - 1, y, r_val, g_val, b_val, alpha * 0.5f);
+            blendPixelAdd(_canvas, x + 1, y, r_val, g_val, b_val, alpha * 0.5f);
+            blendPixelAdd(_canvas, x, y - 1, r_val, g_val, b_val, alpha * 0.5f);
+            blendPixelAdd(_canvas, x, y + 1, r_val, g_val, b_val, alpha * 0.5f);
         }
     }
 }
 
 void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
     // 2 Concentric Rings: Outer Ring at ~66.5 deg, Inner Ring at ~72.5 deg
-    // 2 Altitude layers per ring (70km and 200km)
+    // 2 Altitude layers per ring (70km and 240km)
     int N_layers = _isFastForwarding ? 1 : 2;
     int step = _isFastForwarding ? 15 : 8; // longitude step
     float timePhase = millis() * 0.0015f;
     
     float alt_bot = 70.0f;
-    float alt_top = 200.0f;
-    float maxAlpha = 0.50f;
+    float alt_top = 240.0f;
+    float maxAlpha = 0.60f;
 
     float latitudes[] = { 66.5f, 72.5f, -66.5f, -72.5f };
     bool isNorth[] = { true, true, false, false };
