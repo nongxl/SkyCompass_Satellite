@@ -1128,22 +1128,6 @@ inline void drawLineAdd(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, uin
     }
 }
 
-inline void drawLineAddSimple(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, uint8_t r, uint8_t g, uint8_t b, float alpha) {
-    int dx = abs(x1 - x0);
-    int dy = abs(y1 - y0);
-    int steps = dx > dy ? dx : dy;
-    if (steps == 0) {
-        blendPixelAdd(canvas, x0, y0, r, g, b, alpha);
-        return;
-    }
-    for (int i = 0; i <= steps; i++) {
-        float t = (float)i / steps;
-        int x = x0 + (int)(t * (x1 - x0) + 0.5f);
-        int y = y0 + (int)(t * (y1 - y0) + 0.5f);
-        blendPixelAdd(canvas, x, y, r, g, b, alpha);
-    }
-}
-
 void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     float pitchRad = _cameraPitch * DEG_TO_RAD;
     float rollRad = -_cameraRoll * DEG_TO_RAD;
@@ -1153,31 +1137,30 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     int circleX = _centerX + _centerOffsetX + (int)center_rotatedX;
     int circleY = _centerY + _centerOffsetY - (int)center_rotatedY;
 
-    // Draw N layers of perfect concentric circles (no noise, no lines, just dense pixels for a smooth glass cover!)
-    int N = _isFastForwarding ? 5 : 10;
-    float thickness = 10.0f; // thickness of airglow
-    float maxAlpha = 0.50f; // maximum opacity
-    
     // Cyan-blue atmospheric gas color
     uint8_t r_val = 0;
     uint8_t g_val = 140;
     uint8_t b_val = 220;
 
+    // Perfect concentric circles for a smooth glass cover appearance (no noise or vertical spikes)
+    int N = _isFastForwarding ? 4 : 10;
+    float startHeight = 2.5f;
+    float thickness = 9.0f; // total thickness of airglow dome
+    float maxAlpha = 0.55f;
+
     for (int i = 0; i < N; i++) {
         float t = (float)i / N;
-        // Asymmetric bell curve: faint at bottom, peak at 0.7 height, fade to 0 at outer edge
+        // Asymmetric bell curve for airglow: faint at bottom, peak at 0.7 height, fade to 0 at top
         float alpha = ((t < 0.7f) ? (0.2f + 0.8f * (t / 0.7f)) : (1.0f - (t - 0.7f) / 0.3f)) * maxAlpha;
         
-        // Starts 2.5 pixels above the Earth surface to clear the tight surface look
-        float r = _earthRadius + 2.5f + t * thickness;
+        float baseR = _earthRadius + startHeight + t * thickness;
         
-        // Step size of 1.0f / r draws exactly one pixel per step, creating a perfectly solid circle!
-        // For fast forwarding, draw with 1.5f step to reduce pixel blending overhead
-        float stepRad = (_isFastForwarding ? 1.5f : 1.0f) / r;
+        // Use angular step to ensure no gaps between adjacent pixels along the circle
+        float stepRad = (_isFastForwarding ? 2.5f : 1.2f) / baseR;
         
-        for (float rad = 0.0f; rad < TWO_PI_F; rad += stepRad) {
-            int x = circleX + (int)(r * cosf(rad) + 0.5f);
-            int y = circleY - (int)(r * sinf(rad) + 0.5f);
+        for (float rad = 0; rad < TWO_PI_F; rad += stepRad) {
+            int x = circleX + (int)(baseR * cosf(rad) + 0.5f);
+            int y = circleY - (int)(baseR * sinf(rad) + 0.5f);
             
             blendPixelAdd(_canvas, x, y, r_val, g_val, b_val, alpha);
         }
