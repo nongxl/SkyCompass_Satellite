@@ -1110,6 +1110,8 @@ inline void drawLineAdd(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, uin
     int steps = dx > dy ? dx : dy;
     if (steps == 0) {
         blendPixelAdd(canvas, x0, y0, r, g, b, alpha);
+        blendPixelAdd(canvas, x0, y0 - 1, r, g, b, alpha * 0.5f);
+        blendPixelAdd(canvas, x0, y0 + 1, r, g, b, alpha * 0.5f);
         return;
     }
     for (int i = 0; i <= steps; i++) {
@@ -1117,6 +1119,8 @@ inline void drawLineAdd(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, uin
         int x = x0 + (int)(t * (x1 - x0) + 0.5f);
         int y = y0 + (int)(t * (y1 - y0) + 0.5f);
         blendPixelAdd(canvas, x, y, r, g, b, alpha);
+        blendPixelAdd(canvas, x, y - 1, r, g, b, alpha * 0.5f);
+        blendPixelAdd(canvas, x, y + 1, r, g, b, alpha * 0.5f);
     }
 }
 
@@ -1132,9 +1136,9 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     float timePhase = millis() * 0.002f;
     
     // Draw N layers of concentric circles
-    int N = _isFastForwarding ? 3 : 5;
-    float thickness = 4.5f; // thickness of airglow (about 11% of earth radius)
-    float maxAlpha = 0.35f; // maximum opacity
+    int N = _isFastForwarding ? 4 : 7;
+    float thickness = 7.0f; // thickness of airglow (about 17.5% of earth radius)
+    float maxAlpha = 0.50f; // maximum opacity
     
     // Cyan-blue atmospheric gas color
     uint8_t r_val = 0;
@@ -1163,13 +1167,13 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
 }
 
 void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
-    int N = _isFastForwarding ? 2 : 4; // altitude layers
-    int step = _isFastForwarding ? 12 : 8; // longitude step (degrees)
+    int N = _isFastForwarding ? 3 : 5; // altitude layers
+    int step = _isFastForwarding ? 8 : 4; // longitude step (degrees)
     float timePhase = millis() * 0.0015f;
     
     float alt_bot = 70.0f;
-    float alt_top = 180.0f;
-    float maxAlpha = 0.35f;
+    float alt_top = 220.0f;
+    float maxAlpha = 0.50f;
 
     // 1. North Pole (Fluorescent Green to Purple)
     {
