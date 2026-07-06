@@ -1135,10 +1135,10 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
 
     float timePhase = millis() * 0.002f;
     
-    // Draw N layers of concentric circles
-    int N = _isFastForwarding ? 4 : 7;
-    float thickness = 7.0f; // thickness of airglow (about 17.5% of earth radius)
-    float maxAlpha = 0.50f; // maximum opacity
+    // Draw N layers of concentric circles - reduced for performance
+    int N = _isFastForwarding ? 2 : 3;
+    float thickness = 7.0f; // thickness of airglow
+    float maxAlpha = 0.55f; // maximum opacity
     
     // Cyan-blue atmospheric gas color
     uint8_t r_val = 0;
@@ -1151,7 +1151,7 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
         float baseR = _earthRadius + 0.5f + t * thickness;
         
         // Calculate angular step to draw a solid ring without gaps
-        float stepRad = (_isFastForwarding ? 2.4f : 1.8f) / baseR;
+        float stepRad = (_isFastForwarding ? 3.6f : 2.4f) / baseR;
         
         for (float rad = 0; rad < TWO_PI_F; rad += stepRad) {
             // Noise based on angle and time
@@ -1167,83 +1167,37 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
 }
 
 void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
-    int N = _isFastForwarding ? 3 : 5; // altitude layers
-    int step = _isFastForwarding ? 8 : 4; // longitude step (degrees)
+    // 2 Concentric Rings: Outer Ring at ~66.5 deg, Inner Ring at ~72.5 deg
+    // 2 Altitude layers per ring (70km and 200km)
+    int N_layers = _isFastForwarding ? 1 : 2;
+    int step = _isFastForwarding ? 15 : 8; // longitude step
     float timePhase = millis() * 0.0015f;
     
     float alt_bot = 70.0f;
-    float alt_top = 220.0f;
+    float alt_top = 200.0f;
     float maxAlpha = 0.50f;
 
-    // 1. North Pole (Fluorescent Green to Purple)
-    {
+    float latitudes[] = { 66.5f, 72.5f, -66.5f, -72.5f };
+    bool isNorth[] = { true, true, false, false };
+
+    // Draw polar auroras for both hemispheres, each with two rings
+    for (int r_idx = 0; r_idx < 4; r_idx++) {
+        float baseLat = latitudes[r_idx];
+        bool north = isNorth[r_idx];
+
         uint8_t r_bot = 10, g_bot = 160, b_bot = 40;
-        uint8_t r_top = 140, g_top = 20, b_top = 140;
-
-        for (int i = 0; i < N; i++) {
-            float t = (float)i / N;
-            float baseAlpha = powf(1.0f - t, 1.5f) * maxAlpha;
-            float alt = alt_bot + t * (alt_top - alt_bot);
-            
-            // Color at this altitude
-            uint8_t r_col = r_bot + t * (r_top - r_bot);
-            uint8_t g_col = g_bot + t * (g_top - g_bot);
-            uint8_t b_col = b_bot + t * (b_top - b_bot);
-
-            int prevX = -1, prevY = -1;
-            bool prevVisible = false;
-            
-            int firstX = -1, firstY = -1;
-            bool firstVisible = false;
-
-            for (int lon = 0; lon <= 360; lon += step) {
-                float lonRad = lon * DEG_TO_RAD;
-                
-                // Add noise to latitude and height to make it wavy
-                float latNoise = 1.8f * sinf(lonRad * 3.0f + timePhase + i * 0.3f) + 
-                                 0.8f * cosf(lonRad * 7.0f - timePhase * 1.2f);
-                float drawLat = 69.5f + latNoise;
-                
-                float heightNoise = 12.0f * sinf(lonRad * 5.0f + timePhase * 1.5f);
-                float drawAlt = alt + heightNoise;
-                
-                int x, y;
-                bool visible = projectOrthographic(drawLat, lon, drawAlt, centerLat, centerLon, x, y);
-                
-                if (visible) {
-                    if (prevVisible) {
-                        // Draw horizontal segment with additive blending
-                        drawLineAdd(_canvas, prevX, prevY, x, y, r_col, g_col, b_col, baseAlpha);
-                    }
-                    
-                    if (lon == 0) {
-                        firstX = x;
-                        firstY = y;
-                        firstVisible = true;
-                    }
-                    
-                    prevX = x;
-                    prevY = y;
-                    prevVisible = true;
-                } else {
-                    prevVisible = false;
-                }
-            }
-            
-            // Close the loop if visible
-            if (firstVisible && prevVisible) {
-                drawLineAdd(_canvas, prevX, prevY, firstX, firstY, r_col, g_col, b_col, baseAlpha);
-            }
+        uint8_t r_top, g_top, b_top;
+        if (north) {
+            // North Pole: Green to Purple
+            r_top = 140; g_top = 20; b_top = 140;
+        } else {
+            // South Pole: Green to Blue
+            r_top = 10; g_top = 80; b_top = 180;
         }
-    }
 
-    // 2. South Pole (Fluorescent Green to Blue)
-    {
-        uint8_t r_bot = 10, g_bot = 160, b_bot = 40;
-        uint8_t r_top = 10, g_top = 80, b_top = 180;
-
-        for (int i = 0; i < N; i++) {
-            float t = (float)i / N;
+        // Draw altitude layers for this ring
+        for (int i = 0; i < N_layers; i++) {
+            float t = (N_layers == 1) ? 0.0f : (float)i / (N_layers - 1);
             float baseAlpha = powf(1.0f - t, 1.5f) * maxAlpha;
             float alt = alt_bot + t * (alt_top - alt_bot);
             
@@ -1261,12 +1215,13 @@ void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
             for (int lon = 0; lon <= 360; lon += step) {
                 float lonRad = lon * DEG_TO_RAD;
                 
-                // Add noise to latitude and height to make it wavy
-                float latNoise = 1.8f * sinf(lonRad * 3.0f - timePhase * 1.1f + i * 0.3f) + 
-                                 0.8f * cosf(lonRad * 6.0f + timePhase * 0.9f);
-                float drawLat = -69.5f + latNoise;
+                // Noise on latitude
+                float latNoise = 1.6f * sinf(lonRad * 3.0f + (north ? 1.0f : -1.0f) * timePhase + r_idx * 1.5f + i * 0.3f) + 
+                                 0.8f * cosf(lonRad * 7.0f - timePhase * 1.2f);
+                float drawLat = baseLat + (north ? latNoise : -latNoise);
                 
-                float heightNoise = 12.0f * cosf(lonRad * 5.0f - timePhase * 1.3f);
+                // Noise on height
+                float heightNoise = 12.0f * sinf(lonRad * 5.0f + timePhase * 1.5f + r_idx * 0.7f);
                 float drawAlt = alt + heightNoise;
                 
                 int x, y;
@@ -1274,7 +1229,6 @@ void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
                 
                 if (visible) {
                     if (prevVisible) {
-                        // Draw horizontal segment with additive blending
                         drawLineAdd(_canvas, prevX, prevY, x, y, r_col, g_col, b_col, baseAlpha);
                     }
                     
@@ -1292,7 +1246,7 @@ void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
                 }
             }
             
-            // Close the loop if visible
+            // Close the loop
             if (firstVisible && prevVisible) {
                 drawLineAdd(_canvas, prevX, prevY, firstX, firstY, r_col, g_col, b_col, baseAlpha);
             }
