@@ -1066,9 +1066,15 @@ void EarthRenderer::drawSatelliteIcon(int x, int y, SatIconType iconType, uint16
 #define TWO_PI_F 6.2831853f
 
 inline void blendPixelAdd(LGFX_Sprite* canvas, int x, int y, uint8_t r, uint8_t g, uint8_t b, float alpha) {
-    if (x < 0 || x >= canvas->width() || y < 0 || y >= canvas->height()) return;
+    int width = canvas->width();
+    int height = canvas->height();
+    if (x < 0 || x >= width || y < 0 || y >= height) return;
     
-    uint16_t oldCol = canvas->readPixel(x, y);
+    uint16_t* buf = (uint16_t*)canvas->getBuffer();
+    if (!buf) return;
+    
+    int index = y * width + x;
+    uint16_t oldCol = buf[index];
     
     // Extract RGB 565 components (r: 5 bits, g: 6 bits, b: 5 bits)
     uint8_t r_o = (oldCol >> 11) & 0x1F;
@@ -1089,7 +1095,7 @@ inline void blendPixelAdd(LGFX_Sprite* canvas, int x, int y, uint8_t r, uint8_t 
     if (g_new > 63) g_new = 63;
     if (b_new > 31) b_new = 31;
     
-    canvas->drawPixel(x, y, (r_new << 11) | (g_new << 5) | b_new);
+    buf[index] = (r_new << 11) | (g_new << 5) | b_new;
 }
 
 inline void drawLineAdd(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, uint8_t r, uint8_t g, uint8_t b, float alpha) {
@@ -1120,7 +1126,7 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     float timePhase = millis() * 0.002f;
     
     // Draw N layers of concentric circles
-    int N = _isFastForwarding ? 6 : 10;
+    int N = _isFastForwarding ? 3 : 5;
     float thickness = 4.5f; // thickness of airglow (about 11% of earth radius)
     float maxAlpha = 0.35f; // maximum opacity
     
@@ -1135,7 +1141,7 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
         float baseR = _earthRadius + 0.5f + t * thickness;
         
         // Calculate angular step to draw a solid ring without gaps
-        float stepRad = 1.2f / baseR;
+        float stepRad = (_isFastForwarding ? 2.4f : 1.8f) / baseR;
         
         for (float rad = 0; rad < TWO_PI_F; rad += stepRad) {
             // Noise based on angle and time
@@ -1151,8 +1157,8 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
 }
 
 void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
-    int N = _isFastForwarding ? 5 : 8; // altitude layers
-    int step = _isFastForwarding ? 8 : 4; // longitude step (degrees)
+    int N = _isFastForwarding ? 2 : 4; // altitude layers
+    int step = _isFastForwarding ? 12 : 8; // longitude step (degrees)
     float timePhase = millis() * 0.0015f;
     
     float alt_bot = 70.0f;
