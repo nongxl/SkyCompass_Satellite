@@ -1074,35 +1074,51 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     float timePhase = millis() * 0.002f;
     uint32_t seed = 98765;
     
-    // Draw dithered gas particles around the circumference (every 2 degrees = 180 slices)
-    for (int deg = 0; deg < 360; deg += 2) {
+    // Draw dithered gas particles around the circumference
+    // Step by 1 degree to make it extremely dense and continuous
+    int step = _isFastForwarding ? 3 : 1;
+    for (int deg = 0; deg < 360; deg += step) {
         float rad = deg * DEG_TO_RAD;
         
         // Base airglow noise
-        float noise = 0.8f * sinf(rad * 4.0f + timePhase) + 
-                      0.4f * cosf(rad * 8.0f - timePhase * 1.5f);
+        float noise = 0.6f * sinf(rad * 3.0f + timePhase) + 
+                      0.3f * cosf(rad * 6.0f - timePhase * 1.3f);
                       
-        // Draw 3 layers of particles with different random offsets and fading colors
+        // Generate 3 scattered particles per angle step
         for (int p = 0; p < 3; p++) {
             // LCG fast random
             seed = seed * 1664525UL + 1013904223UL;
-            float r_offset = p * 1.2f + (seed % 100) * 0.01f * 1.5f;
-            float r = _earthRadius + 1.0f + noise + r_offset;
+            float r_offset = (seed % 100) * 0.01f * 4.0f; // 0.0 to 4.0 pixels
             
-            int x = circleX + (int)(r * cosf(rad));
-            int y = circleY - (int)(r * sinf(rad));
+            seed = seed * 1664525UL + 1013904223UL;
+            // Angular scatter: up to +/- 2.5 degrees (in radians)
+            float angle_scatter = ((int)(seed % 200) - 100) * 0.01f * (2.5f * DEG_TO_RAD);
             
-            // Fading factor
-            float factor = 1.0f - (r_offset / 5.5f);
+            float scattered_rad = rad + angle_scatter;
+            float r = _earthRadius + 0.5f + noise + r_offset;
+            
+            int x = circleX + (int)(r * cosf(scattered_rad));
+            int y = circleY - (int)(r * sinf(scattered_rad));
+            
+            // Fading factor based on height
+            float factor = 1.0f - (r_offset / 4.0f);
             if (factor < 0.0f) factor = 0.0f;
             
-            uint8_t g = (uint8_t)(110 * factor);
-            uint8_t b = (uint8_t)(35 * factor);
-            
-            if (g > 0) {
-                uint16_t color = _display->color565(0, g, b);
-                _canvas->drawPixel(x, y, color);
+            uint16_t color;
+            if (r_offset < 1.8f) {
+                // Inner layer: orange/yellowish (red: 90, green: 55, blue: 5)
+                uint8_t r_val = (uint8_t)(90 * factor);
+                uint8_t g_val = (uint8_t)(55 * factor);
+                uint8_t b_val = (uint8_t)(5 * factor);
+                color = _display->color565(r_val, g_val, b_val);
+            } else {
+                // Outer layer: green
+                uint8_t g_val = (uint8_t)(90 * factor);
+                uint8_t b_val = (uint8_t)(25 * factor);
+                color = _display->color565(0, g_val, b_val);
             }
+            
+            _canvas->drawPixel(x, y, color);
         }
     }
 }
@@ -1149,21 +1165,28 @@ void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
                     uint16_t coreCol = (t < 0.5f) ? greenCore : purpleCore;
                     uint16_t dimCol = (t < 0.5f) ? greenDim : purpleDim;
                     
-                    // Draw core particle
-                    _canvas->drawPixel(x, y, coreCol);
-                    
-                    // Dithered surrounding glow particles
-                    seed = seed * 1664525UL + 1013904223UL;
-                    int dx1 = ((int)(seed % 3)) - 1;
-                    seed = seed * 1664525UL + 1013904223UL;
-                    int dy1 = ((int)(seed % 3)) - 1;
-                    _canvas->drawPixel(x + dx1, y + dy1, coreCol);
-                    
-                    seed = seed * 1664525UL + 1013904223UL;
-                    int dx2 = ((int)(seed % 5)) - 2;
-                    seed = seed * 1664525UL + 1013904223UL;
-                    int dy2 = ((int)(seed % 5)) - 2;
-                    _canvas->drawPixel(x + dx2, y + dy2, dimCol);
+                    // Draw 4 wide-scattered particles to avoid vertical line alignments
+                    for (int p = 0; p < 4; p++) {
+                        seed = seed * 1664525UL + 1013904223UL;
+                        // Horizontal scatter: -4 to 4 pixels
+                        int dx = ((int)(seed % 9)) - 4;
+                        
+                        seed = seed * 1664525UL + 1013904223UL;
+                        // Vertical scatter: -2 to 2 pixels
+                        int dy = ((int)(seed % 5)) - 2;
+                        
+                        // Gaussian-like distance attenuation
+                        float dist_factor = 1.0f - abs(dx) / 5.0f;
+                        if (dist_factor < 0.1f) dist_factor = 0.1f;
+                        
+                        uint16_t baseCol = (abs(dx) < 2) ? coreCol : dimCol;
+                        uint8_t r_val = (uint8_t)(((baseCol >> 11) & 0x1F) * dist_factor);
+                        uint8_t g_val = (uint8_t)(((baseCol >> 5) & 0x3F) * dist_factor);
+                        uint8_t b_val = (uint8_t)((baseCol & 0x1F) * dist_factor);
+                        uint16_t fadedColor = _display->color565(r_val << 3, g_val << 2, b_val << 3);
+                        
+                        _canvas->drawPixel(x + dx, y + dy, fadedColor);
+                    }
                 }
             }
         }
@@ -1205,21 +1228,28 @@ void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
                     uint16_t coreCol = (t < 0.5f) ? greenCore : blueCore;
                     uint16_t dimCol = (t < 0.5f) ? greenDim : blueDim;
                     
-                    // Draw core particle
-                    _canvas->drawPixel(x, y, coreCol);
-                    
-                    // Dithered surrounding glow particles
-                    seed = seed * 1664525UL + 1013904223UL;
-                    int dx1 = ((int)(seed % 3)) - 1;
-                    seed = seed * 1664525UL + 1013904223UL;
-                    int dy1 = ((int)(seed % 3)) - 1;
-                    _canvas->drawPixel(x + dx1, y + dy1, coreCol);
-                    
-                    seed = seed * 1664525UL + 1013904223UL;
-                    int dx2 = ((int)(seed % 5)) - 2;
-                    seed = seed * 1664525UL + 1013904223UL;
-                    int dy2 = ((int)(seed % 5)) - 2;
-                    _canvas->drawPixel(x + dx2, y + dy2, dimCol);
+                    // Draw 4 wide-scattered particles to avoid vertical line alignments
+                    for (int p = 0; p < 4; p++) {
+                        seed = seed * 1664525UL + 1013904223UL;
+                        // Horizontal scatter: -4 to 4 pixels
+                        int dx = ((int)(seed % 9)) - 4;
+                        
+                        seed = seed * 1664525UL + 1013904223UL;
+                        // Vertical scatter: -2 to 2 pixels
+                        int dy = ((int)(seed % 5)) - 2;
+                        
+                        // Gaussian-like distance attenuation
+                        float dist_factor = 1.0f - abs(dx) / 5.0f;
+                        if (dist_factor < 0.1f) dist_factor = 0.1f;
+                        
+                        uint16_t baseCol = (abs(dx) < 2) ? coreCol : dimCol;
+                        uint8_t r_val = (uint8_t)(((baseCol >> 11) & 0x1F) * dist_factor);
+                        uint8_t g_val = (uint8_t)(((baseCol >> 5) & 0x3F) * dist_factor);
+                        uint8_t b_val = (uint8_t)((baseCol & 0x1F) * dist_factor);
+                        uint16_t fadedColor = _display->color565(r_val << 3, g_val << 2, b_val << 3);
+                        
+                        _canvas->drawPixel(x + dx, y + dy, fadedColor);
+                    }
                 }
             }
         }
