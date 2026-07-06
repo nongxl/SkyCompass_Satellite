@@ -1437,7 +1437,7 @@ void setup() {
                     baseUserLon = posPrefs.getDouble("cached_lon", 116.40);
                     baseUserAlt = posPrefs.getDouble("cached_alt", 0.0);
                     isManualLocationMode = posPrefs.getBool("use_manual_pos", false);
-                    gnssLocationFixed = true; // Mark as fixed since we loaded a valid cached location!
+                    gnssLocationFixed = false; // Loaded from cache, not a live GNSS fix yet!
                     
                     // Sync loaded position to pos_manager
                     PositionData pos = {baseUserLat, baseUserLon, baseUserAlt};
@@ -1732,6 +1732,12 @@ void setup() {
     // Restore decorations for main system view
     if (earth_renderer) {
         earth_renderer->setDrawDecorations(true);
+    }
+    
+    // Calibrate IMU to current orientation on boot (IMU task has stabilized during setup)
+    if (attitude) {
+        attitude->calibrateHeading();
+        LOG_I("APP", "IMU calibrated on boot completed. Center aligned.");
     }
 }
 
@@ -2943,6 +2949,10 @@ void loop() {
 
                     isManualLocationMode = !isManualLocationMode;
                     if (pos_manager) {
+                        if (isManualLocationMode) {
+                            PositionData currentPos = {baseUserLat, baseUserLon, baseUserAlt};
+                            pos_manager->setManualPosition(currentPos);
+                        }
                         pos_manager->enableManualPosition(isManualLocationMode);
                     }
                     Preferences posPrefs;
@@ -2997,6 +3007,19 @@ void loop() {
                         showHelp = false;
                     } else if (isManualLocationMode) {
                         isManualLocationMode = false;
+                        if (pos_manager) {
+                            pos_manager->enableManualPosition(false);
+                        }
+                        Preferences posPrefs;
+                        if (posPrefs.begin("position", false)) {
+                            posPrefs.putBool("use_manual_pos", false);
+                            posPrefs.end();
+                        }
+                        portENTER_CRITICAL(&passMutex);
+                        predictionsReady = false;
+                        lastPredictionBaseTime = 0; // 缓存失效
+                        portEXIT_CRITICAL(&passMutex);
+                        triggerPrediction = true;
                     } else if (isSatViewMode) {
                         isSatViewMode = false;
                         targetZoom = 0.95f;

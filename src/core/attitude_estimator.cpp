@@ -128,6 +128,7 @@ void AttitudeEstimator::calibrateHeading() {
     if (_imu) {
         _imu->calibrate();
     }
+    initVirtualHeading();
 }
 
 /**
