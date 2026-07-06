@@ -1062,6 +1062,52 @@ void EarthRenderer::drawSatelliteIcon(int x, int y, SatIconType iconType, uint16
     }
 }
 
+#define PI_F 3.14159265f
+#define TWO_PI_F 6.2831853f
+
+inline void blendPixelAdd(LGFX_Sprite* canvas, int x, int y, uint8_t r, uint8_t g, uint8_t b, float alpha) {
+    if (x < 0 || x >= canvas->width() || y < 0 || y >= canvas->height()) return;
+    
+    uint16_t oldCol = canvas->readPixel(x, y);
+    
+    // Extract RGB 565 components (r: 5 bits, g: 6 bits, b: 5 bits)
+    uint8_t r_o = (oldCol >> 11) & 0x1F;
+    uint8_t g_o = (oldCol >> 5) & 0x3F;
+    uint8_t b_o = oldCol & 0x1F;
+    
+    // Additive blend (r: 0-31, g: 0-63, b: 0-31)
+    // Convert target colors (r, g, b are 0-255) to 565 scale
+    int r_add = (int)(((r * 31) / 255.0f) * alpha);
+    int g_add = (int)(((g * 63) / 255.0f) * alpha);
+    int b_add = (int)(((b * 31) / 255.0f) * alpha);
+    
+    int r_new = r_o + r_add;
+    int g_new = g_o + g_add;
+    int b_new = b_o + b_add;
+    
+    if (r_new > 31) r_new = 31;
+    if (g_new > 63) g_new = 63;
+    if (b_new > 31) b_new = 31;
+    
+    canvas->drawPixel(x, y, (r_new << 11) | (g_new << 5) | b_new);
+}
+
+inline void drawLineAdd(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, uint8_t r, uint8_t g, uint8_t b, float alpha) {
+    int dx = abs(x1 - x0);
+    int dy = abs(y1 - y0);
+    int steps = dx > dy ? dx : dy;
+    if (steps == 0) {
+        blendPixelAdd(canvas, x0, y0, r, g, b, alpha);
+        return;
+    }
+    for (int i = 0; i <= steps; i++) {
+        float t = (float)i / steps;
+        int x = x0 + (int)(t * (x1 - x0) + 0.5f);
+        int y = y0 + (int)(t * (y1 - y0) + 0.5f);
+        blendPixelAdd(canvas, x, y, r, g, b, alpha);
+    }
+}
+
 void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     float pitchRad = _cameraPitch * DEG_TO_RAD;
     float rollRad = -_cameraRoll * DEG_TO_RAD;
@@ -1072,185 +1118,167 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     int circleY = _centerY + _centerOffsetY - (int)center_rotatedY;
 
     float timePhase = millis() * 0.002f;
-    uint32_t seed = 98765;
     
-    // Draw dithered gas particles around the circumference
-    // Step by 1 degree to make it extremely dense and continuous
-    int step = _isFastForwarding ? 3 : 1;
-    for (int deg = 0; deg < 360; deg += step) {
-        float rad = deg * DEG_TO_RAD;
+    // Draw N layers of concentric circles
+    int N = _isFastForwarding ? 6 : 10;
+    float thickness = 4.5f; // thickness of airglow (about 11% of earth radius)
+    float maxAlpha = 0.35f; // maximum opacity
+    
+    // Cyan-blue atmospheric gas color
+    uint8_t r_val = 0;
+    uint8_t g_val = 140;
+    uint8_t b_val = 220;
+
+    for (int i = 0; i < N; i++) {
+        float t = (float)i / N;
+        float alpha = powf(1.0f - t, 2.0f) * maxAlpha;
+        float baseR = _earthRadius + 0.5f + t * thickness;
         
-        // Base airglow noise
-        float noise = 0.6f * sinf(rad * 3.0f + timePhase) + 
-                      0.3f * cosf(rad * 6.0f - timePhase * 1.3f);
-                      
-        // Generate 3 scattered particles per angle step
-        for (int p = 0; p < 3; p++) {
-            // LCG fast random
-            seed = seed * 1664525UL + 1013904223UL;
-            float r_offset = (seed % 100) * 0.01f * 4.0f; // 0.0 to 4.0 pixels
+        // Calculate angular step to draw a solid ring without gaps
+        float stepRad = 1.2f / baseR;
+        
+        for (float rad = 0; rad < TWO_PI_F; rad += stepRad) {
+            // Noise based on angle and time
+            float noise = 0.5f * sinf(rad * 4.0f + timePhase + i * 0.5f);
+            float r = baseR + noise;
             
-            seed = seed * 1664525UL + 1013904223UL;
-            // Angular scatter: up to +/- 2.5 degrees (in radians)
-            float angle_scatter = ((int)(seed % 200) - 100) * 0.01f * (2.5f * DEG_TO_RAD);
+            int x = circleX + (int)(r * cosf(rad));
+            int y = circleY - (int)(r * sinf(rad));
             
-            float scattered_rad = rad + angle_scatter;
-            float r = _earthRadius + 0.5f + noise + r_offset;
-            
-            int x = circleX + (int)(r * cosf(scattered_rad));
-            int y = circleY - (int)(r * sinf(scattered_rad));
-            
-            // Fading factor based on height
-            float factor = 1.0f - (r_offset / 4.0f);
-            if (factor < 0.0f) factor = 0.0f;
-            
-            uint16_t color;
-            if (r_offset < 1.8f) {
-                // Inner layer: orange/yellowish (red: 90, green: 55, blue: 5)
-                uint8_t r_val = (uint8_t)(90 * factor);
-                uint8_t g_val = (uint8_t)(55 * factor);
-                uint8_t b_val = (uint8_t)(5 * factor);
-                color = _display->color565(r_val, g_val, b_val);
-            } else {
-                // Outer layer: green
-                uint8_t g_val = (uint8_t)(90 * factor);
-                uint8_t b_val = (uint8_t)(25 * factor);
-                color = _display->color565(0, g_val, b_val);
-            }
-            
-            _canvas->drawPixel(x, y, color);
+            blendPixelAdd(_canvas, x, y, r_val, g_val, b_val, alpha);
         }
     }
 }
 
 void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
-    int step = _isFastForwarding ? 8 : 4;
-    int heightSteps = _isFastForwarding ? 6 : 10;
+    int N = _isFastForwarding ? 5 : 8; // altitude layers
+    int step = _isFastForwarding ? 8 : 4; // longitude step (degrees)
     float timePhase = millis() * 0.0015f;
-    uint32_t seed = 54321;
     
-    // 1. North Pole Aurora (Fluorescent Green and Purple ribbon curtain)
+    float alt_bot = 70.0f;
+    float alt_top = 180.0f;
+    float maxAlpha = 0.35f;
+
+    // 1. North Pole (Fluorescent Green to Purple)
     {
-        for (int lon = 0; lon < 360; lon += step) {
-            float lonRad = lon * DEG_TO_RAD;
+        uint8_t r_bot = 10, g_bot = 160, b_bot = 40;
+        uint8_t r_top = 140, g_top = 20, b_top = 140;
+
+        for (int i = 0; i < N; i++) {
+            float t = (float)i / N;
+            float baseAlpha = powf(1.0f - t, 1.5f) * maxAlpha;
+            float alt = alt_bot + t * (alt_top - alt_bot);
             
-            // Lat/Lon wave noise
-            float latNoise = 2.0f * sinf(lonRad * 3.0f + timePhase) + 
-                             1.0f * cosf(lonRad * 7.0f - timePhase * 1.2f);
-            float drawLat = 69.0f + latNoise;
+            // Color at this altitude
+            uint8_t r_col = r_bot + t * (r_top - r_bot);
+            uint8_t g_col = g_bot + t * (g_top - g_bot);
+            uint8_t b_col = b_bot + t * (b_top - b_bot);
+
+            int prevX = -1, prevY = -1;
+            bool prevVisible = false;
             
-            float lonNoise = 3.0f * cosf(lonRad * 2.0f + timePhase * 0.8f);
-            float drawLon = lon + lonNoise;
-            
-            float heightNoise = 15.0f * sinf(lonRad * 5.0f + timePhase * 1.5f);
-            float alt_bot = 70.0f;
-            float alt_top = 180.0f + heightNoise;
-            
-            int xb, yb, xt, yt;
-            bool vis_b = projectOrthographic(drawLat, drawLon, alt_bot, centerLat, centerLon, xb, yb);
-            bool vis_t = projectOrthographic(drawLat, drawLon, alt_top, centerLat, centerLon, xt, yt);
-            
-            if (vis_b && vis_t) {
-                uint16_t greenCore = _display->color565(10, 160, 40);
-                uint16_t greenDim = _display->color565(5, 80, 20);
-                uint16_t purpleCore = _display->color565(120, 20, 120);
-                uint16_t purpleDim = _display->color565(60, 10, 60);
+            int firstX = -1, firstY = -1;
+            bool firstVisible = false;
+
+            for (int lon = 0; lon <= 360; lon += step) {
+                float lonRad = lon * DEG_TO_RAD;
                 
-                // Interpolate vertically in 2D screen space
-                for (int s = 0; s <= heightSteps; s++) {
-                    float t = (float)s / (float)heightSteps;
-                    int x = xb + (int)(t * (xt - xb));
-                    int y = yb + (int)(t * (yt - yb));
-                    
-                    uint16_t coreCol = (t < 0.5f) ? greenCore : purpleCore;
-                    uint16_t dimCol = (t < 0.5f) ? greenDim : purpleDim;
-                    
-                    // Draw 4 wide-scattered particles to avoid vertical line alignments
-                    for (int p = 0; p < 4; p++) {
-                        seed = seed * 1664525UL + 1013904223UL;
-                        // Horizontal scatter: -4 to 4 pixels
-                        int dx = ((int)(seed % 9)) - 4;
-                        
-                        seed = seed * 1664525UL + 1013904223UL;
-                        // Vertical scatter: -2 to 2 pixels
-                        int dy = ((int)(seed % 5)) - 2;
-                        
-                        // Gaussian-like distance attenuation
-                        float dist_factor = 1.0f - abs(dx) / 5.0f;
-                        if (dist_factor < 0.1f) dist_factor = 0.1f;
-                        
-                        uint16_t baseCol = (abs(dx) < 2) ? coreCol : dimCol;
-                        uint8_t r_val = (uint8_t)(((baseCol >> 11) & 0x1F) * dist_factor);
-                        uint8_t g_val = (uint8_t)(((baseCol >> 5) & 0x3F) * dist_factor);
-                        uint8_t b_val = (uint8_t)((baseCol & 0x1F) * dist_factor);
-                        uint16_t fadedColor = _display->color565(r_val << 3, g_val << 2, b_val << 3);
-                        
-                        _canvas->drawPixel(x + dx, y + dy, fadedColor);
+                // Add noise to latitude and height to make it wavy
+                float latNoise = 1.8f * sinf(lonRad * 3.0f + timePhase + i * 0.3f) + 
+                                 0.8f * cosf(lonRad * 7.0f - timePhase * 1.2f);
+                float drawLat = 69.5f + latNoise;
+                
+                float heightNoise = 12.0f * sinf(lonRad * 5.0f + timePhase * 1.5f);
+                float drawAlt = alt + heightNoise;
+                
+                int x, y;
+                bool visible = projectOrthographic(drawLat, lon, drawAlt, centerLat, centerLon, x, y);
+                
+                if (visible) {
+                    if (prevVisible) {
+                        // Draw horizontal segment with additive blending
+                        drawLineAdd(_canvas, prevX, prevY, x, y, r_col, g_col, b_col, baseAlpha);
                     }
+                    
+                    if (lon == 0) {
+                        firstX = x;
+                        firstY = y;
+                        firstVisible = true;
+                    }
+                    
+                    prevX = x;
+                    prevY = y;
+                    prevVisible = true;
+                } else {
+                    prevVisible = false;
                 }
+            }
+            
+            // Close the loop if visible
+            if (firstVisible && prevVisible) {
+                drawLineAdd(_canvas, prevX, prevY, firstX, firstY, r_col, g_col, b_col, baseAlpha);
             }
         }
     }
-    
-    // 2. South Pole Aurora (Fluorescent Green and Blue ribbon curtain)
+
+    // 2. South Pole (Fluorescent Green to Blue)
     {
-        for (int lon = 0; lon < 360; lon += step) {
-            float lonRad = lon * DEG_TO_RAD;
+        uint8_t r_bot = 10, g_bot = 160, b_bot = 40;
+        uint8_t r_top = 10, g_top = 80, b_top = 180;
+
+        for (int i = 0; i < N; i++) {
+            float t = (float)i / N;
+            float baseAlpha = powf(1.0f - t, 1.5f) * maxAlpha;
+            float alt = alt_bot + t * (alt_top - alt_bot);
             
-            // Lat/Lon wave noise
-            float latNoise = 2.0f * sinf(lonRad * 3.0f - timePhase * 1.1f) + 
-                             1.0f * cosf(lonRad * 6.0f + timePhase * 0.9f);
-            float drawLat = -69.0f + latNoise;
+            // Color at this altitude
+            uint8_t r_col = r_bot + t * (r_top - r_bot);
+            uint8_t g_col = g_bot + t * (g_top - g_bot);
+            uint8_t b_col = b_bot + t * (b_top - b_bot);
+
+            int prevX = -1, prevY = -1;
+            bool prevVisible = false;
             
-            float lonNoise = 3.0f * sinf(lonRad * 2.0f - timePhase * 0.7f);
-            float drawLon = lon + lonNoise;
-            
-            float heightNoise = 15.0f * cosf(lonRad * 5.0f - timePhase * 1.3f);
-            float alt_bot = 70.0f;
-            float alt_top = 180.0f + heightNoise;
-            
-            int xb, yb, xt, yt;
-            bool vis_b = projectOrthographic(drawLat, drawLon, alt_bot, centerLat, centerLon, xb, yb);
-            bool vis_t = projectOrthographic(drawLat, drawLon, alt_top, centerLat, centerLon, xt, yt);
-            
-            if (vis_b && vis_t) {
-                uint16_t greenCore = _display->color565(10, 160, 40);
-                uint16_t greenDim = _display->color565(5, 80, 20);
-                uint16_t blueCore = _display->color565(10, 80, 160);
-                uint16_t blueDim = _display->color565(5, 40, 80);
+            int firstX = -1, firstY = -1;
+            bool firstVisible = false;
+
+            for (int lon = 0; lon <= 360; lon += step) {
+                float lonRad = lon * DEG_TO_RAD;
                 
-                // Interpolate vertically in 2D screen space
-                for (int s = 0; s <= heightSteps; s++) {
-                    float t = (float)s / (float)heightSteps;
-                    int x = xb + (int)(t * (xt - xb));
-                    int y = yb + (int)(t * (yt - yb));
-                    
-                    uint16_t coreCol = (t < 0.5f) ? greenCore : blueCore;
-                    uint16_t dimCol = (t < 0.5f) ? greenDim : blueDim;
-                    
-                    // Draw 4 wide-scattered particles to avoid vertical line alignments
-                    for (int p = 0; p < 4; p++) {
-                        seed = seed * 1664525UL + 1013904223UL;
-                        // Horizontal scatter: -4 to 4 pixels
-                        int dx = ((int)(seed % 9)) - 4;
-                        
-                        seed = seed * 1664525UL + 1013904223UL;
-                        // Vertical scatter: -2 to 2 pixels
-                        int dy = ((int)(seed % 5)) - 2;
-                        
-                        // Gaussian-like distance attenuation
-                        float dist_factor = 1.0f - abs(dx) / 5.0f;
-                        if (dist_factor < 0.1f) dist_factor = 0.1f;
-                        
-                        uint16_t baseCol = (abs(dx) < 2) ? coreCol : dimCol;
-                        uint8_t r_val = (uint8_t)(((baseCol >> 11) & 0x1F) * dist_factor);
-                        uint8_t g_val = (uint8_t)(((baseCol >> 5) & 0x3F) * dist_factor);
-                        uint8_t b_val = (uint8_t)((baseCol & 0x1F) * dist_factor);
-                        uint16_t fadedColor = _display->color565(r_val << 3, g_val << 2, b_val << 3);
-                        
-                        _canvas->drawPixel(x + dx, y + dy, fadedColor);
+                // Add noise to latitude and height to make it wavy
+                float latNoise = 1.8f * sinf(lonRad * 3.0f - timePhase * 1.1f + i * 0.3f) + 
+                                 0.8f * cosf(lonRad * 6.0f + timePhase * 0.9f);
+                float drawLat = -69.5f + latNoise;
+                
+                float heightNoise = 12.0f * cosf(lonRad * 5.0f - timePhase * 1.3f);
+                float drawAlt = alt + heightNoise;
+                
+                int x, y;
+                bool visible = projectOrthographic(drawLat, lon, drawAlt, centerLat, centerLon, x, y);
+                
+                if (visible) {
+                    if (prevVisible) {
+                        // Draw horizontal segment with additive blending
+                        drawLineAdd(_canvas, prevX, prevY, x, y, r_col, g_col, b_col, baseAlpha);
                     }
+                    
+                    if (lon == 0) {
+                        firstX = x;
+                        firstY = y;
+                        firstVisible = true;
+                    }
+                    
+                    prevX = x;
+                    prevY = y;
+                    prevVisible = true;
+                } else {
+                    prevVisible = false;
                 }
+            }
+            
+            // Close the loop if visible
+            if (firstVisible && prevVisible) {
+                drawLineAdd(_canvas, prevX, prevY, firstX, firstY, r_col, g_col, b_col, baseAlpha);
             }
         }
     }
