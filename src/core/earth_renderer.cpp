@@ -1128,6 +1128,22 @@ inline void drawLineAdd(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, uin
     }
 }
 
+inline void drawLineAddSimple(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, uint8_t r, uint8_t g, uint8_t b, float alpha) {
+    int dx = abs(x1 - x0);
+    int dy = abs(y1 - y0);
+    int steps = dx > dy ? dx : dy;
+    if (steps == 0) {
+        blendPixelAdd(canvas, x0, y0, r, g, b, alpha);
+        return;
+    }
+    for (int i = 0; i <= steps; i++) {
+        float t = (float)i / steps;
+        int x = x0 + (int)(t * (x1 - x0) + 0.5f);
+        int y = y0 + (int)(t * (y1 - y0) + 0.5f);
+        blendPixelAdd(canvas, x, y, r, g, b, alpha);
+    }
+}
+
 void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     float pitchRad = _cameraPitch * DEG_TO_RAD;
     float rollRad = -_cameraRoll * DEG_TO_RAD;
@@ -1138,41 +1154,46 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     int circleY = _centerY + _centerOffsetY - (int)center_rotatedY;
 
     float timePhase = millis() * 0.002f;
+    uint32_t seed = 98765;
     
-    // Draw N layers of concentric circles - reduced for performance
-    int N = _isFastForwarding ? 2 : 3;
-    float thickness = 10.0f; // thickness of airglow
-    float maxAlpha = 0.60f; // maximum opacity
+    // Draw N layers of concentric circles - jittered scatter points for a hazy mist look
+    int N = _isFastForwarding ? 4 : 8;
+    float thickness = 9.0f; // thickness of airglow
+    float maxAlpha = 0.55f; // maximum opacity
     
     // Cyan-blue atmospheric gas color
     uint8_t r_val = 0;
     uint8_t g_val = 140;
     uint8_t b_val = 220;
 
+    int stepDeg = _isFastForwarding ? 4 : 2; // step in degrees
+
     for (int i = 0; i < N; i++) {
         float t = (float)i / N;
-        float alpha = powf(1.0f - t, 2.0f) * maxAlpha;
+        // Asymmetric bell curve: faint at bottom, peak at 0.7 height, fade to 0 at outer edge
+        float alpha = ((t < 0.7f) ? (0.2f + 0.8f * (t / 0.7f)) : (1.0f - (t - 0.7f) / 0.3f)) * maxAlpha;
         
         // Starts 2.5 pixels above the Earth surface to clear the tight surface look
         float baseR = _earthRadius + 2.5f + t * thickness;
         
-        // Calculate angular step to draw a solid ring without gaps
-        float stepRad = (_isFastForwarding ? 3.6f : 2.4f) / baseR;
-        
-        for (float rad = 0; rad < TWO_PI_F; rad += stepRad) {
+        for (int deg = 0; deg < 360; deg += stepDeg) {
+            // Fast LCG random jitter to break up any radial spikes or polygon lines!
+            seed = seed * 1664525UL + 1013904223UL;
+            float jitterRad = ((int)(seed % 100) - 50) * 0.0003f; // small angle jitter (~0.8 deg range)
+            
+            seed = seed * 1664525UL + 1013904223UL;
+            float jitterR = ((int)(seed % 100) - 50) * 0.015f;    // small radius jitter (~0.75px range)
+            
+            float rad = deg * DEG_TO_RAD + jitterRad;
+            
             // Noise based on angle and time
             float noise = 0.5f * sinf(rad * 4.0f + timePhase + i * 0.5f);
-            float r = baseR + noise;
+            float r = baseR + noise + jitterR;
             
             int x = circleX + (int)(r * cosf(rad));
             int y = circleY - (int)(r * sinf(rad));
             
-            // Draw cross-shaped soft brush for volumetric thickness
             blendPixelAdd(_canvas, x, y, r_val, g_val, b_val, alpha);
-            blendPixelAdd(_canvas, x - 1, y, r_val, g_val, b_val, alpha * 0.5f);
-            blendPixelAdd(_canvas, x + 1, y, r_val, g_val, b_val, alpha * 0.5f);
-            blendPixelAdd(_canvas, x, y - 1, r_val, g_val, b_val, alpha * 0.5f);
-            blendPixelAdd(_canvas, x, y + 1, r_val, g_val, b_val, alpha * 0.5f);
         }
     }
 }
