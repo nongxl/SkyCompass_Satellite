@@ -1137,10 +1137,48 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     int circleX = _centerX + _centerOffsetX + (int)center_rotatedX;
     int circleY = _centerY + _centerOffsetY - (int)center_rotatedY;
 
-    // Cyan-blue atmospheric gas color
-    uint8_t r_val = 0;
-    uint8_t g_val = 140;
-    uint8_t b_val = 220;
+    // Calculate Sun's 2D direction on screen relative to Earth center
+    float sx = 1.0f;
+    float sy = 0.0f;
+    bool hasSun = _hasSunData;
+    
+    if (hasSun) {
+        float subLatR = (float)_subsolarLat * DEG_TO_RAD;
+        float subLonR = (float)_subsolarLon * DEG_TO_RAD;
+        float S_x = cosf(subLatR) * cosf(subLonR);
+        float S_y = cosf(subLatR) * sinf(subLonR);
+        float S_z = sinf(subLatR);
+        
+        float cLatRad = (float)centerLat * DEG_TO_RAD;
+        float cLonRad = (float)centerLon * DEG_TO_RAD;
+        float cos_cLat = cosf(cLatRad);
+        float sin_cLat = sinf(cLatRad);
+        float cos_cLon = cosf(cLonRad);
+        float sin_cLon = sinf(cLonRad);
+        
+        float proj_x = S_y * cos_cLon - S_x * sin_cLon;
+        float term2 = S_x * cos_cLon + S_y * sin_cLon;
+        float proj_y = cos_cLat * S_z - sin_cLat * term2;
+        float proj_z = sin_cLat * S_z + cos_cLat * term2;
+        
+        float pitchRadCam = _cameraPitch * DEG_TO_RAD;
+        float y_pitched = proj_y * cosf(pitchRadCam) - proj_z * sinf(pitchRadCam);
+        
+        float rollRadCam = -_cameraRoll * DEG_TO_RAD;
+        float cos_roll = cosf(rollRadCam);
+        float sin_roll = sinf(rollRadCam);
+        
+        float sun_rotatedX = proj_x * cos_roll - y_pitched * sin_roll;
+        float sun_rotatedY = proj_x * sin_roll + y_pitched * cos_roll;
+        
+        float sun_len = sqrtf(sun_rotatedX * sun_rotatedX + sun_rotatedY * sun_rotatedY);
+        if (sun_len > 0.01f) {
+            sx = sun_rotatedX / sun_len;
+            sy = sun_rotatedY / sun_len;
+        } else {
+            hasSun = false;
+        }
+    }
 
     // Perfect concentric circles for a smooth glass cover appearance (no noise or vertical spikes)
     int N = _isFastForwarding ? 4 : 10;
@@ -1162,6 +1200,36 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
         for (float rad = 0.0f; rad < TWO_PI_F; rad += stepRad) {
             int x = circleX + (int)(baseR * cosf(rad) + 0.5f);
             int y = circleY - (int)(baseR * sinf(rad) + 0.5f);
+            
+            uint8_t r_val = 0;
+            uint8_t g_val = 140;
+            uint8_t b_val = 220;
+            
+            if (hasSun) {
+                // Dot product of limb point unit direction (cos(rad), -sin(rad)) with Sun unit direction (sx, sy).
+                // Note: y coordinate on screen increases downwards, so 2D limb point y direction is -sin(rad)
+                float dot = cosf(rad) * sx - sinf(rad) * sy;
+                
+                if (dot > 0.3f) {
+                    // Day side: Cyan-blue
+                    r_val = 0; g_val = 140; b_val = 220;
+                } else if (dot >= 0.0f) {
+                    // Day-to-Terminator: Sunset Orange/Red to Cyan-Blue
+                    float t_color = dot / 0.3f;
+                    r_val = (uint8_t)(240.0f * (1.0f - t_color));
+                    g_val = (uint8_t)(100.0f + 40.0f * t_color);
+                    b_val = (uint8_t)(10.0f + 210.0f * t_color);
+                } else if (dot >= -0.3f) {
+                    // Terminator-to-Night: Night Green to Sunset Orange/Red
+                    float t_color = (dot + 0.3f) / 0.3f;
+                    r_val = (uint8_t)(20.0f + 220.0f * t_color);
+                    g_val = (uint8_t)(180.0f - 80.0f * t_color);
+                    b_val = (uint8_t)(50.0f - 40.0f * t_color);
+                } else {
+                    // Night side: Chemiluminescent Green
+                    r_val = 20; g_val = 180; b_val = 50;
+                }
+            }
             
             blendPixelAdd(_canvas, x, y, r_val, g_val, b_val, alpha);
         }
