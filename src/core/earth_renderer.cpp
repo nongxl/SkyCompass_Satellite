@@ -1145,7 +1145,7 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     // Perfect concentric circles for a smooth glass cover appearance (no noise or vertical spikes)
     int N = _isFastForwarding ? 4 : 10;
     float startHeight = 2.5f;
-    float thickness = 9.0f; // total thickness of airglow dome
+    float thickness = 6.75f; // total thickness of airglow dome
     float maxAlpha = 0.55f;
 
     for (int i = 0; i < N; i++) {
@@ -1155,10 +1155,11 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
         
         float baseR = _earthRadius + startHeight + t * thickness;
         
-        // Use angular step to ensure no gaps between adjacent pixels along the circle
-        float stepRad = (_isFastForwarding ? 2.5f : 1.2f) / baseR;
+        // stepRad = 1.0/R guarantees exactly one pixel per step along the circumference - NO GAPS!
+        // For fast forwarding, use 1.5/R to reduce overhead slightly (still mostly gap-free)
+        float stepRad = (_isFastForwarding ? 1.5f : 1.0f) / baseR;
         
-        for (float rad = 0; rad < TWO_PI_F; rad += stepRad) {
+        for (float rad = 0.0f; rad < TWO_PI_F; rad += stepRad) {
             int x = circleX + (int)(baseR * cosf(rad) + 0.5f);
             int y = circleY - (int)(baseR * sinf(rad) + 0.5f);
             
