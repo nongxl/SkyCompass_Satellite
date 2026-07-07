@@ -2675,10 +2675,14 @@ void drawSatSelectPage() {
             
             drawHotKey("WiFi(w)", 'w', x + 5, ty);
             drawHotKey("Exit(Esc)", 'x', x + 105, ty); ty += 12;
+            
+            drawHotKey("Tab(Visual)", 't', x + 5, ty); ty += 12;
         } else {
             if (recentLaunchInObjectsView) {
                 drawHotKey("Page[ [ / ] ]", '[', x + 5, ty); ty += 12;
                 drawHotKey("Back(Esc)", 'b', x + 5, ty); ty += 12;
+                
+                drawHotKey("Tab(Visual)", 't', x + 5, ty); ty += 12;
             } else {
                 drawHotKey("Move( ; / . )", ';', x + 5, ty);
                 drawHotKey("Tab( / )", '/', x + 105, ty); ty += 12;
@@ -2688,6 +2692,8 @@ void drawSatSelectPage() {
                 
                 drawHotKey("WiFi(w)", 'w', x + 5, ty);
                 drawHotKey("Exit(Esc)", 'x', x + 105, ty); ty += 12;
+                
+                drawHotKey("Tab(Visual)", 't', x + 5, ty); ty += 12;
             }
         }
         
@@ -3355,6 +3361,9 @@ void loop() {
                     if (justH || justEsc || justBack || justEnter || justTick) {
                         showListHelp = false;
                     }
+                } else if (justTab) {
+                    int nextMode = (earth_renderer->getVisualMode() + 1) % 3;
+                    earth_renderer->setVisualMode(nextMode);
                 } else if (deleteConfirmIndex >= 0 && currentSatTab == TAB_ENCYCLOPEDIA) {
                     if (deleteConfirmIndex < NUM_BUILTIN_SATELLITES) {
                         deleteConfirmIndex = -1;
@@ -4388,7 +4397,7 @@ void loop() {
         
         if (showHelp && appState == STATE_MAIN) {
             auto canvas = earth_renderer->getCanvas();
-            uint16_t w = 200, h = 108;
+            uint16_t w = 200, h = 120;
             int x = (canvas->width() - w) / 2;
             int y = (canvas->height() - h) / 2;
             
@@ -4433,6 +4442,8 @@ void loop() {
             
             drawHotKey("Config(Loc&Alt[])", 'c', x + 5, ty);
             drawHotKey("RealTime(Reset)", 'r', x + 105, ty); ty += 12;
+            
+            drawHotKey("Tab(Visual)", 't', x + 5, ty); ty += 12;
         }
         
         if (showRecommendations) {
