@@ -1211,23 +1211,23 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
                 float dot = cosf(rad) * sx - sinf(rad) * sy;
                 
                 if (dot > 0.3f) {
-                    // Day side: Cyan-blue
+                    // Day side: Cyan-blue (Rayleigh scattering)
                     r_val = 0; g_val = 140; b_val = 220;
                 } else if (dot >= 0.0f) {
-                    // Day-to-Terminator: Sunset Orange/Red to Cyan-Blue
+                    // Day-to-Terminator: Sunset Red to Cyan-Blue
                     float t_color = dot / 0.3f;
-                    r_val = (uint8_t)(240.0f * (1.0f - t_color));
-                    g_val = (uint8_t)(100.0f + 40.0f * t_color);
-                    b_val = (uint8_t)(10.0f + 210.0f * t_color);
+                    r_val = (uint8_t)(250.0f * (1.0f - t_color));
+                    g_val = (uint8_t)(80.0f + 60.0f * t_color);
+                    b_val = (uint8_t)(0.0f + 220.0f * t_color);
                 } else if (dot >= -0.3f) {
-                    // Terminator-to-Night: Night Green to Sunset Orange/Red
+                    // Terminator-to-Night: Night Gold (Sodium/OH airglow) to Sunset Red
                     float t_color = (dot + 0.3f) / 0.3f;
-                    r_val = (uint8_t)(20.0f + 220.0f * t_color);
-                    g_val = (uint8_t)(180.0f - 80.0f * t_color);
-                    b_val = (uint8_t)(50.0f - 40.0f * t_color);
+                    r_val = (uint8_t)(180.0f + 70.0f * t_color);
+                    g_val = (uint8_t)(130.0f - 50.0f * t_color);
+                    b_val = (uint8_t)(10.0f - 10.0f * t_color);
                 } else {
-                    // Night side: Chemiluminescent Green
-                    r_val = 20; g_val = 180; b_val = 50;
+                    // Night side: Warm Sodium Gold (Option 1)
+                    r_val = 180; g_val = 130; b_val = 10;
                 }
             }
             
