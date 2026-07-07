@@ -63,6 +63,46 @@ extern HalGnss* gnss;
 
 EarthRenderer* earth_renderer = nullptr;
 
+void applyNightVisionFilter(LGFX_Sprite* canvas) {
+    if (!canvas) return;
+    int w = canvas->width();
+    int h = canvas->height();
+    uint16_t* buf = (uint16_t*)canvas->getBuffer();
+    if (!buf) return;
+    
+    int totalPixels = w * h;
+    for (int i = 0; i < totalPixels; i++) {
+        uint16_t rawCol = buf[i];
+        // Byte swap from Big Endian (display format) to Little Endian (CPU format)
+        uint16_t pixel = (rawCol >> 8) | (rawCol << 8);
+        
+        // Extract RGB565 channels
+        uint16_t r = (pixel >> 11) & 0x1F;
+        uint16_t g = (pixel >> 5) & 0x3F;
+        uint16_t b = pixel & 0x1F;
+        
+        // Calculate average brightness
+        uint16_t gray = (r * 3 + (g >> 1) * 6 + b) / 10;
+        if (gray > 0x1F) gray = 0x1F;
+        
+        // Form new pixel (Red channel only)
+        uint16_t new_pixel = (gray << 11);
+        
+        // Byte swap back to Big Endian
+        buf[i] = (new_pixel >> 8) | (new_pixel << 8);
+    }
+}
+
+void pushCanvasWithFilter() {
+    if (!earth_renderer) return;
+    LGFX_Sprite* canvas = earth_renderer->getCanvas();
+    if (!canvas) return;
+    if (earth_renderer->getVisualMode() == 1) {
+        applyNightVisionFilter(canvas);
+    }
+    canvas->pushSprite(0, 0);
+}
+
 enum AppState {
     STATE_MAIN,
     STATE_WIFI_SETUP,
@@ -1380,6 +1420,9 @@ void drawStartupScreen(int progressPercentage) {
     canvas->fillRect(37, 110, (int)(166.0f * (progressPercentage / 100.0f)), 4, TFT_GREEN);
     
     // Push to screen
+    if (earth_renderer && earth_renderer->getVisualMode() == 1) {
+        applyNightVisionFilter(canvas);
+    }
     canvas->pushSprite(0, 0);
 }
 
@@ -2747,6 +2790,7 @@ void loop() {
         static bool lastY = false;
         static bool lastN = false;
         static bool lastD = false;
+        static bool lastTab = false;
 
         bool currSemi = M5Cardputer.Keyboard.isKeyPressed(';');
         bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
@@ -2769,6 +2813,7 @@ void loop() {
         bool currY = M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y');
         bool currN = M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed('N');
         bool currD = M5Cardputer.Keyboard.isKeyPressed('d') || M5Cardputer.Keyboard.isKeyPressed('D');
+        bool currTab = M5Cardputer.Keyboard.isKeyPressed(KEY_TAB);
 
         bool justSemi = currSemi && !lastSemi;
         bool justDot = currDot && !lastDot;
@@ -2791,15 +2836,16 @@ void loop() {
         bool justY = currY && !lastY;
         bool justN = currN && !lastN;
         bool justD = currD && !lastD;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD;
+        bool justTab = currTab && !lastTab;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justTab;
 
         if (showHelp) {
             if (millis() < 3000) {
                 showHelp = false;
             } else if (hasAnyKeyJustPressed) {
                 showHelp = false;
-                currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = false;
-                justSemi = justDot = justComma = justSlash = justO = justV = justEnter = justBack = justEsc = justTick = justBracketL = justBracketR = justC = justR = justW = justS = justH = justG = justY = justN = justD = false;
+                currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = currTab = false;
+                justSemi = justDot = justComma = justSlash = justO = justV = justEnter = justBack = justEsc = justTick = justBracketL = justBracketR = justC = justR = justW = justS = justH = justG = justY = justN = justD = justTab = false;
                 hasAnyKeyJustPressed = false;
             }
         }
@@ -2809,8 +2855,8 @@ void loop() {
                 showListHelp = false;
             } else if (hasAnyKeyJustPressed) {
                 showListHelp = false;
-                currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = false;
-                justSemi = justDot = justComma = justSlash = justO = justV = justEnter = justBack = justEsc = justTick = justBracketL = justBracketR = justC = justR = justW = justS = justH = justG = justY = justN = justD = false;
+                currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = currTab = false;
+                justSemi = justDot = justComma = justSlash = justO = justV = justEnter = justBack = justEsc = justTick = justBracketL = justBracketR = justC = justR = justW = justS = justH = justG = justY = justN = justD = justTab = false;
                 hasAnyKeyJustPressed = false;
             }
         }
@@ -2824,7 +2870,10 @@ void loop() {
         
         if (appState == STATE_MAIN) {
             char currentKey = 0;
-            if (M5Cardputer.Keyboard.isKeyPressed(',')) currentKey = ',';
+            if (M5Cardputer.Keyboard.isKeyPressed(KEY_TAB)) {
+                // Tab key: do nothing here, handled as discrete key justTab
+            }
+            else if (M5Cardputer.Keyboard.isKeyPressed(',')) currentKey = ',';
             else if (M5Cardputer.Keyboard.isKeyPressed('/')) currentKey = '/';
             else if (M5Cardputer.Keyboard.isKeyPressed(';')) currentKey = ';';
             else if (M5Cardputer.Keyboard.isKeyPressed('.')) currentKey = '.';
@@ -2941,7 +2990,10 @@ void loop() {
         // Handle discrete keyboard input
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
             if (appState == STATE_MAIN) {
-                if (justC) {
+                if (justTab) {
+                    int nextMode = (earth_renderer->getVisualMode() + 1) % 3;
+                    earth_renderer->setVisualMode(nextMode);
+                } else if (justC) {
                     if (isSatViewMode) {
                         isSatViewMode = false;
                         targetZoom = 0.95f;
@@ -3362,35 +3414,35 @@ void loop() {
                             recentLaunchErrorMsg = "System Busy... Wait.";
                             recentLaunchDownloadFinishedMs = millis();
                             drawSatSelectPage();
-                            earth_renderer->getCanvas()->pushSprite(0, 0);
+                            pushCanvasWithFilter();
                         } else if (!recentLaunchDownloading) {
                             recentLaunchDownloading = true;
                             recentLaunchErrorMsg = "Connecting WiFi...";
                             drawSatSelectPage();
-                            earth_renderer->getCanvas()->pushSprite(0, 0);
+                            pushCanvasWithFilter();
                             BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 12288, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 recentLaunchDownloading = false;
                                 recentLaunchErrorMsg = "Task Init Failed!";
                                 drawSatSelectPage();
-                                earth_renderer->getCanvas()->pushSprite(0, 0);
+                                pushCanvasWithFilter();
                             }
                         }
                     } else {
                         if (g_networkActive) {
                             downloadErrorMsg = "System Busy... Wait.";
                             drawSatSelectPage();
-                            earth_renderer->getCanvas()->pushSprite(0, 0);
+                            pushCanvasWithFilter();
                         } else if (!HalWifi::isConnected()) {
                             manualWifiToggle = true;
                             downloadErrorMsg = "Connecting to WiFi...";
                             drawSatSelectPage();
-                            earth_renderer->getCanvas()->pushSprite(0, 0);
+                            pushCanvasWithFilter();
                             BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 12288, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 downloadErrorMsg = "Task Init Failed!";
                                 drawSatSelectPage();
-                                earth_renderer->getCanvas()->pushSprite(0, 0);
+                                pushCanvasWithFilter();
                             }
                         } else {
                             WiFi.disconnect(true);
@@ -3508,7 +3560,7 @@ void loop() {
                             if ((noradInput.length() == 5 || noradInput.length() == 6) && !isDownloadingCustom) {
                                 isDownloadingCustom = true;
                                 drawSatSelectPage();
-                                earth_renderer->getCanvas()->pushSprite(0, 0);
+                                pushCanvasWithFilter();
                                 
                                 int id = noradInput.toInt();
                                 TLEData loaded_tle;
@@ -3611,10 +3663,11 @@ void loop() {
         lastY = currY;
         lastN = currN;
         lastD = currD;
+        lastTab = currTab;
         
         if (appState == STATE_WIFI_SETUP) {
             drawWiFiSetupPage();
-            earth_renderer->getCanvas()->pushSprite(0, 0);
+            pushCanvasWithFilter();
             
             if (wifiIsScanning) {
                 wifiNetworks = HalWifi::scanNetworks();
@@ -3624,7 +3677,7 @@ void loop() {
             return;
         } else if (appState == STATE_SAT_SELECT) {
             drawSatSelectPage();
-            earth_renderer->getCanvas()->pushSprite(0, 0);
+            pushCanvasWithFilter();
             return;
         }
 
@@ -4805,7 +4858,7 @@ void loop() {
 
         }
         
-        earth_renderer->getCanvas()->pushSprite(0, 0);
+        pushCanvasWithFilter();
     }
 
     // Update Chain Mono Display (dynamic interval: 100ms normally, skipped during fast forwarding to prevent lag)

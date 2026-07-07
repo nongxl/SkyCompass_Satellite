@@ -78,6 +78,9 @@ public:
 
     void setDrawDecorations(bool draw) { _drawDecorations = draw; }
 
+    void setVisualMode(int mode) { _visualMode = mode; }
+    int getVisualMode() const { return _visualMode; }
+
     void setZoom(float zoom) {
         _zoom = zoom;
         _earthRadius = (int)(55.0f * _zoom);
@@ -135,6 +138,7 @@ private:
     // Rendering configs
     bool _observerConstrained = true;
     bool _isFastForwarding = false;
+    int _visualMode = 0; // 0: Normal (No Aur/Air), 1: Red Night, 2: Gorgeous (With Aur/Air)
     bool _drawDecorations = true;
 
     // Helper functions for orthographic projection

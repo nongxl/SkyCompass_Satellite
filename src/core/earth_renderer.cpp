@@ -372,9 +372,11 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
     // Draw city light pollution on the dark side
     drawLightPollution(centerLat, centerLon);
     
-    // Draw atmosphere and polar effects
-    drawAirglow(centerLat, centerLon);
-    drawAuroras(centerLat, centerLon);
+    // Draw atmosphere and polar effects (only in Gorgeous mode [2])
+    if (_visualMode == 2) {
+        drawAirglow(centerLat, centerLon);
+        drawAuroras(centerLat, centerLon);
+    }
     
     // Draw user location as a map pin 📍
     int ux, uy;
