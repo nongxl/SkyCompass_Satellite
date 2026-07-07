@@ -1181,7 +1181,7 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
     }
 
     // Perfect concentric circles for a smooth glass cover appearance (no noise or vertical spikes)
-    int N = _isFastForwarding ? 4 : 10;
+    int N = _isFastForwarding ? 3 : 10; // Reduced layers from 4 to 3 during fast forwarding to speed up
     float startHeight = 2.5f;
     float thickness = 6.75f; // total thickness of airglow dome
     float maxAlpha = 0.55f;
@@ -1194,21 +1194,24 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
         float baseR = _earthRadius + startHeight + t * thickness;
         
         // stepRad = 1.0/R guarantees exactly one pixel per step along the circumference - NO GAPS!
-        // For fast forwarding, use 1.5/R to reduce overhead slightly (still mostly gap-free)
-        float stepRad = (_isFastForwarding ? 1.5f : 1.0f) / baseR;
+        // For fast forwarding, use 2.0/R to reduce overhead by 50% (since we are fast-forwarding, minor gaps are invisible)
+        float stepRad = (_isFastForwarding ? 2.0f : 1.0f) / baseR;
         
         for (float rad = 0.0f; rad < TWO_PI_F; rad += stepRad) {
-            int x = circleX + (int)(baseR * cosf(rad) + 0.5f);
-            int y = circleY - (int)(baseR * sinf(rad) + 0.5f);
+            // Micro-optimization: cache sin and cos to avoid calling them twice per step
+            float cos_rad = cosf(rad);
+            float sin_rad = sinf(rad);
+            
+            int x = circleX + (int)(baseR * cos_rad + 0.5f);
+            int y = circleY - (int)(baseR * sin_rad + 0.5f);
             
             uint8_t r_val = 0;
             uint8_t g_val = 140;
             uint8_t b_val = 220;
             
             if (hasSun) {
-                // Dot product of limb point unit direction (cos(rad), -sin(rad)) with Sun unit direction (sx, sy).
-                // Note: y coordinate on screen increases downwards, so 2D limb point y direction is -sin(rad)
-                float dot = cosf(rad) * sx - sinf(rad) * sy;
+                // Dot product of limb point unit direction (cos_rad, -sin_rad) with Sun unit direction (sx, sy)
+                float dot = cos_rad * sx - sin_rad * sy;
                 
                 if (dot > 0.3f) {
                     // Day side: Cyan-blue (Rayleigh scattering)
@@ -1226,7 +1229,7 @@ void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
                     g_val = (uint8_t)(130.0f - 50.0f * t_color);
                     b_val = (uint8_t)(10.0f - 10.0f * t_color);
                 } else {
-                    // Night side: Warm Sodium Gold (Option 1)
+                    // Night side: Warm Sodium Gold
                     r_val = 180; g_val = 130; b_val = 10;
                 }
             }
@@ -1240,7 +1243,7 @@ void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
     // 2 Concentric Rings: Outer Ring at ~66.5 deg, Inner Ring at ~72.5 deg
     // 2 Altitude layers per ring (70km and 240km)
     int N_layers = _isFastForwarding ? 1 : 2;
-    int step = _isFastForwarding ? 15 : 8; // longitude step
+    int step = _isFastForwarding ? 20 : 8; // Faster step 20 during fast forwarding
     float timePhase = millis() * 0.0015f;
     
     float alt_bot = 70.0f;
@@ -1299,7 +1302,10 @@ void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
                 
                 if (visible) {
                     if (prevVisible) {
-                        drawLineAdd(_canvas, prevX, prevY, x, y, r_col, g_col, b_col, baseAlpha);
+                        // Boundary check: Prevent huge lag spikes and false lines by limiting segment length (avoiding projection wrap-around)
+                        if (abs(x - prevX) < 80 && abs(y - prevY) < 80) {
+                            drawLineAdd(_canvas, prevX, prevY, x, y, r_col, g_col, b_col, baseAlpha);
+                        }
                     }
                     
                     if (lon == 0) {
@@ -1318,7 +1324,9 @@ void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
             
             // Close the loop
             if (firstVisible && prevVisible) {
-                drawLineAdd(_canvas, prevX, prevY, firstX, firstY, r_col, g_col, b_col, baseAlpha);
+                if (abs(prevX - firstX) < 80 && abs(prevY - firstY) < 80) {
+                    drawLineAdd(_canvas, prevX, prevY, firstX, firstY, r_col, g_col, b_col, baseAlpha);
+                }
             }
         }
     }
