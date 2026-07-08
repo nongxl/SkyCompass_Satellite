@@ -207,8 +207,10 @@ Application (Earth View / Recommended / HAM / GUI)
 ### Supported Formats
 
 * **TLE (Legacy)**: Legacy Two-Line Element sets. Automatically compatible with existing offline caches.
-* **CelesTrak GP JSON (Default)**: Modern default exchange format. Supports direct OMM parameter extraction and natively handles 6-digit Catalog Numbers.
-* **OMM (Reserved)**: CCSDS Orbit Mean-Elements Messages. Reserved for future extensions.
+* **CelesTrak GP JSON (Default)**: Modern default exchange format derived from the CCSDS OMM standard. The system has fully implemented this format, utilizing [JSONParser](file:///d:/workspace/SkyCompass_Satellite/src/core/json_parser.h) to natively parse and load 6-digit Catalog Number satellites' orbital elements.
+* **OMM (Reserved)**: Raw CCSDS Orbit Mean-Elements Messages (including XML and KVN formats). Since OMM XML message bodies are highly verbose (often over 7x larger than TLEs), parsing complex XML trees and streaming them on low-power microcontrollers like ESP32 consumes excessive resources. Therefore, by design:
+  * We reserved the [OrbitParser](file:///d:/workspace/SkyCompass_Satellite/src/core/orbit_parser.h) base class, ensuring that if we must parse raw OMM XML/KVN formats in the future, we can extend the system with components like `XMLOMMParser`.
+  * For the current implementation, we chose CelesTrak's GP JSON format (implemented by [JSONParser](file:///d:/workspace/SkyCompass_Satellite/src/core/json_parser.h)) as our default exchange format because it is far easier to stream and deserialize on resource-constrained embedded systems.
 
 The system is fully compatible with future 6-digit Catalog Numbers. It utilizes a pseudo-TLE bridge adapter to reconstruct compatible lines for the SGP4 physical solver, keeping the core database and GUI layers populated with genuine, unaltered 6-digit NORAD satellite IDs.
 

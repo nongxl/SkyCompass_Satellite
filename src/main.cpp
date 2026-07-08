@@ -176,9 +176,26 @@ struct NetworkActiveGuard {
     NetworkActiveGuard() { g_networkActive = true; }
     ~NetworkActiveGuard() { g_networkActive = false; }
 };
+extern TaskHandle_t predictorTaskHandle;
+
+struct PredictorTaskSuspendGuard {
+    PredictorTaskSuspendGuard() {
+        if (predictorTaskHandle != NULL) {
+            vTaskSuspend(predictorTaskHandle);
+            LOG_I("APP", "Predictor task suspended for network ops");
+        }
+    }
+    ~PredictorTaskSuspendGuard() {
+        if (predictorTaskHandle != NULL) {
+            vTaskResume(predictorTaskHandle);
+            LOG_I("APP", "Predictor task resumed after network ops");
+        }
+    }
+};
 
 std::vector<RecentLaunchItem> g_pendingRecentLaunches;
 volatile bool g_recentLaunchesPending = false;
+volatile bool g_recentLaunchRefreshPending = false;
 
 // 唯一代表卫星及其缓存（仅用于 Focus 追踪模式）
 TLEData g_repSatTLE;
@@ -259,7 +276,7 @@ static void assignShortNameAndIcon(RecentLaunchItem& item) {
 void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
     if (items.empty()) return;
     
-    if (!LittleFS.exists("/tle_recent_raw.txt")) {
+    if (!LittleFS.exists("/json_recent_raw.jsonl")) {
         // Fallback: Default dummy values
         for (auto& item : items) {
             assignShortNameAndIcon(item);
@@ -272,29 +289,31 @@ void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
     }
     
     // Store original Mean Anomalies for each item index
-    std::vector<std::vector<float>> rawPhases(items.size());
+    std::vector<std::vector<float>>* rawPhases = new std::vector<std::vector<float>>(items.size());
+    if (!rawPhases) return;
     
-    File f = LittleFS.open("/tle_recent_raw.txt", "r");
-    if (!f) return;
+    File f = LittleFS.open("/json_recent_raw.jsonl", "r");
+    if (!f) {
+        delete rawPhases;
+        return;
+    }
     
+    JSONParser parser;
     while (f.available()) {
-        String name = f.readStringUntil('\n'); name.trim();
-        if (name.length() == 0) break;
-        String line1 = f.readStringUntil('\n'); line1.trim();
-        String line2 = f.readStringUntil('\n'); line2.trim();
+        String singleLine = f.readStringUntil('\n');
+        singleLine.trim();
+        if (singleLine.length() == 0) continue;
         
-        if (line1.length() < 14 || line1.charAt(0) != '1' || line2.length() < 14 || line2.charAt(0) != '2') {
-            continue;
-        }
-        
-        String batchId = line1.substring(9, 14);
-        for (size_t i = 0; i < items.size(); i++) {
-            if (items[i].batchId == batchId) {
-                if (line2.length() >= 51) {
-                    float ma = line2.substring(43, 51).toFloat();
-                    rawPhases[i].push_back(ma);
+        OrbitRecord record;
+        if (parser.parse(singleLine, record)) {
+            String batchId = record.getBatchId();
+            if (batchId.length() == 0) continue;
+            
+            for (size_t i = 0; i < items.size(); i++) {
+                if (items[i].batchId == batchId) {
+                    (*rawPhases)[i].push_back(record.meanAnomaly);
+                    break;
                 }
-                break;
             }
         }
     }
@@ -302,7 +321,7 @@ void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
     
     for (size_t i = 0; i < items.size(); i++) {
         auto& item = items[i];
-        auto& phases = rawPhases[i];
+        auto& phases = (*rawPhases)[i];
         
         // 1. Assign shortName and icon
         assignShortNameAndIcon(item);
@@ -417,6 +436,7 @@ void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
             item.proxyFormation.push_back(fp);
         }
     }
+    delete rawPhases;
 }
 
 
@@ -864,10 +884,11 @@ struct NetworkParams {
 
 
 void fetchFrequencies() {
+    PredictorTaskSuspendGuard predGuard;
     WiFiClientSecure *client = new WiFiClientSecure;
     if (!client) return;
     client->setInsecure();
-    client->setTimeout(5);
+    client->setTimeout(30000);
     
     HTTPClient http;
     http.setTimeout(15000);
@@ -1016,6 +1037,7 @@ struct WiFiDisconnectGuard {
 
 void recentLaunchNetworkTaskImpl() {
     NetworkActiveGuard guard;
+    PredictorTaskSuspendGuard predGuard;
     WiFiDisconnectGuard wifiGuard;
     recentLaunchDownloading = true;
     recentLaunchDownloadSuccess = false;
@@ -1053,41 +1075,48 @@ void recentLaunchNetworkTaskImpl() {
         LOG_I("RECENT_LAUNCH", "Time synced to UTC: %u", current_unix);
     }
     
-    // 3. Download & Process JSON Stream
-    recentLaunchErrorMsg = "Downloading GP JSON...";
+    // 3. Check local update timestamp to enforce 2-hour rate limiting
+    bool success = false;
+    bool usingCache = false;
     std::vector<RecentLaunchItem> tempLaunches;
-    bool success = OrbitDataProvider::downloadRecentLaunches(tempLaunches);
     
-    if (success && recentLaunchDownloading && !tempLaunches.empty()) {
-        g_pendingRecentLaunches = std::move(tempLaunches);
-        // Sort recent launches in descending order by actual COSPAR year and flight number (newest first)
-        std::sort(g_pendingRecentLaunches.begin(), g_pendingRecentLaunches.end(), [](const RecentLaunchItem& a, const RecentLaunchItem& b) {
-            auto getTrueYearAndNum = [](const String& id) -> std::pair<int, int> {
-                if (id.length() < 5) return {0, 0};
-                int yr = id.substring(0, 2).toInt();
-                int trueYr = (yr >= 50) ? (1900 + yr) : (2000 + yr);
-                int num = id.substring(2).toInt();
-                return {trueYr, num};
-            };
-            auto valA = getTrueYearAndNum(a.batchId);
-            auto valB = getTrueYearAndNum(b.batchId);
-            if (valA.first != valB.first) {
-                return valA.first > valB.first;
+    uint32_t lastUpdate = 0;
+    if (LittleFS.exists("/recent_last_update.txt")) {
+        File timeFile = LittleFS.open("/recent_last_update.txt", "r");
+        if (timeFile) {
+            String timeStr = timeFile.readString();
+            timeFile.close();
+            timeStr.trim();
+            lastUpdate = (uint32_t)timeStr.toInt();
+        }
+    }
+    
+    if (current_unix > 0 && lastUpdate > 0 && (current_unix - lastUpdate) < 7200 && LittleFS.exists("/json_recent_raw.jsonl")) {
+        LOG_I("RECENT_LAUNCH", "Last update was %u sec ago (< 2h). Bypassing download.", (unsigned int)(current_unix - lastUpdate));
+        success = true;
+    }
+    
+    if (!success) {
+        recentLaunchErrorMsg = "Downloading GP JSON...";
+        std::vector<RecentLaunchItem> dummy;
+        success = OrbitDataProvider::downloadRecentLaunches(dummy);
+        if (success) {
+            File timeFile = LittleFS.open("/recent_last_update.txt", "w");
+            if (timeFile) {
+                timeFile.print(current_unix);
+                timeFile.close();
             }
-            return valA.second > valB.second;
-        });
-        calculateFormationsForItems(g_pendingRecentLaunches);
-        g_recentLaunchesPending = true;
-        recentLaunchSelectedIndex = 0;
-        recentLaunchDownloadSuccess = true;
-        recentLaunchErrorMsg = "Downloaded successfully!";
-        LOG_I("RECENT_LAUNCH", "Loaded %d unique batches saved directly to LittleFS.", g_pendingRecentLaunches.size());
+        }
+    }
+    
+    if (success) {
+        g_recentLaunchRefreshPending = true;
     } else {
         recentLaunchErrorMsg = "Download Failed!";
         LOG_I("RECENT_LAUNCH", "Celestrak JSON fetch failed");
+        recentLaunchDownloading = false;
+        recentLaunchDownloadFinishedMs = millis();
     }
-    
-    recentLaunchDownloading = false;
 }
 
 void recentLaunchNetworkTask(void* parameter) {
@@ -1095,8 +1124,72 @@ void recentLaunchNetworkTask(void* parameter) {
     vTaskDelete(NULL);
 }
 
+void forceRefreshSingleSatTask(void* parameter) {
+    int targetIdx = (int)(intptr_t)parameter;
+    if (targetIdx < 0 || targetIdx >= NUM_SATELLITES) {
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    {
+        NetworkActiveGuard guard;
+        PredictorTaskSuspendGuard predGuard;
+        WiFiDisconnectGuard wifiGuard;
+        
+        uint32_t targetId = g_satellites[targetIdx].noradId;
+        LOG_I("APP", "Force refreshing TLE for sat index %d, norad %u", targetIdx, (unsigned int)targetId);
+        
+        bool wifiReady = true;
+        // 1. WiFi Connection
+        if (!HalWifi::isConnected()) {
+            String ssid = "";
+            String pass = "";
+            HalWifi::loadCredentials(ssid, pass);
+            if (ssid.length() == 0) {
+                downloadErrorMsg = "No WiFi Configured!";
+                wifiReady = false;
+            } else {
+                downloadErrorMsg = "Connecting WiFi...";
+                HalWifi::begin(ssid.c_str(), pass.c_str());
+                if (!HalWifi::isConnected()) {
+                    downloadErrorMsg = "WiFi Connect Failed!";
+                    wifiReady = false;
+                }
+            }
+        }
+        
+        if (wifiReady) {
+            downloadErrorMsg = "Refreshing TLE...";
+            TLEData new_tle;
+            if (TLEUpdater::getTLE(targetId, new_tle, 0)) {
+                new_tle.baseScore = g_satellites[targetIdx].baseScore;
+                SGP4Calc tempCalc;
+                tempCalc.init(new_tle);
+                
+                portENTER_CRITICAL(&satMutex);
+                g_satellites[targetIdx].tle = new_tle;
+                g_satellites[targetIdx].calc = tempCalc;
+                portEXIT_CRITICAL(&satMutex);
+                
+                downloadErrorMsg = "Refresh Success!";
+                
+                portENTER_CRITICAL(&passMutex);
+                predictionsReady = false;
+                lastPredictionBaseTime = 0;
+                portEXIT_CRITICAL(&passMutex);
+                triggerPrediction = true;
+            } else {
+                downloadErrorMsg = "Refresh Failed!";
+            }
+        }
+    } // All guards (wifiGuard, predGuard, guard) are safely destructed here!
+    
+    vTaskDelete(NULL);
+}
+
 void networkTaskImpl(void* parameter) {
     NetworkActiveGuard guard;
+    PredictorTaskSuspendGuard predGuard;
     g_wifiConnecting = true;
     g_dataUpdating = false;
     
@@ -1172,6 +1265,11 @@ void networkTaskImpl(void* parameter) {
         WiFiClient* sharedClient = new WiFiClient;
         
         for (int i = 0; i < NUM_SATELLITES; i++) {
+            if (appState == STATE_SAT_SELECT) {
+                char progBuf[48];
+                sprintf(progBuf, "Syncing TLEs (%d/%d)...", i + 1, NUM_SATELLITES);
+                downloadErrorMsg = progBuf;
+            }
             TLEData new_tle;
             uint32_t maxAge = manualWifiToggle ? 0 : (2 * 24 * 3600);
             if (TLEUpdater::getTLE(g_satellites[i].noradId, new_tle, maxAge, sharedClient)) {
@@ -1241,109 +1339,37 @@ void networkTask(void* parameter) {
 }
 
 void tryLoadRecentLaunchCache() {
-    if (!LittleFS.exists("/tle_recent_raw.txt")) {
-        LOG_I("RECENT_LAUNCH", "No local cache file found.");
+    if (!LittleFS.exists("/json_recent_raw.jsonl")) {
+        LOG_I("RECENT_LAUNCH", "No local cache JSONL file found.");
         return;
     }
     
     std::vector<RecentLaunchItem> tempLaunches;
-    tempLaunches.reserve(30);
-    
-    File rf = LittleFS.open("/tle_recent_raw.txt", "r");
-    if (!rf) {
-        return;
-    }
-    
-    uint32_t firstEpoch = 0;
-    while (rf.available()) {
-        String name = rf.readStringUntil('\n');
-        name.trim();
-        if (name.length() == 0) break;
-        String line1 = rf.readStringUntil('\n');
-        line1.trim();
-        String line2 = rf.readStringUntil('\n');
-        line2.trim();
-        
-        if (line1.length() < 14 || line1.charAt(0) != '1' || line2.length() < 14 || line2.charAt(0) != '2') {
-            continue;
-        }
-        
-        if (firstEpoch == 0) {
-            firstEpoch = parseTleEpoch(line1);
-        }
-        
-        String batchId = line1.substring(9, 14);
-        
-        int foundIdx = -1;
-        for (size_t i = 0; i < tempLaunches.size(); i++) {
-            if (tempLaunches[i].batchId == batchId) {
-                foundIdx = i;
-                break;
+    if (OrbitDataProvider::loadRecentLaunchesFromCache(tempLaunches) && !tempLaunches.empty()) {
+        std::sort(tempLaunches.begin(), tempLaunches.end(), [](const RecentLaunchItem& a, const RecentLaunchItem& b) {
+            auto getTrueYearAndNum = [](const String& id) -> std::pair<int, int> {
+                if (id.length() < 5) return {0, 0};
+                int yr = id.substring(0, 2).toInt();
+                int trueYr = (yr >= 50) ? (1900 + yr) : (2000 + yr);
+                int num = id.substring(2).toInt();
+                return {trueYr, num};
+            };
+            auto valA = getTrueYearAndNum(a.batchId);
+            auto valB = getTrueYearAndNum(b.batchId);
+            if (valA.first != valB.first) {
+                return valA.first > valB.first;
             }
-        }
+            return valA.second > valB.second;
+        });
         
-        if (foundIdx != -1) {
-            if (tempLaunches[foundIdx].satelliteCount < 60) {
-                tempLaunches[foundIdx].satelliteCount++;
-            }
-            tempLaunches[foundIdx].isGroup = true;
-        } else {
-            RecentLaunchItem item;
-            item.batchId = batchId;
-            item.displayName = extractPrefix(name);
-            item.satelliteCount = 1;
-            item.isGroup = false;
-            item.selected = false;
-            item.epoch = parseTleEpoch(line1);
-            getRepresentativeOrbitParams(line2, item.inclination, item.avgAlt);
-            item.repSatName = name;
-            tempLaunches.push_back(item);
-        }
-    }
-    rf.close();
-    
-    if (tempLaunches.empty()) {
-        return;
-    }
-    
-    // Sort recent launches in descending order by actual COSPAR year and flight number (newest first)
-    std::sort(tempLaunches.begin(), tempLaunches.end(), [](const RecentLaunchItem& a, const RecentLaunchItem& b) {
-        auto getTrueYearAndNum = [](const String& id) -> std::pair<int, int> {
-            if (id.length() < 5) return {0, 0};
-            int yr = id.substring(0, 2).toInt();
-            int trueYr = (yr >= 50) ? (1900 + yr) : (2000 + yr);
-            int num = id.substring(2).toInt();
-            return {trueYr, num};
-        };
-        auto valA = getTrueYearAndNum(a.batchId);
-        auto valB = getTrueYearAndNum(b.batchId);
-        if (valA.first != valB.first) {
-            return valA.first > valB.first;
-        }
-        return valA.second > valB.second;
-    });
-    
-    uint32_t nowTime = current_unix + timeMachineOffset;
-    bool fresh = false;
-    if (firstEpoch > 0) {
-        uint32_t age = 0;
-        if (nowTime >= firstEpoch) {
-            age = nowTime - firstEpoch;
-        }
-        if (age <= 3 * 86400 || nowTime < firstEpoch) {
-            fresh = true;
-        }
-    }
-    
-    if (fresh) {
         g_recentLaunches = tempLaunches;
         calculateFormationsForItems(g_recentLaunches);
         recentLaunchDownloadSuccess = true;
         recentLaunchSelectedIndex = 0;
         recentLaunchErrorMsg = "Loaded from local cache.";
-        LOG_I("RECENT_LAUNCH", "Loaded %d launches from local cache, age is fresh.", g_recentLaunches.size());
+        LOG_I("RECENT_LAUNCH", "Loaded %d launches from local cache.", (int)g_recentLaunches.size());
     } else {
-        LOG_I("RECENT_LAUNCH", "Local cache TLE is expired. Needs download.");
+        LOG_I("RECENT_LAUNCH", "Failed to parse local cache JSONL.");
     }
 }
 
@@ -2008,6 +2034,18 @@ void drawSatSelectPage() {
             yPos += itemSpacing;
         }
         
+        // Draw page index indicator
+        {
+            int totalCount = NUM_SATELLITES + 1;
+            int totalPages = (totalCount + itemsPerPage - 1) / itemsPerPage;
+            int currentPage = (satSelectedIndex / itemsPerPage) + 1;
+            int currentIdx = satSelectedIndex + 1;
+            char pageBuf[32];
+            sprintf(pageBuf, "(%d %d/%d)", currentIdx, currentPage, totalPages);
+            canvas->setTextColor(canvas->color565(110, 150, 180));
+            canvas->drawString(pageBuf, 28, bottomLimit - 9);
+        }
+        
         // Right Panel (Description)
         canvas->drawFastVLine(85, 20, bottomLimit - 20, TFT_DARKGREY);
         
@@ -2423,6 +2461,18 @@ void drawSatSelectPage() {
                 yPos += itemSpacing;
             }
             
+            // Draw page index indicator for Recent Launch
+            if (totalItems > 0) {
+                int totalCount = totalItems;
+                int totalPages = (totalCount + itemsPerPage - 1) / itemsPerPage;
+                int currentPage = (recentLaunchSelectedIndex / itemsPerPage) + 1;
+                int currentIdx = recentLaunchSelectedIndex + 1;
+                char pageBuf[32];
+                sprintf(pageBuf, "(%d %d/%d)", currentIdx, currentPage, totalPages);
+                canvas->setTextColor(canvas->color565(110, 150, 180));
+                canvas->drawString(pageBuf, 28, bottomLimit - 9);
+            }
+            
             canvas->drawFastVLine(85, 20, bottomLimit - 20, TFT_DARKGREY);
             
             int rightX = 89;
@@ -2705,6 +2755,19 @@ void drawSatSelectPage() {
 }
 
 void loop() {
+    // Debug helper to clear update timestamp via serial
+    if (Serial.available()) {
+        char debugChar = Serial.read();
+        if (debugChar == 'c' || debugChar == 'C') {
+            if (LittleFS.exists("/recent_last_update.txt")) {
+                LittleFS.remove("/recent_last_update.txt");
+                LOG_I("APP", "Local update timestamp cleared! Rate limit bypassed.");
+            } else {
+                LOG_I("APP", "No timestamp file found. Ready to download.");
+            }
+        }
+    }
+
     // Sync coordinates and manual mode from pos_manager to main.cpp global variables
     if (pos_manager) {
         PositionData currentPos = pos_manager->getPosition();
@@ -2725,35 +2788,64 @@ void loop() {
         }
     }
 
-    if (g_recentLaunchesPending) {
-        g_recentLaunches = std::move(g_pendingRecentLaunches);
-        g_pendingRecentLaunches.clear();
-        g_recentLaunchesPending = false;
-        bool hasSelected = false;
-        for (auto& item : g_recentLaunches) {
-            if (item.selected) {
-                if (item.batchId == recentLaunchActiveBatchId) {
-                    hasSelected = true;
+    if (g_recentLaunchRefreshPending) {
+        g_recentLaunchRefreshPending = false;
+        
+        std::vector<RecentLaunchItem>* tempLaunches = new std::vector<RecentLaunchItem>();
+        if (tempLaunches && OrbitDataProvider::loadRecentLaunchesFromCache(*tempLaunches) && !tempLaunches->empty()) {
+            std::sort(tempLaunches->begin(), tempLaunches->end(), [](const RecentLaunchItem& a, const RecentLaunchItem& b) {
+                auto getTrueYearAndNum = [](const String& id) -> std::pair<int, int> {
+                    if (id.length() < 5) return {0, 0};
+                    int yr = id.substring(0, 2).toInt();
+                    int trueYr = (yr >= 50) ? (1900 + yr) : (2000 + yr);
+                    int num = id.substring(2).toInt();
+                    return {trueYr, num};
+                };
+                auto valA = getTrueYearAndNum(a.batchId);
+                auto valB = getTrueYearAndNum(b.batchId);
+                if (valA.first != valB.first) {
+                    return valA.first > valB.first;
                 }
-                initRecentLaunchCalcs(item);
-            }
-        }
-        if (!hasSelected && g_recentLaunchFocusMode) {
+                return valA.second > valB.second;
+            });
+            
+            calculateFormationsForItems(*tempLaunches);
+            g_recentLaunches = std::move(*tempLaunches);
+            
+            bool hasSelected = false;
             for (auto& item : g_recentLaunches) {
                 if (item.selected) {
-                    recentLaunchActiveBatchId = item.batchId;
+                    if (item.batchId == recentLaunchActiveBatchId) {
+                        hasSelected = true;
+                    }
                     initRecentLaunchCalcs(item);
-                    hasSelected = true;
-                    break;
                 }
             }
-            if (!hasSelected) {
-                g_recentLaunchFocusMode = false;
-                recentLaunchActiveBatchId = "";
-                g_repSatInitialized = false;
+            if (!hasSelected && g_recentLaunchFocusMode) {
+                for (auto& item : g_recentLaunches) {
+                    if (item.selected) {
+                        recentLaunchActiveBatchId = item.batchId;
+                        initRecentLaunchCalcs(item);
+                        hasSelected = true;
+                        break;
+                    }
+                }
+                if (!hasSelected) {
+                    g_recentLaunchFocusMode = false;
+                    recentLaunchActiveBatchId = "";
+                    g_repSatInitialized = false;
+                }
             }
+            recentLaunchSelectedIndex = 0;
+            recentLaunchDownloadSuccess = true;
+            recentLaunchErrorMsg = "Downloaded successfully!";
+            LOG_I("APP", "Applied new recent launches safely on main core.");
+        } else {
+            recentLaunchErrorMsg = "Parse Cache Failed!";
         }
-        LOG_I("APP", "Applied new recent launches safely on main core.");
+        delete tempLaunches;
+        recentLaunchDownloading = false;
+        recentLaunchDownloadFinishedMs = millis();
     }
 
     bool isFastForwarding = false;
@@ -3417,14 +3509,21 @@ void loop() {
                     }
                 } else if (justH) {
                     showListHelp = true;
-                } else if (justW) {
+                } else if (justW || justC) {
                     if (currentSatTab == TAB_RECENT_LAUNCH) {
                         if (g_networkActive) {
                             recentLaunchErrorMsg = "System Busy... Wait.";
+                            recentLaunchDownloadSuccess = false;
                             recentLaunchDownloadFinishedMs = millis();
                             drawSatSelectPage();
                             pushCanvasWithFilter();
                         } else if (!recentLaunchDownloading) {
+                            if (justC) {
+                                if (LittleFS.exists("/recent_last_update.txt")) {
+                                    LittleFS.remove("/recent_last_update.txt");
+                                    LOG_I("APP", "Bypassed rate limiting via physical C key");
+                                }
+                            }
                             recentLaunchDownloading = true;
                             recentLaunchErrorMsg = "Connecting WiFi...";
                             drawSatSelectPage();
@@ -3438,25 +3537,43 @@ void loop() {
                             }
                         }
                     } else {
-                        if (g_networkActive) {
-                            downloadErrorMsg = "System Busy... Wait.";
-                            drawSatSelectPage();
-                            pushCanvasWithFilter();
-                        } else if (!HalWifi::isConnected()) {
-                            manualWifiToggle = true;
-                            downloadErrorMsg = "Connecting to WiFi...";
-                            drawSatSelectPage();
-                            pushCanvasWithFilter();
-                            BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 12288, NULL, 1, NULL, 0);
-                            if (res != pdPASS) {
-                                downloadErrorMsg = "Task Init Failed!";
+                        if (justC && currentSatTab == TAB_ENCYCLOPEDIA && satSelectedIndex >= 0 && satSelectedIndex < NUM_SATELLITES) {
+                            if (g_networkActive) {
+                                downloadErrorMsg = "System Busy... Wait.";
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
+                            } else {
+                                downloadErrorMsg = "Refreshing TLE...";
+                                drawSatSelectPage();
+                                pushCanvasWithFilter();
+                                BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 12288, (void*)(intptr_t)satSelectedIndex, 1, NULL, 0);
+                                if (res != pdPASS) {
+                                    downloadErrorMsg = "Task Init Failed!";
+                                    drawSatSelectPage();
+                                    pushCanvasWithFilter();
+                                }
                             }
-                        } else {
-                            WiFi.disconnect(true);
-                            WiFi.mode(WIFI_OFF);
-                            downloadErrorMsg = "WiFi Disconnected.";
+                        } else if (!justC) { // Prevent C from triggering WiFi toggle in other tabs
+                            if (g_networkActive) {
+                                downloadErrorMsg = "System Busy... Wait.";
+                                drawSatSelectPage();
+                                pushCanvasWithFilter();
+                            } else if (!HalWifi::isConnected()) {
+                                manualWifiToggle = true;
+                                downloadErrorMsg = "Connecting to WiFi...";
+                                drawSatSelectPage();
+                                pushCanvasWithFilter();
+                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 12288, NULL, 1, NULL, 0);
+                                if (res != pdPASS) {
+                                    downloadErrorMsg = "Task Init Failed!";
+                                    drawSatSelectPage();
+                                    pushCanvasWithFilter();
+                                }
+                            } else {
+                                WiFi.disconnect(true);
+                                WiFi.mode(WIFI_OFF);
+                                downloadErrorMsg = "WiFi Disconnected.";
+                            }
                         }
                     }
                 } else if (currentSatTab == TAB_RECENT_LAUNCH) {

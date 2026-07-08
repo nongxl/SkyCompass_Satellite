@@ -212,8 +212,10 @@ Application (Earth View / Recommended / HAM / GUI)
 ### 支持的数据格式 (Supported Formats)
 
 * **TLE (Legacy)**：传统双行元素法，自动兼容已有的历史卫星本地缓存。
-* **CelesTrak GP JSON (Default)**：新一代默认数据交换格式，支持直接拉取 OMM 参数，原生支持 6 位 Catalog Number。
-* **OMM (Reserved)**：CCSDS 轨道参数电文，已预留扩展接口。
+* **CelesTrak GP JSON (Default)**：新一代默认数据交换格式，基于 CCSDS OMM 标准字段定义的 JSON 衍生格式。系统已完全落地该格式，通过 [JSONParser](file:///d:/workspace/SkyCompass_Satellite/src/core/json_parser.h) 原生解析并拉取 6 位 Catalog Number 卫星的物理轨道要素。
+* **OMM (Reserved)**：CCSDS 原始轨道参数电文（包括 OMM XML 与 OMM KVN 格式）。由于 OMM XML 报文体非常冗长（公告中提到比 TLE 臃肿了 7 倍以上），在 ESP32 这类嵌入式微控制器上进行复杂的 XML 树解析和流式读取开销极大，因此在设计上：
+  * 我们预留了 [OrbitParser](file:///d:/workspace/SkyCompass_Satellite/src/core/orbit_parser.h) 解析基类，以便未来若不得不直接解析纯正 OMM XML/KVN 报文时，可以扩展编写类似 `XMLOMMParser` 等组件。
+  * 而在实际落地时，我们选择了更易于在嵌入式设备上流式反序列化的 GP JSON 格式作为首选数据交换格式（由 [JSONParser](file:///d:/workspace/SkyCompass_Satellite/src/core/json_parser.h) 实现）。
 
 整个系统已经兼容未来六位 Catalog Number，并使用轨道要素逆向构建 Pseudo TLE 的桥接技术，无缝兼容只接收 TLE 的底层 SGP4 物理库，同时保证业务展示层和数据存储层均保存完整、真实的 6 位 NORAD 卫星 ID。
 

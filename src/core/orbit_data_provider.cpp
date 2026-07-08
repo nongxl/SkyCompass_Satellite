@@ -1,12 +1,14 @@
 #include "orbit_data_provider.h"
 #include "json_parser.h"
+#include "log_manager.h"
 #include "tle_parser.h"
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <LittleFS.h>
 
 // Helper to streamingly read a single JSON object from stream
-static String readNextJsonObject(WiFiClient* stream) {
+static String readNextJsonObject(WiFiClient* stream, int& totalReadBytes) {
     String json = "";
     int braceCount = 0;
     bool inString = false;
@@ -24,6 +26,10 @@ static String readNextJsonObject(WiFiClient* stream) {
         }
         char c = stream->read();
         if (c == -1) break;
+        totalReadBytes++;
+        startMs = millis(); // Reset timeout timer on receiving any byte
+        
+        if (c == '\r' || c == '\n') continue;
         
         if (!foundStart) {
             if (c == '{') {
@@ -84,13 +90,15 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
         }
     }
     
-    WiFiClient client;
+    WiFiClientSecure* client = new WiFiClientSecure();
+    if (!client) return false;
+    client->setInsecure();
     HTTPClient http;
     http.setTimeout(15000);
     char url[128];
-    sprintf(url, "http://celestrak.org/NORAD/elements/gp.php?CATNR=%u&FORMAT=json", (unsigned int)catNum);
+    sprintf(url, "https://celestrak.org/NORAD/elements/gp.php?CATNR=%u&FORMAT=json", (unsigned int)catNum);
     
-    http.begin(client, url);
+    http.begin(*client, url);
     int httpCode = http.GET();
     bool success = false;
     if (httpCode == HTTP_CODE_OK) {
@@ -112,6 +120,7 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
         }
     }
     http.end();
+    delete client;
     return success;
 }
 
@@ -177,55 +186,106 @@ static void processRecentLaunchItem(std::vector<RecentLaunchItem>& tempLaunches,
 
 // Download Recent Launches and save to JSONL
 bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& tempLaunches) {
-    WiFiClient client;
-    client.setTimeout(30000);
+    WiFiClientSecure* client = new WiFiClientSecure();
+    if (!client) return false;
+    client->setInsecure();
+    client->setTimeout(30000);
     
     HTTPClient http;
     http.setTimeout(60000);
     http.setConnectTimeout(30000);
     
-    String url = "http://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=json";
-    http.begin(client, url);
+    String url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=json";
+    http.begin(*client, url);
     int httpCode = http.GET();
     
     if (httpCode != HTTP_CODE_OK) {
         http.end();
+        delete client;
         return false;
     }
     
+    int expectedSize = http.getSize();
     WiFiClient* stream = http.getStreamPtr();
     File f = LittleFS.open("/json_recent_raw.jsonl", "w");
     
-    tempLaunches.clear();
-    tempLaunches.reserve(30);
-    
-    JSONParser parser;
     int rawCount = 0;
+    int totalReadBytes = 0;
     
     while (stream->connected() || stream->available()) {
-        String singleJson = readNextJsonObject(stream);
+        String singleJson = readNextJsonObject(stream, totalReadBytes);
         if (singleJson.length() == 0) {
-            if (!stream->available()) break;
+            if (!stream->connected() && !stream->available()) break;
+            if (expectedSize > 0 && totalReadBytes >= expectedSize) {
+                LOG_I("RECENT_LAUNCH", "Stream completed successfully via size checking (%d/%d bytes)", totalReadBytes, expectedSize);
+                break;
+            }
             continue;
         }
         
-        OrbitRecord record;
-        if (parser.parse(singleJson, record)) {
-            if (f) {
-                singleJson.replace("\r", "");
-                singleJson.replace("\n", ""); 
-                f.println(singleJson);
-                rawCount++;
-            }
-            processRecentLaunchItem(tempLaunches, record);
+        if (f) {
+            f.println(singleJson);
+            rawCount++;
+        }
+        
+        if (expectedSize > 0 && totalReadBytes >= expectedSize) {
+            LOG_I("RECENT_LAUNCH", "Stream completed successfully via size checking (%d/%d bytes)", totalReadBytes, expectedSize);
+            break;
         }
     }
     
     if (f) {
         f.close();
     }
-    http.end();
+    http.end(); // Disconnect SSL socket to release TLS heap memory
+    delete client;
     
+    LOG_I("RECENT_LAUNCH", "Download finished. Raw json lines saved: %d. Expected size: %d, actual read size: %d", rawCount, expectedSize, totalReadBytes);
+    if (rawCount > 0) {
+        return true;
+    }
+    return false;
+}
+
+bool OrbitDataProvider::loadRecentLaunchesFromCache(std::vector<RecentLaunchItem>& tempLaunches) {
+    File f = LittleFS.open("/json_recent_raw.jsonl", "r");
+    if (!f) {
+        LOG_I("DEBUG", "loadRecentLaunchesFromCache: Failed to open /json_recent_raw.jsonl");
+        return false;
+    }
+    
+    tempLaunches.clear();
+    tempLaunches.reserve(30);
+    
+    JSONParser parser;
+    int rawCount = 0;
+    int parseSuccessCount = 0;
+    int lineCount = 0;
+    
+    while (f.available()) {
+        lineCount++;
+        String singleJson = f.readStringUntil('\n');
+        singleJson.trim();
+        if (singleJson.length() == 0) continue;
+        
+        if (lineCount <= 5) {
+            LOG_I("DEBUG", "JSON Line %d (len %d): %s", lineCount, (int)singleJson.length(), singleJson.c_str());
+        }
+        
+        OrbitRecord record;
+        if (parser.parse(singleJson, record)) {
+            parseSuccessCount++;
+            rawCount++;
+            processRecentLaunchItem(tempLaunches, record);
+        } else {
+            if (lineCount <= 5) {
+                LOG_I("DEBUG", "JSON Parse Failed for Line %d", lineCount);
+            }
+        }
+    }
+    
+    f.close();
+    LOG_I("DEBUG", "loadRecentLaunchesFromCache finished: Total Lines: %d, Parse Success: %d, Launches Created: %d", lineCount, parseSuccessCount, (int)tempLaunches.size());
     return rawCount > 0;
 }
 
