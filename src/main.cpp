@@ -885,6 +885,7 @@ struct NetworkParams {
 
 void fetchFrequencies() {
     PredictorTaskSuspendGuard predGuard;
+    delay(100); // Wait for LwIP TCP stack to reclaim memory from previous connections
     WiFiClientSecure *client = new WiFiClientSecure;
     if (!client) return;
     client->setInsecure();
@@ -1098,6 +1099,7 @@ void recentLaunchNetworkTaskImpl() {
     
     if (!success) {
         recentLaunchErrorMsg = "Downloading GP JSON...";
+        delay(200); // Give ESP32 stack and heap a brief breathing room to reclaim socket memory
         std::vector<RecentLaunchItem> dummy;
         success = OrbitDataProvider::downloadRecentLaunches(dummy);
         if (success) {
@@ -4202,10 +4204,14 @@ void loop() {
                             data.isSelected = (isSatViewMode && g_recentLaunchFocusMode);
                             data.calc = &g_repSatCalc;
                             
-                            calculateOrbit(g_repSatCalc, simTime, g_repSatCache.cache, orbitsCalculatedThisFrame, isFastForwarding);
-                            
-                            data.pastOrbit = &(g_repSatCache.cache.past);
-                            data.futureOrbit = &(g_repSatCache.cache.future);
+                            if (appState == STATE_MAIN) {
+                                calculateOrbit(g_repSatCalc, simTime, g_repSatCache.cache, orbitsCalculatedThisFrame, isFastForwarding);
+                                data.pastOrbit = &(g_repSatCache.cache.past);
+                                data.futureOrbit = &(g_repSatCache.cache.future);
+                            } else {
+                                data.pastOrbit = nullptr;
+                                data.futureOrbit = nullptr;
+                            }
                             data.lastCalcTime = g_repSatCache.cache.lastCalcTime;
                             
                             // Set mission formation fields
@@ -4295,10 +4301,14 @@ void loop() {
                             data.launchEpoch = item.epoch;
                             data.simTime = simTime;
                             
-                            calculateOrbit(*(item.calc), simTime, item.cache.cache, orbitsCalculatedThisFrame, isFastForwarding);
-                            
-                            data.pastOrbit = &(item.cache.cache.past);
-                            data.futureOrbit = &(item.cache.cache.future);
+                            if (appState == STATE_MAIN) {
+                                calculateOrbit(*(item.calc), simTime, item.cache.cache, orbitsCalculatedThisFrame, isFastForwarding);
+                                data.pastOrbit = &(item.cache.cache.past);
+                                data.futureOrbit = &(item.cache.cache.future);
+                            } else {
+                                data.pastOrbit = nullptr;
+                                data.futureOrbit = nullptr;
+                            }
                             data.lastCalcTime = item.cache.cache.lastCalcTime;
                             
                             // Set mission formation fields for non-focus representitive sat render
@@ -4343,10 +4353,14 @@ void loop() {
                         data.color = TFT_GREEN;
                         data.isVisible = true;
                         
-                        calculateOrbit(obj.calc, simTime, obj.cache, orbitsCalculatedThisFrame, isFastForwarding);
-                        
-                        data.pastOrbit = &(obj.cache.past);
-                        data.futureOrbit = &(obj.cache.future);
+                        if (appState == STATE_MAIN) {
+                            calculateOrbit(obj.calc, simTime, obj.cache, orbitsCalculatedThisFrame, isFastForwarding);
+                            data.pastOrbit = &(obj.cache.past);
+                            data.futureOrbit = &(obj.cache.future);
+                        } else {
+                            data.pastOrbit = nullptr;
+                            data.futureOrbit = nullptr;
+                        }
                         
                         // Uniform display names for all launch target objects with its launch epoch dates
                         static String sNameCache[5];
@@ -4454,10 +4468,14 @@ void loop() {
                     data.calc = &(g_satellites[i].calc);
                     data.simTime = simTime;
                     
-                    calculateOrbit(g_satellites[i].calc, simTime, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding);
-                    
-                    data.pastOrbit = &(g_satellites[i].cache.past);
-                    data.futureOrbit = &(g_satellites[i].cache.future);
+                    if (appState == STATE_MAIN) {
+                        calculateOrbit(g_satellites[i].calc, simTime, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding);
+                        data.pastOrbit = &(g_satellites[i].cache.past);
+                        data.futureOrbit = &(g_satellites[i].cache.future);
+                    } else {
+                        data.pastOrbit = nullptr;
+                        data.futureOrbit = nullptr;
+                    }
                     
                     sats.push_back(data);
                 } else {

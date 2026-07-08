@@ -15,19 +15,23 @@ static String readNextJsonObject(WiFiClient* stream, int& totalReadBytes) {
     bool escaped = false;
     bool foundStart = false;
     
-    uint32_t startMs = millis();
-    while (millis() - startMs < 8000) { 
+    uint32_t waitMs = 0;
+    while (waitMs < 5000) { 
         if (!stream->available()) {
             delay(10);
+            waitMs += 10;
             if (!stream->connected() && !stream->available()) {
                 break;
+            }
+            if (totalReadBytes > 0 && waitMs >= 1000) {
+                break; // Stream idle timeout (likely completed but Keep-Alive is active)
             }
             continue;
         }
         char c = stream->read();
         if (c == -1) break;
         totalReadBytes++;
-        startMs = millis(); // Reset timeout timer on receiving any byte
+        waitMs = 0; // Reset wait timer on successfully reading a byte
         
         if (c == '\r' || c == '\n') continue;
         
@@ -90,6 +94,7 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
         }
     }
     
+    delay(100); // Wait for LwIP TCP stack to reclaim memory
     WiFiClientSecure* client = new WiFiClientSecure();
     if (!client) return false;
     client->setInsecure();
@@ -186,6 +191,7 @@ static void processRecentLaunchItem(std::vector<RecentLaunchItem>& tempLaunches,
 
 // Download Recent Launches and save to JSONL
 bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& tempLaunches) {
+    delay(100); // Wait for LwIP TCP stack to reclaim memory
     WiFiClientSecure* client = new WiFiClientSecure();
     if (!client) return false;
     client->setInsecure();
@@ -218,6 +224,10 @@ bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& te
             if (!stream->connected() && !stream->available()) break;
             if (expectedSize > 0 && totalReadBytes >= expectedSize) {
                 LOG_I("RECENT_LAUNCH", "Stream completed successfully via size checking (%d/%d bytes)", totalReadBytes, expectedSize);
+                break;
+            }
+            if (totalReadBytes > 0 && !stream->available()) {
+                LOG_I("RECENT_LAUNCH", "Stream completed successfully via idle timeout (%d bytes read)", totalReadBytes);
                 break;
             }
             continue;
@@ -290,6 +300,7 @@ bool OrbitDataProvider::loadRecentLaunchesFromCache(std::vector<RecentLaunchItem
 }
 
 // Page load level 3 objects from jsonl file
+// Page load level 3 objects from jsonl file
 extern std::vector<LazyObjectItem> g_level3Objects;
 bool OrbitDataProvider::loadLevel3ObjectsPage(const RecentLaunchItem& item, int page) {
     g_level3Objects.clear();
@@ -302,38 +313,39 @@ bool OrbitDataProvider::loadLevel3ObjectsPage(const RecentLaunchItem& item, int 
     
     JSONParser parser;
     
+    String cosparForm = "";
+    if (item.batchId.length() == 5 && isdigit(item.batchId[0]) && isdigit(item.batchId[1])) {
+        cosparForm = "20" + item.batchId.substring(0, 2) + "-" + item.batchId.substring(2);
+    }
+    
     while (f.available() && loadCount < 5) {
         String singleLine = f.readStringUntil('\n');
         singleLine.trim();
         if (singleLine.length() == 0) continue;
         
-        // Fast pre-filter using substring search to avoid expensive JSON deserialization
+        // Cheap text pre-filtering using index search
         bool match = false;
         if (singleLine.indexOf(item.batchId) != -1) {
             match = true;
-        } else if (item.batchId.length() == 5 && isdigit(item.batchId[0]) && isdigit(item.batchId[1])) {
-            String cosparForm = "20" + item.batchId.substring(0, 2) + "-" + item.batchId.substring(2);
-            if (singleLine.indexOf(cosparForm) != -1) {
-                match = true;
-            }
+        } else if (cosparForm.length() > 0 && singleLine.indexOf(cosparForm) != -1) {
+            match = true;
         }
-        if (!match) continue;
         
-        OrbitRecord record;
-        if (parser.parse(singleLine, record)) {
-            if (record.getBatchId() == item.batchId) {
-                if (matchIndex >= skipCount) {
+        if (match) {
+            if (matchIndex >= skipCount) {
+                OrbitRecord record;
+                if (parser.parse(singleLine, record)) {
                     LazyObjectItem obj;
                     obj.name = record.name;
                     obj.orbit = record; 
-                    obj.calc.init(obj.orbit);
+                    obj.calc.init(obj.orbit); // Heavy calculations done only for visible 5 items
                     obj.lastGeoValid = false;
                     obj.isVisible = false;
                     g_level3Objects.push_back(obj);
                     loadCount++;
                 }
-                matchIndex++;
             }
+            matchIndex++;
         }
     }
     f.close();

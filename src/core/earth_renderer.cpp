@@ -930,8 +930,8 @@ void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
     std::uint16_t* buffer = (std::uint16_t*)_canvas->getBuffer();
     if (!buffer) return;
     
-    // Draw 1/4 of the light points during fast-forwarding to maintain 30 FPS, full 3000 points when static.
-    int step = _isFastForwarding ? 4 : 1;
+    // Draw all light points under all states (including fast-forwarding / time adjustment)
+    int step = 1;
     
     for (int i = 0; i < light_points_count; i += step) {
         float sin_lat = light_points[i].sinLat;
