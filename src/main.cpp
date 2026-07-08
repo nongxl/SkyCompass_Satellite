@@ -3104,6 +3104,10 @@ void loop() {
                         if (isManualLocationMode) {
                             PositionData currentPos = {baseUserLat, baseUserLon, baseUserAlt};
                             pos_manager->setManualPosition(currentPos);
+                        } else {
+                            // Sync manually adjusted coordinates to main active coordinates to prevent rollback
+                            PositionData manualPos = pos_manager->getPosition();
+                            pos_manager->setPosition(manualPos);
                         }
                         pos_manager->enableManualPosition(isManualLocationMode);
                     }
@@ -3160,6 +3164,9 @@ void loop() {
                     } else if (isManualLocationMode) {
                         isManualLocationMode = false;
                         if (pos_manager) {
+                            // Sync manually adjusted coordinates to main active coordinates to prevent rollback
+                            PositionData manualPos = pos_manager->getPosition();
+                            pos_manager->setPosition(manualPos);
                             pos_manager->enableManualPosition(false);
                         }
                         Preferences posPrefs;
