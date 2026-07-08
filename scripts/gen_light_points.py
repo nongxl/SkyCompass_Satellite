@@ -82,8 +82,8 @@ def assemble_and_sample(tiles):
             
             # Threshold filtering
             if brightness > 20:
-                # Use brightness squared for weights inside each tier
-                weight = float(brightness) ** 2.0
+                # Use moderate 1.1 power for weights to prevent megacities from starving interior capital cities
+                weight = float(brightness) ** 1.1
                 lit_pixels.append({
                     'lat': lat,
                     'lon': lon,
@@ -99,11 +99,11 @@ def assemble_and_sample(tiles):
         
     random.seed(42) # Set seed for reproducible builds
     
-    # Stratified Bins definition
-    tier1_cand = [p for p in lit_pixels if p['brightness'] >= 180]
-    tier2_cand = [p for p in lit_pixels if 100 <= p['brightness'] < 180]
-    tier3_cand = [p for p in lit_pixels if 50 <= p['brightness'] < 100]
-    tier4_cand = [p for p in lit_pixels if 20 <= p['brightness'] < 50]
+    # Stratified Bins definition (Lower thresholds to capture medium-large inland capitals in higher tiers)
+    tier1_cand = [p for p in lit_pixels if p['brightness'] >= 150]
+    tier2_cand = [p for p in lit_pixels if 80 <= p['brightness'] < 150]
+    tier3_cand = [p for p in lit_pixels if 40 <= p['brightness'] < 80]
+    tier4_cand = [p for p in lit_pixels if 20 <= p['brightness'] < 40]
     
     print(f"Tiers - T1: {len(tier1_cand)}, T2: {len(tier2_cand)}, T3: {len(tier3_cand)}, T4: {len(tier4_cand)}")
     
@@ -119,16 +119,16 @@ def assemble_and_sample(tiles):
     s1 = sample_without_replacement(tier1_cand, len(tier1_cand))
     p1 = len(s1) * 6
     
-    # Step 2: Tier 2 (High) -> Target 600 skeleton, 3 particles each
-    s2 = sample_without_replacement(tier2_cand, 600)
+    # Step 2: Tier 2 (High) -> Target 900 skeleton, 3 particles each
+    s2 = sample_without_replacement(tier2_cand, 900)
     p2 = len(s2) * 3
     
-    # Step 3: Tier 3 (Medium) -> Target 700 skeleton, 2 particles each
-    s3 = sample_without_replacement(tier3_cand, 700)
+    # Step 3: Tier 3 (Medium) -> Target 1200 skeleton, 2 particles each
+    s3 = sample_without_replacement(tier3_cand, 1200)
     p3 = len(s3) * 2
     
     # Step 4: Tier 4 (Low) -> Calculate remaining spots, 1 particle each
-    remaining = 6000 - (p1 + p2 + p3)
+    remaining = 9000 - (p1 + p2 + p3)
     s4 = sample_without_replacement(tier4_cand, remaining)
     
     print(f"Skeleton selected - T1: {len(s1)}, T2: {len(s2)}, T3: {len(s3)}, T4: {len(s4)}")
@@ -155,7 +155,7 @@ def assemble_and_sample(tiles):
     append_particles(s4, 1, 0.0)    # Tier 4: No jitter (0.0 pixel, exact coordinates)
     
     # Pad if total count drifts slightly due to list sizing
-    while len(sampled_points) < 6000 and s2:
+    while len(sampled_points) < 9000 and s2:
         s = random.choice(s2)
         lat_jitter = s['lat'] + random.uniform(-0.3, 0.3)
         lon_jitter = s['lon'] + random.uniform(-0.3, 0.3)
