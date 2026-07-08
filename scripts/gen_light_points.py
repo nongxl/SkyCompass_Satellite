@@ -119,16 +119,16 @@ def assemble_and_sample(tiles):
     s1 = sample_without_replacement(tier1_cand, len(tier1_cand))
     p1 = len(s1) * 6
     
-    # Step 2: Tier 2 (High) -> Target 300 skeleton, 3 particles each
-    s2 = sample_without_replacement(tier2_cand, 300)
+    # Step 2: Tier 2 (High) -> Target 600 skeleton, 3 particles each
+    s2 = sample_without_replacement(tier2_cand, 600)
     p2 = len(s2) * 3
     
-    # Step 3: Tier 3 (Medium) -> Target 350 skeleton, 2 particles each
-    s3 = sample_without_replacement(tier3_cand, 350)
+    # Step 3: Tier 3 (Medium) -> Target 700 skeleton, 2 particles each
+    s3 = sample_without_replacement(tier3_cand, 700)
     p3 = len(s3) * 2
     
     # Step 4: Tier 4 (Low) -> Calculate remaining spots, 1 particle each
-    remaining = 3000 - (p1 + p2 + p3)
+    remaining = 6000 - (p1 + p2 + p3)
     s4 = sample_without_replacement(tier4_cand, remaining)
     
     print(f"Skeleton selected - T1: {len(s1)}, T2: {len(s2)}, T3: {len(s3)}, T4: {len(s4)}")
@@ -155,7 +155,7 @@ def assemble_and_sample(tiles):
     append_particles(s4, 1, 0.0)    # Tier 4: No jitter (0.0 pixel, exact coordinates)
     
     # Pad if total count drifts slightly due to list sizing
-    while len(sampled_points) < 3000 and s2:
+    while len(sampled_points) < 6000 and s2:
         s = random.choice(s2)
         lat_jitter = s['lat'] + random.uniform(-0.3, 0.3)
         lon_jitter = s['lon'] + random.uniform(-0.3, 0.3)
