@@ -2854,7 +2854,9 @@ void loop() {
             lastPredictionBaseTime = 0; // 缓存失效
             predictionsReady = false;
             portEXIT_CRITICAL(&passMutex);
-            triggerPrediction = true;
+            if (lastTimeAdjustMillis == 0) {
+                triggerPrediction = true;
+            }
         }
     }
 
