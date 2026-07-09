@@ -613,26 +613,41 @@ void doScreenshot() {
     log_i("[Screenshot] Done. Sent %d bytes raw RGB565 (%dx%d)", total, w, h);
 }
 // Helper to pre-calculate orbits with caching
-void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& calcCount, bool isFastForwarding) {
+void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& calcCount, bool isFastForwarding, bool forceUpdate = false) {
     static uint32_t lastGlobalCalcMs = 0;
-    if (isFastForwarding) {
+    if (isFastForwarding && !forceUpdate) {
         // Fast forwarding: DO NOT recalculate heavy orbit paths to ensure smooth input.
         return;
     }
     
     // 限制物理时间上的计算频率。如果上一帧刚刚重算过轨道，那么在物理时间 120 毫秒内，
     // 任何卫星都不能进行轨道线重算（除非是首次计算），确保在任何高速按键或滑动操作下的丝滑帧率。
-    if (cache.lastCalcTime != 0 && millis() - lastGlobalCalcMs < 120) {
+    // 如果是焦点卫星强制刷新（forceUpdate），则绕过该物理冷却锁。
+    if (!forceUpdate && cache.lastCalcTime != 0 && millis() - lastGlobalCalcMs < 120) {
         return;
     }
     
     // Only recalculate orbit path if simulated time has advanced by more than 5 minutes (300 seconds)
-    if (cache.lastCalcTime == 0 || abs((int)baseTime - (int)cache.lastCalcTime) > 300) {
-        if (calcCount >= 1) { // Max 1 expensive calculation per frame to prevent lag spikes
+    // 如果是焦点卫星强制刷新，则时间发生微小的 60 秒以上改变（即哪怕点按一下时间微调）就进行重新预测
+    bool needsCalc = false;
+    if (cache.lastCalcTime == 0) {
+        needsCalc = true;
+    } else {
+        if (forceUpdate) {
+            needsCalc = (abs((int)baseTime - (int)cache.lastCalcTime) > 60);
+        } else {
+            needsCalc = (abs((int)baseTime - (int)cache.lastCalcTime) > 300);
+        }
+    }
+
+    if (needsCalc) {
+        if (!forceUpdate && calcCount >= 1) { // Max 1 expensive calculation per frame to prevent lag spikes
             return;
         }
-        lastGlobalCalcMs = millis();
-        calcCount++;
+        if (!forceUpdate) {
+            lastGlobalCalcMs = millis();
+            calcCount++;
+        }
         
         cache.past.clear();
         cache.future.clear();
@@ -640,7 +655,7 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
         double teme_x, teme_y, teme_z;
         
         // Past 45 minutes, every 3 minutes (lower resolution to save CPU)
-        for (int i = 45; i > 0; i -= 3) {
+        for (int i = 45; i >= 0; i -= 3) {
             uint32_t t = baseTime - i * 60;
             if (calc.getTEME(t, teme_x, teme_y, teme_z)) {
                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
@@ -650,7 +665,7 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
         }
         
         // Future 45 minutes, every 3 minutes
-        for (int i = 3; i <= 45; i += 3) {
+        for (int i = 0; i <= 45; i += 3) {
             uint32_t t = baseTime + i * 60;
             if (calc.getTEME(t, teme_x, teme_y, teme_z)) {
                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
@@ -730,6 +745,7 @@ portMUX_TYPE passMutex = portMUX_INITIALIZER_UNLOCKED;
 
 volatile bool triggerPrediction = true;
 uint32_t lastTimeAdjustMillis = 0;
+volatile uint32_t g_currentPredictingBaseTime = 0;
 
 void predictorTask(void* parameter) {
     while (true) {
@@ -755,6 +771,7 @@ void predictorTask(void* parameter) {
         
         // Use simulated time for predictions
         uint32_t startTime = current_unix + timeMachineOffset;
+        g_currentPredictingBaseTime = startTime;
         
         int numSatsToPredict = 0;
         RecentLaunchItem* activeGroup = nullptr;
@@ -838,6 +855,7 @@ void predictorTask(void* parameter) {
             if (cancelPrediction) {
                 cancelPrediction = false;
                 g_orbitCalculating = false; // 强行熄灭 Chain Mono 的计算动画
+                g_currentPredictingBaseTime = 0;
             }
             continue;
         }
@@ -860,6 +878,7 @@ void predictorTask(void* parameter) {
         recommendedPasses = upcomingPasses;
         predictionsReady = true;
         lastPredictionBaseTime = startTime; // 写入本次成功的基准时间缓存
+        g_currentPredictingBaseTime = 0;
         
         // Auto-expand first category on finish
         catExpanded[0] = true;
@@ -2771,9 +2790,16 @@ void loop() {
             uint32_t targetTime = current_unix + timeMachineOffset;
             bool isCacheValid = false;
             portENTER_CRITICAL(&passMutex);
+            uint32_t baseTime = 0;
             if (predictionsReady && lastPredictionBaseTime != 0) {
+                baseTime = lastPredictionBaseTime;
+            } else if (g_orbitCalculating && g_currentPredictingBaseTime != 0) {
+                baseTime = g_currentPredictingBaseTime;
+            }
+            
+            if (baseTime != 0) {
                 int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
-                uint32_t day1 = (lastPredictionBaseTime + tzOffsetSec) / 86400;
+                uint32_t day1 = (baseTime + tzOffsetSec) / 86400;
                 uint32_t day2 = (targetTime + tzOffsetSec) / 86400;
                 if (day1 == day2) {
                     isCacheValid = true;
@@ -2782,11 +2808,16 @@ void loop() {
             portEXIT_CRITICAL(&passMutex);
             
             if (!isCacheValid) {
+                Serial.printf("[Debug] Time Machine resumed but cache invalid (day crossed). Resetting prediction. baseTime=%u, targetTime=%u\n", baseTime, targetTime);
                 portENTER_CRITICAL(&passMutex);
                 predictionsReady = false;
                 lastPredictionBaseTime = 0; // Invalid cache
+                g_currentPredictingBaseTime = 0;
+                cancelPrediction = true; // 跨天时必须打断当前进行的计算并重算
                 portEXIT_CRITICAL(&passMutex);
                 triggerPrediction = true;
+            } else {
+                Serial.printf("[Debug] Time Machine resumed, cache is valid (same day). Continuing calculation or keeping cache. baseTime=%u\n", baseTime);
             }
         }
     }
@@ -2887,11 +2918,8 @@ void loop() {
         recentLaunchDownloadFinishedMs = millis();
     }
 
-    bool isFastForwarding = false;
-    if (!showRecommendations && (M5Cardputer.Keyboard.isKeyPressed(',') || M5Cardputer.Keyboard.isKeyPressed('/'))) {
-        isFastForwarding = true;
-    }
     M5Cardputer.update();
+    bool isFastForwarding = (lastTimeAdjustMillis != 0);
 
     // BtnG0 (side button): trigger screenshot transfer via serial
     if (M5Cardputer.BtnA.wasPressed()) {
@@ -3005,7 +3033,7 @@ void loop() {
         static unsigned long keyHoldStartTime = 0;
         static char lastKey = 0;
         static unsigned long lastKeyRepeat = 0;
-        isFastForwarding = false;
+        isFastForwarding = (lastTimeAdjustMillis != 0);
         static double targetFocusAlt = 0.0;
         
         if (appState == STATE_MAIN) {
@@ -3112,7 +3140,6 @@ void loop() {
                 } else {
                     // Held down
                     if (millis() - keyHoldStartTime > 400) { // 400ms delay before repeat
-                        if (!isManualLocationMode && !showRecommendations) isFastForwarding = true; // Flag for rendering optimization
                         if (millis() - lastKeyRepeat > 33) { // ~30Hz repeat rate
                             lastKeyRepeat = millis();
                             handleContinuousKey(currentKey);
@@ -3124,10 +3151,6 @@ void loop() {
                     if (keyReleaseTime == 0) keyReleaseTime = millis();
                     if (millis() - keyReleaseTime > 150) { // 150ms debounce for I2C drops
                         lastKey = 0;
-                    } else {
-                        if (lastKey == ',' || lastKey == '/') {
-                            if (!isManualLocationMode && !showRecommendations) isFastForwarding = true;
-                        }
                     }
                 }
             }
@@ -3270,10 +3293,16 @@ void loop() {
                         uint32_t targetTime = current_unix + timeMachineOffset;
                         bool isCacheValid = false;
                         portENTER_CRITICAL(&passMutex);
+                        uint32_t baseTime = 0;
                         if (predictionsReady && lastPredictionBaseTime != 0) {
-                            // 获取时区秒数
+                            baseTime = lastPredictionBaseTime;
+                        } else if (g_orbitCalculating && g_currentPredictingBaseTime != 0) {
+                            baseTime = g_currentPredictingBaseTime;
+                        }
+                        
+                        if (baseTime != 0) {
                             int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
-                            uint32_t day1 = (lastPredictionBaseTime + tzOffsetSec) / 86400;
+                            uint32_t day1 = (baseTime + tzOffsetSec) / 86400;
                             uint32_t day2 = (targetTime + tzOffsetSec) / 86400;
                             if (day1 == day2) {
                                 isCacheValid = true;
@@ -3284,12 +3313,13 @@ void loop() {
                         Serial.printf("[Debug] Enter Panel: predictionsReady=%d, lastPredictionBaseTime=%u, targetTime=%u, isCacheValid=%d, g_orbitCalculating=%d, triggerPrediction=%d\n", 
                                       predictionsReady, lastPredictionBaseTime, targetTime, isCacheValid, g_orbitCalculating, triggerPrediction);
 
-                        bool needTrigger = !isCacheValid || !predictionsReady;
+                        bool needTrigger = !isCacheValid || (!predictionsReady && !g_orbitCalculating);
                         if (needTrigger && !g_orbitCalculating && !triggerPrediction) {
                             Serial.printf("[Debug] Triggering calculation. needTrigger=%d, isCacheValid=%d, predictionsReady=%d\n", needTrigger, isCacheValid, predictionsReady);
                             portENTER_CRITICAL(&passMutex);
                             predictionsReady = false;
                             lastPredictionBaseTime = 0;
+                            g_currentPredictingBaseTime = 0;
                             portEXIT_CRITICAL(&passMutex);
                             triggerPrediction = true;
                         }
@@ -4305,7 +4335,7 @@ void loop() {
                             data.calc = &g_repSatCalc;
                             
                             if (appState == STATE_MAIN) {
-                                calculateOrbit(g_repSatCalc, simTime, g_repSatCache.cache, orbitsCalculatedThisFrame, isFastForwarding);
+                                calculateOrbit(g_repSatCalc, simTime, g_repSatCache.cache, orbitsCalculatedThisFrame, isFastForwarding, (isSatViewMode && g_recentLaunchFocusMode));
                                 data.pastOrbit = &(g_repSatCache.cache.past);
                                 data.futureOrbit = &(g_repSatCache.cache.future);
                             } else {
@@ -4402,7 +4432,7 @@ void loop() {
                             data.simTime = simTime;
                             
                             if (appState == STATE_MAIN) {
-                                calculateOrbit(*(item.calc), simTime, item.cache.cache, orbitsCalculatedThisFrame, isFastForwarding);
+                                calculateOrbit(*(item.calc), simTime, item.cache.cache, orbitsCalculatedThisFrame, isFastForwarding, false);
                                 data.pastOrbit = &(item.cache.cache.past);
                                 data.futureOrbit = &(item.cache.cache.future);
                             } else {
@@ -4454,7 +4484,7 @@ void loop() {
                         data.isVisible = true;
                         
                         if (appState == STATE_MAIN) {
-                            calculateOrbit(obj.calc, simTime, obj.cache, orbitsCalculatedThisFrame, isFastForwarding);
+                            calculateOrbit(obj.calc, simTime, obj.cache, orbitsCalculatedThisFrame, isFastForwarding, false);
                             data.pastOrbit = &(obj.cache.past);
                             data.futureOrbit = &(obj.cache.future);
                         } else {
@@ -4569,7 +4599,7 @@ void loop() {
                     data.simTime = simTime;
                     
                     if (appState == STATE_MAIN) {
-                        calculateOrbit(g_satellites[i].calc, simTime, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding);
+                        calculateOrbit(g_satellites[i].calc, simTime, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding, (isSatViewMode && (focusSatIndex == i) && !g_recentLaunchFocusMode));
                         data.pastOrbit = &(g_satellites[i].cache.past);
                         data.futureOrbit = &(g_satellites[i].cache.future);
                     } else {
