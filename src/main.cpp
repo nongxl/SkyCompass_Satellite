@@ -729,6 +729,7 @@ bool isDownloadingCustom = false;
 portMUX_TYPE passMutex = portMUX_INITIALIZER_UNLOCKED;
 
 volatile bool triggerPrediction = true;
+uint32_t lastTimeAdjustMillis = 0;
 
 void predictorTask(void* parameter) {
     while (true) {
@@ -873,6 +874,9 @@ void predictorTask(void* parameter) {
             g_orbitCalculating = false;
             g_readyStartTime = millis(); // Trigger 2-second READY effect
         }
+        
+        // Lower priority back to 1 (LOW) when finished
+        vTaskPrioritySet(NULL, 1);
     }
 }
 
@@ -2757,6 +2761,36 @@ void drawSatSelectPage() {
 }
 
 void loop() {
+    // Resume suspended predictorTask after 500ms debounce of time machine adjustments
+    if (lastTimeAdjustMillis != 0 && millis() - lastTimeAdjustMillis > 500) {
+        lastTimeAdjustMillis = 0;
+        if (predictorTaskHandle != NULL && eTaskGetState(predictorTaskHandle) == eSuspended) {
+            vTaskResume(predictorTaskHandle);
+            
+            // Check if timezone adjusted day boundary is crossed
+            uint32_t targetTime = current_unix + timeMachineOffset;
+            bool isCacheValid = false;
+            portENTER_CRITICAL(&passMutex);
+            if (predictionsReady && lastPredictionBaseTime != 0) {
+                int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
+                uint32_t day1 = (lastPredictionBaseTime + tzOffsetSec) / 86400;
+                uint32_t day2 = (targetTime + tzOffsetSec) / 86400;
+                if (day1 == day2) {
+                    isCacheValid = true;
+                }
+            }
+            portEXIT_CRITICAL(&passMutex);
+            
+            if (!isCacheValid) {
+                portENTER_CRITICAL(&passMutex);
+                predictionsReady = false;
+                lastPredictionBaseTime = 0; // Invalid cache
+                portEXIT_CRITICAL(&passMutex);
+                triggerPrediction = true;
+            }
+        }
+    }
+
     // Debug helper to clear update timestamp via serial
     if (Serial.available()) {
         char debugChar = Serial.read();
@@ -2775,13 +2809,16 @@ void loop() {
         PositionData currentPos = pos_manager->getPosition();
         double oldLat = baseUserLat;
         double oldLon = baseUserLon;
+        double oldAlt = baseUserAlt;
         
         baseUserLat = currentPos.latitude;
         baseUserLon = currentPos.longitude;
         baseUserAlt = currentPos.altitude;
         isManualLocationMode = pos_manager->isManualPositionEnabled();
         
-        if (abs(baseUserLat - oldLat) > 0.0001 || abs(baseUserLon - oldLon) > 0.0001) {
+        if (abs(baseUserLat - oldLat) > 0.01 || abs(baseUserLon - oldLon) > 0.01 || abs(baseUserAlt - oldAlt) > 100.0) {
+            Serial.printf("[Debug] Cache reset due to main loop coords change: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
+                          oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
             portENTER_CRITICAL(&passMutex);
             lastPredictionBaseTime = 0; // 缓存失效
             predictionsReady = false;
@@ -2851,6 +2888,9 @@ void loop() {
     }
 
     bool isFastForwarding = false;
+    if (!showRecommendations && (M5Cardputer.Keyboard.isKeyPressed(',') || M5Cardputer.Keyboard.isKeyPressed('/'))) {
+        isFastForwarding = true;
+    }
     M5Cardputer.update();
 
     // BtnG0 (side button): trigger screenshot transfer via serial
@@ -2990,6 +3030,12 @@ void loop() {
                         else if (key == '.') { if (passScrollIndex < (int)displayTree.size() - 1) passScrollIndex++; }
                     }
                 } else if ((isSatViewMode || (!isManualLocationMode)) && !showRecommendations) {
+                    if (key == ',' || key == '/') {
+                        lastTimeAdjustMillis = millis();
+                        if (predictorTaskHandle != NULL && eTaskGetState(predictorTaskHandle) != eSuspended) {
+                            vTaskSuspend(predictorTaskHandle);
+                        }
+                    }
                     if (key == ',') timeMachineOffset -= 60;
                     else if (key == '/') timeMachineOffset += 60;
                     else if (key == '[') {
@@ -3078,9 +3124,10 @@ void loop() {
                     if (keyReleaseTime == 0) keyReleaseTime = millis();
                     if (millis() - keyReleaseTime > 150) { // 150ms debounce for I2C drops
                         lastKey = 0;
-                    } else if (millis() - keyHoldStartTime > 400) {
-                        // Keep fast forwarding flag alive during debounce
-                        if (!isManualLocationMode && !showRecommendations) isFastForwarding = true;
+                    } else {
+                        if (lastKey == ',' || lastKey == '/') {
+                            if (!isManualLocationMode && !showRecommendations) isFastForwarding = true;
+                        }
                     }
                 }
             }
@@ -3125,6 +3172,28 @@ void loop() {
                     }
                 } else if (justR) {
                     if (!showRecommendations && !showHelp) {
+                        // 1. Evaluate if time crosses a day boundary
+                        uint32_t beforeTime = current_unix + timeMachineOffset;
+                        uint32_t afterTime = current_unix;
+                        bool timeCrossedDay = false;
+                        int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
+                        uint32_t day1 = (beforeTime + tzOffsetSec) / 86400;
+                        uint32_t day2 = (afterTime + tzOffsetSec) / 86400;
+                        if (day1 != day2) {
+                            timeCrossedDay = true;
+                        }
+
+                        // 2. Evaluate if location shifted significantly
+                        bool locShifted = false;
+                        if (isManualLocationMode) {
+                            if (abs(baseUserLat - 39.90) > 0.01 || 
+                                abs(baseUserLon - 116.40) > 0.01 || 
+                                abs(baseUserAlt - 0.0) > 100.0) {
+                                locShifted = true;
+                            }
+                        }
+
+                        // 3. Apply reset actions
                         timeMachineOffset = 0;
                         if (isManualLocationMode) {
                             baseUserLat = 39.90; // Beijing default
@@ -3143,11 +3212,18 @@ void loop() {
                                 posPrefs.end();
                             }
                         }
-                        portENTER_CRITICAL(&passMutex);
-                        lastPredictionBaseTime = 0; // 按 r 重置时，缓存失效，强制重新计算
-                        predictionsReady = false;
-                        portEXIT_CRITICAL(&passMutex);
-                        triggerPrediction = true;
+
+                        // 4. Only recalculate if difference is beyond thresholds
+                        if (timeCrossedDay || locShifted) {
+                            Serial.printf("[Debug] Cache reset on justR: timeCrossedDay=%d, locShifted=%d\n", timeCrossedDay, locShifted);
+                            portENTER_CRITICAL(&passMutex);
+                            lastPredictionBaseTime = 0; // 缓存失效
+                            predictionsReady = false;
+                            portEXIT_CRITICAL(&passMutex);
+                            triggerPrediction = true;
+                        } else {
+                            Serial.println("[Debug] justR reset applied silently. Coords/Time shift within thresholds.");
+                        }
                     }
                 } else if (justBack) {
                     showHud = !showHud;
@@ -3157,7 +3233,9 @@ void loop() {
                             selectedPassIndex = -1; // Back to tree
                         } else {
                             showRecommendations = false; // Close panel
-                            cancelPrediction = true;     // 中止后台可能正在进行的计算
+                            if (predictorTaskHandle != NULL) {
+                                vTaskPrioritySet(predictorTaskHandle, 1);
+                            }
                         }
                     } else if (showHelp) {
                         showHelp = false;
@@ -3203,12 +3281,23 @@ void loop() {
                         }
                         portEXIT_CRITICAL(&passMutex);
                         
-                        if (!isCacheValid && !g_orbitCalculating) {
-                            triggerPrediction = true;
+                        Serial.printf("[Debug] Enter Panel: predictionsReady=%d, lastPredictionBaseTime=%u, targetTime=%u, isCacheValid=%d, g_orbitCalculating=%d, triggerPrediction=%d\n", 
+                                      predictionsReady, lastPredictionBaseTime, targetTime, isCacheValid, g_orbitCalculating, triggerPrediction);
+
+                        bool needTrigger = !isCacheValid || !predictionsReady;
+                        if (needTrigger && !g_orbitCalculating && !triggerPrediction) {
+                            Serial.printf("[Debug] Triggering calculation. needTrigger=%d, isCacheValid=%d, predictionsReady=%d\n", needTrigger, isCacheValid, predictionsReady);
                             portENTER_CRITICAL(&passMutex);
                             predictionsReady = false;
+                            lastPredictionBaseTime = 0;
                             portEXIT_CRITICAL(&passMutex);
+                            triggerPrediction = true;
                         }
+                        
+                        if (!predictionsReady && predictorTaskHandle != NULL) {
+                            vTaskPrioritySet(predictorTaskHandle, 2);
+                        }
+                        
                         rebuildTree(current_unix + timeMachineOffset);
                     } else if (showRecommendations) {
                         if (selectedPassIndex != -1) {
@@ -3831,8 +3920,10 @@ void loop() {
                 if (gData.isValid) {
                     double oldLat = baseUserLat;
                     double oldLon = baseUserLon;
+                    double oldAlt = baseUserAlt;
                     baseUserLat = gData.latitude;
                     baseUserLon = gData.longitude;
+                    baseUserAlt = gData.altitude;
                     gnssLocationFixed = true; // Mark that we have a real location
                     
                     // Sync to pos_manager
@@ -3851,7 +3942,9 @@ void loop() {
                         posPrefs.end();
                     }
                     
-                    if (abs(baseUserLat - oldLat) > 0.0001 || abs(baseUserLon - oldLon) > 0.0001) {
+                    if (abs(baseUserLat - oldLat) > 0.01 || abs(baseUserLon - oldLon) > 0.01 || abs(baseUserAlt - oldAlt) > 100.0) {
+                        Serial.printf("[Debug] GNSS sync cache reset: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
+                                      oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
                         portENTER_CRITICAL(&passMutex);
                         lastPredictionBaseTime = 0; // 缓存失效
                         predictionsReady = false;
