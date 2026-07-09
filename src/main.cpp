@@ -2786,38 +2786,43 @@ void loop() {
         if (predictorTaskHandle != NULL && eTaskGetState(predictorTaskHandle) == eSuspended) {
             vTaskResume(predictorTaskHandle);
             
-            // Check if timezone adjusted day boundary is crossed
-            uint32_t targetTime = current_unix + timeMachineOffset;
-            bool isCacheValid = false;
-            portENTER_CRITICAL(&passMutex);
-            uint32_t baseTime = 0;
-            if (predictionsReady && lastPredictionBaseTime != 0) {
-                baseTime = lastPredictionBaseTime;
-            } else if (g_orbitCalculating && g_currentPredictingBaseTime != 0) {
-                baseTime = g_currentPredictingBaseTime;
-            }
-            
-            if (baseTime != 0) {
-                int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
-                uint32_t day1 = (baseTime + tzOffsetSec) / 86400;
-                uint32_t day2 = (targetTime + tzOffsetSec) / 86400;
-                if (day1 == day2) {
-                    isCacheValid = true;
-                }
-            }
-            portEXIT_CRITICAL(&passMutex);
-            
-            if (!isCacheValid) {
-                Serial.printf("[Debug] Time Machine resumed but cache invalid (day crossed). Resetting prediction. baseTime=%u, targetTime=%u\n", baseTime, targetTime);
+            // Only perform day-crossing prediction checks if the recommended passes panel is actually open
+            if (showRecommendations) {
+                // Check if timezone adjusted day boundary is crossed
+                uint32_t targetTime = current_unix + timeMachineOffset;
+                bool isCacheValid = false;
                 portENTER_CRITICAL(&passMutex);
-                predictionsReady = false;
-                lastPredictionBaseTime = 0; // Invalid cache
-                g_currentPredictingBaseTime = 0;
-                cancelPrediction = true; // 跨天时必须打断当前进行的计算并重算
+                uint32_t baseTime = 0;
+                if (predictionsReady && lastPredictionBaseTime != 0) {
+                    baseTime = lastPredictionBaseTime;
+                } else if (g_orbitCalculating && g_currentPredictingBaseTime != 0) {
+                    baseTime = g_currentPredictingBaseTime;
+                }
+                
+                if (baseTime != 0) {
+                    int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
+                    uint32_t day1 = (baseTime + tzOffsetSec) / 86400;
+                    uint32_t day2 = (targetTime + tzOffsetSec) / 86400;
+                    if (day1 == day2) {
+                        isCacheValid = true;
+                    }
+                }
                 portEXIT_CRITICAL(&passMutex);
-                triggerPrediction = true;
+                
+                if (!isCacheValid) {
+                    Serial.printf("[Debug] Time Machine resumed but cache invalid (day crossed). Resetting prediction. baseTime=%u, targetTime=%u\n", baseTime, targetTime);
+                    portENTER_CRITICAL(&passMutex);
+                    predictionsReady = false;
+                    lastPredictionBaseTime = 0; // Invalid cache
+                    g_currentPredictingBaseTime = 0;
+                    cancelPrediction = true; // 跨天时必须打断当前进行的计算并重算
+                    portEXIT_CRITICAL(&passMutex);
+                    triggerPrediction = true;
+                } else {
+                    Serial.printf("[Debug] Time Machine resumed, cache is valid (same day). Continuing calculation or keeping cache. baseTime=%u\n", baseTime);
+                }
             } else {
-                Serial.printf("[Debug] Time Machine resumed, cache is valid (same day). Continuing calculation or keeping cache. baseTime=%u\n", baseTime);
+                Serial.println("[Debug] Time Machine resumed. Panel closed, skipping cross-day recalculation checks.");
             }
         }
     }
@@ -2854,7 +2859,7 @@ void loop() {
             lastPredictionBaseTime = 0; // 缓存失效
             predictionsReady = false;
             portEXIT_CRITICAL(&passMutex);
-            if (lastTimeAdjustMillis == 0) {
+            if (showRecommendations) {
                 triggerPrediction = true;
             }
         }
