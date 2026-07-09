@@ -125,7 +125,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
     extern volatile bool cancelPrediction;
     
     int iterations = 0;
-    uint32_t t = startTime;
+    uint32_t t = startTime - 20 * 60; // 往前退 20 分钟以捕获正在发生的过境
     bool isRewinding = false;
     uint32_t rewindAnchor = 0;
     
@@ -332,7 +332,9 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                     if (currentPass.score > 5) currentPass.score = 5;
                     if (currentPass.score < 1) currentPass.score = 1;
                     
-                    passes.push_back(currentPass);
+                    if (currentPass.losTime >= startTime) {
+                        passes.push_back(currentPass);
+                    }
                 }
                 
                 t += stepSeconds;

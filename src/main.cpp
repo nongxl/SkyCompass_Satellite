@@ -702,10 +702,10 @@ void rebuildTree(uint32_t current_unix) {
             for (int i = 0; i < recommendedPasses.size(); i++) {
                 const auto& p = recommendedPasses[i];
                 bool match = false;
-                if (c == 0 && p.aosTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
-                else if (c == 1 && p.aosTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
-                else if (c == 2 && p.score >= 4 && p.aosTime >= current_unix) match = true;
-                else if (c == 3 && p.aosTime >= current_unix) match = true;
+                if (c == 0 && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
+                else if (c == 1 && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
+                else if (c == 2 && p.score >= 4 && p.losTime >= current_unix) match = true;
+                else if (c == 3 && p.losTime >= current_unix) match = true;
                 
                 if (match) {
                     displayTree.push_back({false, c, i});
@@ -863,7 +863,7 @@ void predictorTask(void* parameter) {
         // Filter out past passes relative to the simulated time
         std::vector<PassEvent> upcomingPasses;
         for (const auto& pass : allPasses) {
-            if (pass.aosTime > current_unix + timeMachineOffset) {
+            if (pass.losTime >= current_unix + timeMachineOffset) {
                 upcomingPasses.push_back(pass);
             }
         }
@@ -3331,7 +3331,20 @@ void loop() {
                         rebuildTree(current_unix + timeMachineOffset);
                     } else if (showRecommendations) {
                         if (selectedPassIndex != -1) {
-                            selectedPassIndex = -1; // Back to tree
+                            // 获取当前选中的过境事件
+                            portENTER_CRITICAL(&passMutex);
+                            if (selectedPassIndex >= 0 && selectedPassIndex < (int)recommendedPasses.size()) {
+                                const auto& pass = recommendedPasses[selectedPassIndex];
+                                
+                                // 时间机器跳转到事件开始时间 (AOS)
+                                timeMachineOffset = (int32_t)pass.aosTime - (int32_t)current_unix;
+                                lastTimeAdjustMillis = millis(); // 触发时间防抖与挂起
+                                
+                                // 关闭推荐面板，直接退回 3D 地球视角观察，不改动任何追焦/视角模式
+                                showRecommendations = false;
+                            }
+                            selectedPassIndex = -1; // 重置详情索引
+                            portEXIT_CRITICAL(&passMutex);
                         } else {
                             // Toggle category or open detail
                             if (passScrollIndex >= 0 && passScrollIndex < displayTree.size()) {
