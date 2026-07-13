@@ -23,7 +23,7 @@ static String readNextJsonObject(WiFiClient* stream, int& totalReadBytes) {
             if (!stream->connected() && !stream->available()) {
                 break;
             }
-            if (totalReadBytes > 0 && waitMs >= 1000) {
+            if (totalReadBytes > 0 && waitMs >= 5000) {
                 break; // Stream idle timeout (likely completed but Keep-Alive is active)
             }
             continue;
@@ -78,7 +78,8 @@ static String readNextJsonObject(WiFiClient* stream, int& totalReadBytes) {
 }
 
 // Load single satellite from cache or network
-bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record, bool forceRefresh) {
+bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record, bool forceRefresh, int* outHttpCode) {
+    if (outHttpCode) *outHttpCode = 0;
     char path[32];
     sprintf(path, "/cat_%u.json", (unsigned int)catNum);
     
@@ -89,6 +90,7 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
             f.close();
             JSONParser parser;
             if (parser.parse(content, record)) {
+                if (outHttpCode) *outHttpCode = 200; // Simulated cache hit status
                 return true;
             }
         }
@@ -105,6 +107,7 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
     
     http.begin(*client, url);
     int httpCode = http.GET();
+    if (outHttpCode) *outHttpCode = httpCode;
     bool success = false;
     if (httpCode == HTTP_CODE_OK) {
         String payload = http.getString();
@@ -190,7 +193,8 @@ static void processRecentLaunchItem(std::vector<RecentLaunchItem>& tempLaunches,
 }
 
 // Download Recent Launches and save to JSONL
-bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& tempLaunches) {
+bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& tempLaunches, int* outHttpCode) {
+    if (outHttpCode) *outHttpCode = 0;
     delay(100); // Wait for LwIP TCP stack to reclaim memory
     WiFiClientSecure* client = new WiFiClientSecure();
     if (!client) return false;
@@ -204,6 +208,7 @@ bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& te
     String url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=json";
     http.begin(*client, url);
     int httpCode = http.GET();
+    if (outHttpCode) *outHttpCode = httpCode;
     
     if (httpCode != HTTP_CODE_OK) {
         http.end();
@@ -219,15 +224,16 @@ bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& te
     int totalReadBytes = 0;
     
     while (stream->connected() || stream->available()) {
+        int prevReadBytes = totalReadBytes;
         String singleJson = readNextJsonObject(stream, totalReadBytes);
         if (singleJson.length() == 0) {
             if (!stream->connected() && !stream->available()) break;
             if (expectedSize > 0 && totalReadBytes >= expectedSize) {
-                LOG_I("RECENT_LAUNCH", "Stream completed successfully via size checking (%d/%d bytes)", totalReadBytes, expectedSize);
                 break;
             }
-            if (totalReadBytes > 0 && !stream->available()) {
-                LOG_I("RECENT_LAUNCH", "Stream completed successfully via idle timeout (%d bytes read)", totalReadBytes);
+            if (totalReadBytes == prevReadBytes) {
+                LOG_I("RECENT_LAUNCH", "Stream read timed out (%d bytes read)", totalReadBytes);
+                if (outHttpCode) *outHttpCode = -11; // HTTPC_ERROR_READ_TIMEOUT
                 break;
             }
             continue;
@@ -250,8 +256,16 @@ bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& te
     http.end(); // Disconnect SSL socket to release TLS heap memory
     delete client;
     
+    bool completed = true;
+    if (expectedSize > 0 && totalReadBytes < expectedSize) {
+        completed = false;
+        if (outHttpCode && *outHttpCode == 0) {
+            *outHttpCode = -5; // HTTPC_ERROR_CONNECTION_LOST
+        }
+    }
+    
     LOG_I("RECENT_LAUNCH", "Download finished. Raw json lines saved: %d. Expected size: %d, actual read size: %d", rawCount, expectedSize, totalReadBytes);
-    if (rawCount > 0) {
+    if (completed && rawCount > 0) {
         return true;
     }
     return false;

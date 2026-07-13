@@ -109,6 +109,7 @@ enum AppState {
     STATE_SAT_SELECT
 };
 AppState appState = STATE_MAIN;
+void saveCustomSatellites();
 
 std::vector<WiFiNetwork> wifiNetworks;
 int wifiSelectedIndex = 0;
@@ -214,6 +215,52 @@ int recentLaunchObjectPage = 0;
 
 
 std::vector<LazyObjectItem> g_level3Objects;
+
+void autoAssignIconAndColor(const String& name, SatIconType& icon, uint16_t& color) {
+    String nameUpper = name;
+    nameUpper.toUpperCase();
+    
+    // 1. Rocket body (R/B)
+    if (nameUpper.indexOf("R/B") != -1 || nameUpper.indexOf("ROCKET BODY") != -1 || nameUpper.indexOf("ROCKET DEB") != -1) {
+        icon = ICON_ROCKET;
+        color = TFT_LIGHTGRAY;
+    }
+    // 2. Debris
+    else if (nameUpper.indexOf("DEB") != -1 || nameUpper.indexOf("DEBRIS") != -1) {
+        icon = ICON_DEEPSPACE;
+        color = TFT_DARKGREY;
+    }
+    // 3. Space Station
+    else if (nameUpper.indexOf("ISS") != -1 || nameUpper.indexOf("TIANGONG") != -1 || nameUpper.indexOf("CSS") != -1 || nameUpper.indexOf("SPACE STATION") != -1) {
+        icon = ICON_STATION;
+        color = TFT_YELLOW;
+    }
+    // 4. Weather Satellites
+    else if (nameUpper.indexOf("NOAA") != -1 || nameUpper.indexOf("METEOR") != -1 || nameUpper.indexOf("FENGYUN") != -1 || nameUpper.indexOf("FY-") != -1) {
+        icon = ICON_WEATHER;
+        color = TFT_ORANGE;
+    }
+    // 5. Navigation Satellites
+    else if (nameUpper.indexOf("BEIDOU") != -1 || nameUpper.indexOf("GPS") != -1 || nameUpper.indexOf("GLONASS") != -1 || nameUpper.indexOf("GALILEO") != -1) {
+        icon = ICON_NAVIGATION;
+        color = TFT_RED;
+    }
+    // 6. Telescope / Observatories
+    else if (nameUpper.indexOf("HUBBLE") != -1 || nameUpper.indexOf("JWST") != -1 || nameUpper.indexOf("TELESCOPE") != -1) {
+        icon = ICON_TELESCOPE;
+        color = TFT_CYAN;
+    }
+    // 7. Communication
+    else if (nameUpper.indexOf("IRIDIUM") != -1 || nameUpper.indexOf("STARLINK") != -1 || nameUpper.indexOf("ONEWEB") != -1 || nameUpper.indexOf("SO-") != -1 || nameUpper.indexOf("AO-") != -1) {
+        icon = ICON_COMMUNICATION;
+        color = TFT_MAGENTA;
+    }
+    // 8. Default
+    else {
+        icon = ICON_SATELLITE;
+        color = TFT_WHITE;
+    }
+}
 
 
 static String getShortNameForDisplay(const String& fullName, uint32_t epoch) {
@@ -505,6 +552,7 @@ void getRepresentativeOrbitParams(const String& line2, float& inclination, float
     }
 }
 String recentLaunchErrorMsg = "";
+bool recentLaunchBypassed = false;
 
 const int MAX_SATELLITES = 50;
 SatRealtimeCache g_satCaches[MAX_SATELLITES];
@@ -1052,6 +1100,27 @@ int drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int w, int l
     return lines;
 }
 
+void drawScrollingText(LGFX_Sprite* canvas, const char* text, int x, int y, int maxWidth, uint16_t color) {
+    canvas->setTextColor(color);
+    int textWidth = canvas->textWidth(text);
+    if (textWidth <= maxWidth) {
+        canvas->drawString(text, x, y);
+        return;
+    }
+    
+    int gap = 30;
+    int cycleWidth = textWidth + gap;
+    int speed = 25; // pixels per second
+    int offset = (int)(millis() * speed / 1000) % cycleWidth;
+    
+    int fh = canvas->fontHeight();
+    
+    canvas->setClipRect(x, y, maxWidth, fh);
+    canvas->drawString(text, x - offset, y);
+    canvas->drawString(text, x - offset + cycleWidth, y);
+    canvas->clearClipRect();
+}
+
 struct WiFiDisconnectGuard {
     ~WiFiDisconnectGuard() {
         LOG_I("RECENT_LAUNCH", "Recent Launch task complete. Turning off WiFi to save power.");
@@ -1104,6 +1173,8 @@ void recentLaunchNetworkTaskImpl() {
     bool usingCache = false;
     std::vector<RecentLaunchItem> tempLaunches;
     
+    recentLaunchBypassed = false;
+    
     uint32_t lastUpdate = 0;
     if (LittleFS.exists("/recent_last_update.txt")) {
         File timeFile = LittleFS.open("/recent_last_update.txt", "r");
@@ -1118,18 +1189,34 @@ void recentLaunchNetworkTaskImpl() {
     if (current_unix > 0 && lastUpdate > 0 && (current_unix - lastUpdate) < 7200 && LittleFS.exists("/json_recent_raw.jsonl")) {
         LOG_I("RECENT_LAUNCH", "Last update was %u sec ago (< 2h). Bypassing download.", (unsigned int)(current_unix - lastUpdate));
         success = true;
+        recentLaunchBypassed = true;
     }
     
     if (!success) {
         recentLaunchErrorMsg = "Downloading GP JSON...";
         delay(200); // Give ESP32 stack and heap a brief breathing room to reclaim socket memory
         std::vector<RecentLaunchItem> dummy;
-        success = OrbitDataProvider::downloadRecentLaunches(dummy);
+        int httpCode = 0;
+        success = OrbitDataProvider::downloadRecentLaunches(dummy, &httpCode);
         if (success) {
             File timeFile = LittleFS.open("/recent_last_update.txt", "w");
             if (timeFile) {
                 timeFile.print(current_unix);
                 timeFile.close();
+            }
+        } else {
+            if (httpCode < 0) {
+                if (httpCode == -11) {
+                    recentLaunchErrorMsg = "Download Timeout";
+                } else if (httpCode == -5) {
+                    recentLaunchErrorMsg = "Incomplete Download";
+                } else {
+                    recentLaunchErrorMsg = "Connection Refused";
+                }
+            } else if (httpCode == 404) {
+                recentLaunchErrorMsg = "ID Not Found";
+            } else {
+                recentLaunchErrorMsg = "HTTP Error " + String(httpCode);
             }
         }
     }
@@ -1137,7 +1224,9 @@ void recentLaunchNetworkTaskImpl() {
     if (success) {
         g_recentLaunchRefreshPending = true;
     } else {
-        recentLaunchErrorMsg = "Download Failed!";
+        if (recentLaunchErrorMsg == "Downloading GP JSON...") {
+            recentLaunchErrorMsg = "Download Failed!";
+        }
         LOG_I("RECENT_LAUNCH", "Celestrak JSON fetch failed");
         recentLaunchDownloading = false;
         recentLaunchDownloadFinishedMs = millis();
@@ -1184,9 +1273,11 @@ void forceRefreshSingleSatTask(void* parameter) {
         }
         
         if (wifiReady) {
-            downloadErrorMsg = "Refreshing TLE...";
+            downloadErrorMsg = "Refreshing GP JSON...";
             TLEData new_tle;
-            if (TLEUpdater::getTLE(targetId, new_tle, 0)) {
+            String fetchError = "";
+            bool success = TLEUpdater::getTLE(targetId, new_tle, 0, nullptr, &fetchError);
+            if (success && fetchError.length() == 0) {
                 new_tle.baseScore = g_satellites[targetIdx].baseScore;
                 SGP4Calc tempCalc;
                 tempCalc.init(new_tle);
@@ -1194,6 +1285,12 @@ void forceRefreshSingleSatTask(void* parameter) {
                 portENTER_CRITICAL(&satMutex);
                 g_satellites[targetIdx].tle = new_tle;
                 g_satellites[targetIdx].calc = tempCalc;
+                if (targetIdx >= NUM_BUILTIN_SATELLITES) {
+                    if (new_tle.name.length() > 0) {
+                        g_satellites[targetIdx].name = new_tle.name;
+                    }
+                    autoAssignIconAndColor(g_satellites[targetIdx].name, g_satellites[targetIdx].iconType, g_satellites[targetIdx].color);
+                }
                 portEXIT_CRITICAL(&satMutex);
                 
                 downloadErrorMsg = "Refresh Success!";
@@ -1204,11 +1301,119 @@ void forceRefreshSingleSatTask(void* parameter) {
                 portEXIT_CRITICAL(&passMutex);
                 triggerPrediction = true;
             } else {
-                downloadErrorMsg = "Refresh Failed!";
+                if (fetchError.length() > 0) {
+                    downloadErrorMsg = "Refresh Failed: " + fetchError;
+                } else {
+                    downloadErrorMsg = "Refresh Failed!";
+                }
             }
         }
     } // All guards (wifiGuard, predGuard, guard) are safely destructed here!
     
+    vTaskDelete(NULL);
+}
+
+void downloadCustomSatTask(void* parameter) {
+    int id = (int)(intptr_t)parameter;
+    {
+        NetworkActiveGuard guard;
+        PredictorTaskSuspendGuard predGuard;
+        
+        bool wifiWasConnected = HalWifi::isConnected();
+        bool wifiReady = true;
+        
+        if (!wifiWasConnected) {
+            String ssid = "";
+            String pass = "";
+            HalWifi::loadCredentials(ssid, pass);
+            if (ssid.length() == 0) {
+                downloadErrorMsg = "No WiFi Configured!";
+                wifiReady = false;
+            } else {
+                downloadErrorMsg = "Connecting WiFi...";
+                HalWifi::begin(ssid.c_str(), pass.c_str());
+                if (!HalWifi::isConnected()) {
+                    downloadErrorMsg = "WiFi Connect Failed!";
+                    wifiReady = false;
+                }
+            }
+        }
+        
+        if (wifiReady) {
+            downloadErrorMsg = "Downloading GP JSON...";
+            TLEData loaded_tle;
+            String fetchError = "";
+            bool success = TLEUpdater::getTLE(id, loaded_tle, 2 * 24 * 3600, nullptr, &fetchError);
+            if (success && fetchError.length() == 0) {
+                SatProfile p;
+                p.noradId = id;
+                p.name = loaded_tle.name;
+                p.color = TFT_WHITE;
+                p.baseScore = 0;
+                p.stdMag = 3.0;
+                p.selected = true;
+                p.iconType = ICON_SATELLITE;
+                p.tle = loaded_tle;
+                p.calc.init(p.tle);
+                p.description = "Custom added satellite.\n\nPress 'd' to delete this satellite.";
+                p.type = SAT_TYPE_VISUAL;
+                autoAssignIconAndColor(p.name, p.iconType, p.color);
+                
+                bool exists = false;
+                portENTER_CRITICAL(&satMutex);
+                if (NUM_SATELLITES < MAX_SATELLITES) {
+                    for (int i = 0; i < NUM_SATELLITES; i++) {
+                        if (g_satellites[i].noradId == id) {
+                            exists = true;
+                            g_satellites[i].tle = loaded_tle;
+                            g_satellites[i].calc.init(g_satellites[i].tle);
+                            if (loaded_tle.name.length() > 0) {
+                                g_satellites[i].name = loaded_tle.name;
+                            }
+                            autoAssignIconAndColor(g_satellites[i].name, g_satellites[i].iconType, g_satellites[i].color);
+                            break;
+                        }
+                    }
+                    if (!exists) {
+                        g_satellites[NUM_SATELLITES++] = p;
+                    }
+                }
+                portEXIT_CRITICAL(&satMutex);
+                
+                if (!exists) {
+                    saveCustomSatellites();
+                }
+                
+                downloadErrorMsg = "Download Success!";
+                noradInput = "";
+                
+                portENTER_CRITICAL(&passMutex);
+                predictionsReady = false;
+                lastPredictionBaseTime = 0;
+                portEXIT_CRITICAL(&passMutex);
+                triggerPrediction = true;
+            } else {
+                if (fetchError.length() > 0) {
+                    downloadErrorMsg = "Error: " + fetchError;
+                } else {
+                    downloadErrorMsg = "Error: Download failed.";
+                }
+            }
+        }
+        
+        if (!wifiWasConnected && HalWifi::isConnected()) {
+            LOG_I("APP", "Auto disconnecting WiFi after custom satellite download.");
+            HalWifi::disconnect();
+        }
+        
+        if (!wifiReady && !wifiWasConnected) {
+            appState = STATE_WIFI_SETUP;
+            wifiIsScanning = true;
+            wifiIsInputtingPassword = false;
+        }
+    }
+    
+    isDownloadingCustom = false;
     vTaskDelete(NULL);
 }
 
@@ -1282,32 +1487,53 @@ void networkTaskImpl(void* parameter) {
         }
 
         if (appState == STATE_SAT_SELECT) {
-            downloadErrorMsg = "WiFi Connected! Syncing TLEs...";
+            downloadErrorMsg = "WiFi Connected! Syncing GP JSONs...";
         }
 
         // 4. Fetch TLEs
         bool updated = false;
         WiFiClient* sharedClient = new WiFiClient;
+        bool anyFetchFailed = false;
+        String firstFetchError = "";
         
         for (int i = 0; i < NUM_SATELLITES; i++) {
             if (appState == STATE_SAT_SELECT) {
                 char progBuf[48];
-                sprintf(progBuf, "Syncing TLEs (%d/%d)...", i + 1, NUM_SATELLITES);
+                sprintf(progBuf, "Syncing GP JSONs (%d/%d)...", i + 1, NUM_SATELLITES);
                 downloadErrorMsg = progBuf;
             }
             TLEData new_tle;
             uint32_t maxAge = manualWifiToggle ? 0 : (2 * 24 * 3600);
-            if (TLEUpdater::getTLE(g_satellites[i].noradId, new_tle, maxAge, sharedClient)) {
-                new_tle.baseScore = g_satellites[i].baseScore;
-                SGP4Calc tempCalc;
-                tempCalc.init(new_tle);
-                
-                portENTER_CRITICAL(&satMutex);
-                g_satellites[i].tle = new_tle;
-                g_satellites[i].calc = tempCalc;
-                portEXIT_CRITICAL(&satMutex);
-                
-                updated = true;
+            String fetchError = "";
+            if (TLEUpdater::getTLE(g_satellites[i].noradId, new_tle, maxAge, sharedClient, &fetchError)) {
+                if (fetchError.length() == 0) {
+                    new_tle.baseScore = g_satellites[i].baseScore;
+                    SGP4Calc tempCalc;
+                    tempCalc.init(new_tle);
+                    
+                    portENTER_CRITICAL(&satMutex);
+                    g_satellites[i].tle = new_tle;
+                    g_satellites[i].calc = tempCalc;
+                    if (i >= NUM_BUILTIN_SATELLITES) {
+                        if (new_tle.name.length() > 0) {
+                            g_satellites[i].name = new_tle.name;
+                        }
+                        autoAssignIconAndColor(g_satellites[i].name, g_satellites[i].iconType, g_satellites[i].color);
+                    }
+                    portEXIT_CRITICAL(&satMutex);
+                    
+                    updated = true;
+                } else {
+                    anyFetchFailed = true;
+                    if (firstFetchError.length() == 0) {
+                        firstFetchError = fetchError;
+                    }
+                }
+            } else {
+                anyFetchFailed = true;
+                if (firstFetchError.length() == 0) {
+                    firstFetchError = fetchError;
+                }
             }
             vTaskDelay(pdMS_TO_TICKS(10)); // Yield CPU to prevent Task Watchdog starvation
         }
@@ -1334,11 +1560,19 @@ void networkTaskImpl(void* parameter) {
             triggerPrediction = true;
             
             if (appState == STATE_SAT_SELECT) {
-                downloadErrorMsg = "TLEs & Frequencies Updated!";
+                if (anyFetchFailed) {
+                    downloadErrorMsg = "Updated with errors: " + firstFetchError;
+                } else {
+                    downloadErrorMsg = "GP JSONs & Frequencies Updated!";
+                }
             }
         } else {
             if (appState == STATE_SAT_SELECT) {
-                downloadErrorMsg = "Frequencies Updated! TLEs are fresh.";
+                if (anyFetchFailed) {
+                    downloadErrorMsg = "Update Failed: " + firstFetchError;
+                } else {
+                    downloadErrorMsg = "Frequencies Updated! GP Data is fresh.";
+                }
             }
         }
         if (!manualWifiToggle) {
@@ -1610,6 +1844,7 @@ void setup() {
                 }
             }
             current_unix = latestEpoch;
+            g_timeSynced = true;
             LOG_I("APP", "Offline boot: Loaded cached TLEs. System time anchor set to: %u", current_unix);
             
             // Load Custom Satellites from Preferences
@@ -1661,6 +1896,7 @@ void setup() {
                             p.tle = loaded_tle;
                             p.calc.init(p.tle);
                             p.type = SAT_TYPE_VISUAL;
+                            autoAssignIconAndColor(p.name, p.iconType, p.color);
                             if (NUM_SATELLITES < MAX_SATELLITES) {
                                 g_satellites[NUM_SATELLITES++] = p;
                             }
@@ -1680,7 +1916,7 @@ void setup() {
             xTaskCreatePinnedToCore(
                 predictorTask,
                 "PredictorTask",
-                16384,
+                8192,
                 NULL,
                 1,
                 &predictorTaskHandle,
@@ -1689,7 +1925,7 @@ void setup() {
             
             // Start network task on Core 0 to handle WiFi and TLE fetching in background
             manualWifiToggle = false;
-            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
+            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
 
             // Initialize Chain Mono on Serial2 (Grove Port)
 #if ENABLE_CHAIN_MONO
@@ -1806,7 +2042,7 @@ void setup() {
             vTaskDelete(NULL);
         },
         "SetupLoader",
-        16384,
+        8192,
         NULL,
         2, // Slightly lower than IMU but higher than predictor
         NULL,
@@ -2048,9 +2284,13 @@ void drawSatSelectPage() {
                 String checkBox = g_satellites[index].selected ? "[x]" : "[ ]";
                 canvas->drawString(checkBox.c_str(), 4, yPos);
                 
-                String nameStr = g_satellites[index].name;
-                if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
-                canvas->drawString(nameStr.c_str(), 28, yPos);
+                if (index == satSelectedIndex) {
+                    drawScrollingText(canvas, g_satellites[index].name.c_str(), 28, yPos, 56, TFT_WHITE);
+                } else {
+                    String nameStr = g_satellites[index].name;
+                    if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
+                    canvas->drawString(nameStr.c_str(), 28, yPos);
+                }
             } else {
                 String text = isDownloadingCustom ? "Downloading..." : ("[+] " + noradInput + "_");
                 canvas->drawString(text.c_str(), 4, yPos);
@@ -2152,8 +2392,7 @@ void drawSatSelectPage() {
                 canvas->fillRect(iconX - 6, iconY - 1, 3, 3, TFT_LIGHTGRAY);
             }
             
-            canvas->setTextColor(selSat.color);
-            canvas->drawString(selSat.name.c_str(), rightX + 48, descY + 8);
+            drawScrollingText(canvas, selSat.name.c_str(), rightX + 48, descY + 8, width - rightX - 48 - 4, selSat.color);
             
             // Draw NORAD ID for tracking
             canvas->setTextColor(TFT_LIGHTGRAY);
@@ -2426,7 +2665,7 @@ void drawSatSelectPage() {
                 drawWrappedText(canvas, downloadErrorMsg.c_str(), rightX, descY, width - rightX - 5, 10);
             } else {
                 canvas->setTextColor(TFT_LIGHTGRAY);
-                int lines = drawWrappedText(canvas, "Enter 5-digit NORAD ID to add custom satellite.", rightX, descY, width - rightX - 5, 10);
+                int lines = drawWrappedText(canvas, "Enter 5 or 6-digit NORAD ID to add custom satellite.", rightX, descY, width - rightX - 5, 10);
                 
                 canvas->setTextColor(TFT_YELLOW);
                 canvas->drawString("Source: celestrak.org", rightX, descY + lines * 10 + 4);
@@ -2437,7 +2676,7 @@ void drawSatSelectPage() {
         if (!recentLaunchDownloadSuccess && g_recentLaunches.empty()) {
             if (recentLaunchDownloading) {
                 canvas->setTextColor(TFT_YELLOW);
-                canvas->drawString("Downloading TLEs...", width/2 - canvas->textWidth("Downloading TLEs...")/2, height/2 - 10);
+                canvas->drawString("Downloading GP JSONs...", width/2 - canvas->textWidth("Downloading GP JSONs...")/2, height/2 - 10);
                 if (recentLaunchErrorMsg.length() > 0) {
                     canvas->setTextColor(TFT_LIGHTGRAY);
                     canvas->drawString(recentLaunchErrorMsg.c_str(), width/2 - canvas->textWidth(recentLaunchErrorMsg.c_str())/2, height/2 + 5);
@@ -2480,8 +2719,12 @@ void drawSatSelectPage() {
                 if (g_recentLaunches[index].isGroup) {
                     nameStr = nameStr + " (" + String(g_recentLaunches[index].satelliteCount) + ")";
                 }
-                if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
-                canvas->drawString(nameStr.c_str(), 28, yPos);
+                if (index == recentLaunchSelectedIndex) {
+                    drawScrollingText(canvas, nameStr.c_str(), 28, yPos, 56, TFT_WHITE);
+                } else {
+                    if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
+                    canvas->drawString(nameStr.c_str(), 28, yPos);
+                }
                 
                 yPos += itemSpacing;
             }
@@ -2523,11 +2766,10 @@ void drawSatSelectPage() {
                 else stars = "**---";
                 
                 if (!recentLaunchInObjectsView) {
-                    canvas->setTextColor(TFT_GOLD);
-                    canvas->drawString(item.displayName.c_str(), rightX, 23);
+                    int starsW = canvas->textWidth(stars);
+                    drawScrollingText(canvas, item.displayName.c_str(), rightX, 23, width - rightX - starsW - 8, TFT_GOLD);
                     
                     canvas->setTextColor(TFT_YELLOW);
-                    int starsW = canvas->textWidth(stars);
                     canvas->drawString(stars, width - starsW - 4, 23);
                     
                     canvas->setTextColor(TFT_CYAN);
@@ -2568,10 +2810,7 @@ void drawSatSelectPage() {
                     
                     // Draw representative satellite name
                     String repSatText = "Rep: " + item.repSatName;
-                    if (repSatText.length() > 22) {
-                        repSatText = repSatText.substring(0, 19) + "...";
-                    }
-                    canvas->drawString(repSatText.c_str(), rightX, 53);
+                    drawScrollingText(canvas, repSatText.c_str(), rightX, 53, width - rightX - 4, TFT_LIGHTGRAY);
                     
                     // Display real count of objects and clustered proxies
                     char satsBuf[64];
@@ -2631,10 +2870,8 @@ void drawSatSelectPage() {
                     canvas->setTextColor(TFT_LIGHTGRAY);
                     canvas->drawString("Press 'O' for Objects", rightX, bottomLimit - 8);
                 } else {
-                    canvas->setTextColor(TFT_GOLD);
-                    String title = item.displayName;
-                    if (title.length() > 10) title = title.substring(0, 8) + "..";
-                    canvas->drawString((title + " Objects").c_str(), rightX, 25);
+                    String title = item.displayName + " Objects";
+                    drawScrollingText(canvas, title.c_str(), rightX, 25, width - rightX - 4, TFT_GOLD);
                     
                     canvas->setTextColor(TFT_CYAN);
                     int startNum = recentLaunchObjectPage * 5 + 1;
@@ -2650,13 +2887,9 @@ void drawSatSelectPage() {
                         if (satName.startsWith("STARLINK ")) {
                             satName = "SL " + satName.substring(9);
                         }
-                        if (satName.length() > 14) {
-                            satName = satName.substring(0, 12) + "..";
-                        }
                         String lineText = "- " + satName + " (" + String(obj.orbit.catalogNumber) + ")";
-                        
-                        canvas->setTextColor(TFT_LIGHTGRAY);
-                        canvas->drawString(lineText.c_str(), rightX, memY + s * 13);
+                        int maxW = obj.lastGeoValid ? (width - rightX - 40) : (width - rightX - 4);
+                        drawScrollingText(canvas, lineText.c_str(), rightX, memY + s * 13, maxW, TFT_LIGHTGRAY);
                         
                         if (obj.lastGeoValid) {
                             char hBuf[16];
@@ -2690,7 +2923,7 @@ void drawSatSelectPage() {
         } else {
             if (recentLaunchDownloadSuccess) {
                 canvas->setTextColor(TFT_GREEN);
-                canvas->drawString("Update Success: TLE cache overwritten!", 4, height - 9);
+                canvas->drawString("Update Success: Cache overwritten!", 4, height - 9);
             } else {
                 canvas->setTextColor(TFT_RED);
                 String failMsg = (recentLaunchErrorMsg.indexOf("Busy") != -1) ? recentLaunchErrorMsg : ("Update Failed: " + recentLaunchErrorMsg);
@@ -2915,7 +3148,11 @@ void loop() {
             }
             recentLaunchSelectedIndex = 0;
             recentLaunchDownloadSuccess = true;
-            recentLaunchErrorMsg = "Downloaded successfully!";
+            if (recentLaunchBypassed) {
+                recentLaunchErrorMsg = "Cached (<2h old). Press C to force.";
+            } else {
+                recentLaunchErrorMsg = "Downloaded successfully!";
+            }
             LOG_I("APP", "Applied new recent launches safely on main core.");
         } else {
             recentLaunchErrorMsg = "Parse Cache Failed!";
@@ -3369,7 +3606,7 @@ void loop() {
                     if (!g_networkActive) {
                         if (!HalWifi::isConnected()) {
                             manualWifiToggle = true;
-                            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 12288, NULL, 1, NULL, 0);
+                            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
                         } else {
                             WiFi.disconnect(true);
                             WiFi.mode(WIFI_OFF);
@@ -3562,7 +3799,7 @@ void loop() {
                         
                         manualWifiToggle = true; // Stay connected since user explicitly set it up
                         xTaskCreatePinnedToCore(
-                            networkTask, "NetworkTask", 16384, params, 1, NULL, 0
+                            networkTask, "NetworkTask", 8192, params, 1, NULL, 0
                         );
                     } else if (justBack) {
                         if (wifiPasswordLen > 0) {
@@ -3676,7 +3913,7 @@ void loop() {
                             recentLaunchErrorMsg = "Connecting WiFi...";
                             drawSatSelectPage();
                             pushCanvasWithFilter();
-                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 12288, NULL, 1, NULL, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 8192, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 recentLaunchDownloading = false;
                                 recentLaunchErrorMsg = "Task Init Failed!";
@@ -3691,10 +3928,10 @@ void loop() {
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
                             } else {
-                                downloadErrorMsg = "Refreshing TLE...";
+                                downloadErrorMsg = "Refreshing GP JSON...";
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
-                                BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 12288, (void*)(intptr_t)satSelectedIndex, 1, NULL, 0);
+                                BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 8192, (void*)(intptr_t)satSelectedIndex, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     downloadErrorMsg = "Task Init Failed!";
                                     drawSatSelectPage();
@@ -3711,7 +3948,7 @@ void loop() {
                                 downloadErrorMsg = "Connecting to WiFi...";
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
-                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 12288, NULL, 1, NULL, 0);
+                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     downloadErrorMsg = "Task Init Failed!";
                                     drawSatSelectPage();
@@ -3833,37 +4070,16 @@ void loop() {
                         } else if (justEnter) {
                             if ((noradInput.length() == 5 || noradInput.length() == 6) && !isDownloadingCustom) {
                                 isDownloadingCustom = true;
+                                downloadErrorMsg = "";
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
                                 
                                 int id = noradInput.toInt();
-                                TLEData loaded_tle;
-                                if (TLEUpdater::getTLE(id, loaded_tle)) {
-                                    SatProfile p;
-                                    p.noradId = id;
-                                    p.name = loaded_tle.name;
-                                    p.color = TFT_WHITE;
-                                    p.baseScore = 0;
-                                    p.stdMag = 3.0;
-                                    p.selected = true;
-                                    p.iconType = ICON_SATELLITE;
-                                    p.tle = loaded_tle;
-                                    p.calc.init(p.tle);
-                                    p.description = "Custom added satellite.\n\nPress 'd' to delete this satellite.";
-                                    p.type = SAT_TYPE_VISUAL;
-                                    if (NUM_SATELLITES < MAX_SATELLITES) {
-                                        g_satellites[NUM_SATELLITES++] = p;
-                                        saveCustomSatellites();
-                                    }
-                                    noradInput = "";
-                                } else {
-                                    if (WiFi.status() != WL_CONNECTED) {
-                                        downloadErrorMsg = "Error: WiFi not connected! Press 'w' on main screen.";
-                                    } else {
-                                        downloadErrorMsg = "Error: Download failed or ID not found.";
-                                    }
+                                BaseType_t res = xTaskCreatePinnedToCore(downloadCustomSatTask, "DownloadCustomSatTask", 8192, (void*)(intptr_t)id, 1, NULL, 0);
+                                if (res != pdPASS) {
+                                    isDownloadingCustom = false;
+                                    downloadErrorMsg = "Task Init Failed!";
                                 }
-                                isDownloadingCustom = false;
                             }
                         } else {
                             for (auto c : M5Cardputer.Keyboard.keysState().word) {
@@ -5005,8 +5221,8 @@ void loop() {
                 earth_renderer->getCanvas()->drawString("MN:ND", 100, 115); // Not Detected
             }
             
-            // Draw TLE Version
-            String tleEpoch = "TLE Epoch: ";
+            // Draw GP Epoch Version
+            String tleEpoch = "GP Epoch: ";
             if (g_satellites[0].tle.line1.length() >= 24) {
                 int year = 2000 + g_satellites[0].tle.line1.substring(18, 20).toInt();
                 int doy = g_satellites[0].tle.line1.substring(20, 23).toInt();

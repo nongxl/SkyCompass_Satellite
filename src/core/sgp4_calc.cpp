@@ -79,12 +79,40 @@ void SGP4Calc::buildPseudoTle(const OrbitRecord& record, String& outL1, String& 
     String desig = formatIntlDesig(record.internationalDesignator);
     String bstarStr = formatBStar(record.bstar);
     
-    char l1_buf[80];
-    sprintf(l1_buf, "1 %05uU %-8.8s %02d%12.8f  .00000000  00000-0 %s 0  999",
+    // Safety clamp double inputs to reasonable ranges to prevent formatting buffer overflow
+    double inclination = record.inclination;
+    if (std::isnan(inclination) || std::isinf(inclination)) inclination = 0.0;
+    else if (inclination < -360.0 || inclination > 360.0) inclination = fmod(inclination, 360.0);
+
+    double raan = record.raan;
+    if (std::isnan(raan) || std::isinf(raan)) raan = 0.0;
+    else if (raan < -360.0 || raan > 360.0) raan = fmod(raan, 360.0);
+
+    double argumentOfPerigee = record.argumentOfPerigee;
+    if (std::isnan(argumentOfPerigee) || std::isinf(argumentOfPerigee)) argumentOfPerigee = 0.0;
+    else if (argumentOfPerigee < -360.0 || argumentOfPerigee > 360.0) argumentOfPerigee = fmod(argumentOfPerigee, 360.0);
+
+    double meanAnomaly = record.meanAnomaly;
+    if (std::isnan(meanAnomaly) || std::isinf(meanAnomaly)) meanAnomaly = 0.0;
+    else if (meanAnomaly < -360.0 || meanAnomaly > 360.0) meanAnomaly = fmod(meanAnomaly, 360.0);
+
+    double meanMotion = record.meanMotion;
+    if (std::isnan(meanMotion) || std::isinf(meanMotion) || meanMotion < 0.0) meanMotion = 0.0;
+    else if (meanMotion > 99.99999999) meanMotion = 99.99999999;
+
+    double epochDays = record.epochDays;
+    if (std::isnan(epochDays) || std::isinf(epochDays) || epochDays < 0.0) epochDays = 1.0;
+    else if (epochDays > 367.0) epochDays = 367.0;
+
+    int epochYr = record.epochYr;
+    if (epochYr < 0 || epochYr > 99) epochYr = 26;
+
+    char l1_buf[128];
+    snprintf(l1_buf, sizeof(l1_buf), "1 %05uU %-8.8s %02d%12.8f  .00000000  00000-0 %s 0  999",
             (unsigned int)pseudoCat,
             desig.c_str(),
-            record.epochYr,
-            record.epochDays,
+            epochYr,
+            epochDays,
             bstarStr.c_str());
             
     String l1 = String(l1_buf);
@@ -93,18 +121,22 @@ void SGP4Calc::buildPseudoTle(const OrbitRecord& record, String& outL1, String& 
     l1 += String(calculateTleChecksum(l1));
     outL1 = l1;
     
-    char l2_buf[80];
-    long pseudoEcc = round(record.eccentricity * 10000000.0);
+    char l2_buf[128];
+    long pseudoEcc = 0;
+    if (!std::isnan(record.eccentricity) && !std::isinf(record.eccentricity)) {
+        pseudoEcc = round(record.eccentricity * 10000000.0);
+    }
     if (pseudoEcc > 9999999) pseudoEcc = 9999999;
+    if (pseudoEcc < 0) pseudoEcc = 0;
     
-    sprintf(l2_buf, "2 %05u %8.4f %8.4f %07ld %8.4f %8.4f %11.8f00000",
+    snprintf(l2_buf, sizeof(l2_buf), "2 %05u %8.4f %8.4f %07ld %8.4f %8.4f %11.8f00000",
             (unsigned int)pseudoCat,
-            record.inclination,
-            record.raan,
+            inclination,
+            raan,
             pseudoEcc,
-            record.argumentOfPerigee,
-            record.meanAnomaly,
-            record.meanMotion);
+            argumentOfPerigee,
+            meanAnomaly,
+            meanMotion);
             
     String l2 = String(l2_buf);
     while (l2.length() < 68) l2 += " ";
@@ -114,18 +146,18 @@ void SGP4Calc::buildPseudoTle(const OrbitRecord& record, String& outL1, String& 
 }
 
 String SGP4Calc::formatBStar(double bstar) {
-    if (abs(bstar) < 1e-9) {
+    if (std::isnan(bstar) || std::isinf(bstar) || abs(bstar) < 1e-9) {
         return " 00000-0";
     }
     int exponent = 0;
     double mantissa = bstar;
     if (abs(mantissa) >= 1.0) {
-        while (abs(mantissa) >= 1.0) {
+        while (abs(mantissa) >= 1.0 && exponent < 99) {
             mantissa /= 10.0;
             exponent++;
         }
     } else {
-        while (abs(mantissa) < 0.1) {
+        while (abs(mantissa) < 0.1 && exponent > -99) {
             mantissa *= 10.0;
             exponent--;
         }
@@ -135,10 +167,10 @@ String SGP4Calc::formatBStar(double bstar) {
         val /= 10;
         exponent++;
     }
-    char buf[12];
+    char buf[16];
     char valSign = (val < 0) ? '-' : ' ';
     char expSign = (exponent < 0) ? '-' : '+';
-    sprintf(buf, "%c%05ld%c%d", valSign, abs(val), expSign, abs(exponent));
+    snprintf(buf, sizeof(buf), "%c%05ld%c%d", valSign, abs(val), expSign, abs(exponent));
     return String(buf);
 }
 

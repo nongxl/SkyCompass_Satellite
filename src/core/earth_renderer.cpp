@@ -304,7 +304,7 @@ void EarthRenderer::drawStars(double centerLat, double centerLon) {
         float cos_c = sin_cLat * sin_lat + cos_cLat * cos_lat * cosf(dLon);
         float x = R_sky * cos_lat * sinf(dLon);
         float y = R_sky * (cos_cLat * sin_lat - sin_cLat * cos_lat * cosf(dLon));
-        float z = R_sky * cos_c;
+        float z = -R_sky * cos_c;
         
         // Apply Camera Pitch
         float y_pitched = y * cos_pitch - z * sin_pitch;

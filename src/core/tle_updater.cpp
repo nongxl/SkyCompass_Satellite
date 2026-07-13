@@ -33,7 +33,8 @@ static uint32_t parseTleEpoch(const String& line1) {
     return seconds;
 }
 
-bool TLEUpdater::getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds, WiFiClient* sharedClient) {
+bool TLEUpdater::getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds, WiFiClient* sharedClient, String* outError) {
+    if (outError) *outError = "";
     uint32_t cacheTime = 0;
     bool hasCache = loadFromCache(noradId, outTle, cacheTime);
     
@@ -58,7 +59,7 @@ bool TLEUpdater::getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds, Wi
         if (cacheIsOld || tleIsStale) {
             LOG_I("APP", "Cache for %d is missing, old, or TLE epoch is stale. Fetching from network...", noradId);
             TLEData newTle;
-            if (fetchFromNetwork(noradId, newTle, sharedClient)) {
+            if (fetchFromNetwork(noradId, newTle, sharedClient, outError)) {
                 outTle = newTle;
                 saveToCache(noradId, newTle, now);
                 LOG_I("APP", "Successfully fetched TLE for %d from network!", noradId);
@@ -115,18 +116,31 @@ bool TLEUpdater::saveToCache(int noradId, const TLEData& tle, uint32_t timestamp
     return true;
 }
 
-bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle, WiFiClient* sharedClient) {
+bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle, WiFiClient* sharedClient, String* outError) {
     if (noradId == 50463) {
         outTle = TLEManager::getJWST_TLE();
         return true;
     }
     
     OrbitRecord record;
-    if (OrbitDataProvider::loadByCatalogNumber(noradId, record, true)) {
+    int httpCode = 0;
+    if (OrbitDataProvider::loadByCatalogNumber(noradId, record, true, &httpCode)) {
         outTle.name = record.name;
         outTle.baseScore = 0;
         SGP4Calc::buildPseudoTle(record, outTle.line1, outTle.line2);
         return true;
+    }
+    
+    if (outError) {
+        if (httpCode < 0) {
+            *outError = "Connection Refused";
+        } else if (httpCode == 404) {
+            *outError = "ID Not Found";
+        } else if (httpCode == 200) {
+            *outError = "No GP Data";
+        } else {
+            *outError = "HTTP Error " + String(httpCode);
+        }
     }
     return false;
 }
