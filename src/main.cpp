@@ -4217,16 +4217,6 @@ void loop() {
                         pos_manager->setPosition(pos);
                     }
                     
-                    // Save GNSS location to Preferences
-                    Preferences posPrefs;
-                    if (posPrefs.begin("position", false)) {
-                        posPrefs.putDouble("cached_lat", baseUserLat);
-                        posPrefs.putDouble("cached_lon", baseUserLon);
-                        posPrefs.putDouble("cached_alt", baseUserAlt);
-                        posPrefs.putBool("use_manual_pos", false);
-                        posPrefs.end();
-                    }
-                    
                     if (abs(baseUserLat - oldLat) > 0.01 || abs(baseUserLon - oldLon) > 0.01 || abs(baseUserAlt - oldAlt) > 100.0) {
                         Serial.printf("[Debug] GNSS sync cache reset: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
                                       oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
@@ -4234,6 +4224,28 @@ void loop() {
                         lastPredictionBaseTime = 0; // 缓存失效
                         predictionsReady = false;
                         portEXIT_CRITICAL(&passMutex);
+                    }
+                    
+                    // Save GNSS location to Preferences (NVS) at most once per 60 seconds
+                    // and only when position has meaningfully changed. NVS writes are slow
+                    // (10-200ms due to Flash wear-leveling page erasure) and must NOT occur
+                    // every frame or they cause intermittent 1-2s hitches during time adjustment.
+                    static unsigned long lastGnssNvsSaveMs = 0;
+                    static double lastSavedLat = 999.0;
+                    static double lastSavedLon = 999.0;
+                    bool posChangedForSave = (abs(baseUserLat - lastSavedLat) > 0.01 || abs(baseUserLon - lastSavedLon) > 0.01);
+                    if (posChangedForSave && (lastGnssNvsSaveMs == 0 || millis() - lastGnssNvsSaveMs > 60000)) {
+                        lastGnssNvsSaveMs = millis();
+                        lastSavedLat = baseUserLat;
+                        lastSavedLon = baseUserLon;
+                        Preferences posPrefs;
+                        if (posPrefs.begin("position", false)) {
+                            posPrefs.putDouble("cached_lat", baseUserLat);
+                            posPrefs.putDouble("cached_lon", baseUserLon);
+                            posPrefs.putDouble("cached_alt", baseUserAlt);
+                            posPrefs.putBool("use_manual_pos", false);
+                            posPrefs.end();
+                        }
                     }
                 }
                 
