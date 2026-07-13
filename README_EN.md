@@ -39,7 +39,7 @@
   - Vector 3D Earth rendering with **dynamic cold/warm gradient continent outlines** and daylight/shadow terminator.
   - **Visual Anchors**: Automatically computes and floats a "dynamic compass" at the screen corner; projects a "3D axis & polar crosshair grid" at polar zones to resolve disorientation when looking from an orbital perspective.
   - Press **, (backward)** or **/ (forward)** to toggle the **Time Machine**, supporting long-press for high-speed time travel to preview future passes. When time is offset, the bottom-right HUD clock will turn **yellow** to provide a clear visual cue; press **`R`** on the main screen to immediately reset the simulated time back to actual system time (the clock font color will return to white).
-  - **NASA Nightlights & Light Pollution Overlay**: Automatically imports global nightlight points from NASA's VIIRS Black Marble dataset. Using importance sampling, it renders the **2000 brightest global light pollution spots** at 30 FPS. Faded dynamically at the dark hemisphere with a smooth dusk/dawn transition (glows at sunset, full brightness at night, fades out at dawn).
+  - **NASA Nightlights & Light Pollution Overlay**: Automatically imports global nightlight points from NASA's VIIRS Black Marble dataset. Using importance sampling, it renders **12,000 high-contrast global light pollution spots** at 30 FPS. Faded dynamically at the dark hemisphere with a smooth dusk/dawn transition (glows at sunset, full brightness at night, fades out at dawn).
 - **Smart Observation Recommender (Core Value)**:
   - Slide out the left panel by pressing **`Enter`**.
   - Computes Earth's shadow, solar angle, and dynamic **Visual Magnitude (brightness)** prediction to recommend the best "Visible Windows" (AOS/LOS time, peak elevation, and star scores).
@@ -160,6 +160,7 @@ The `scratch/` folder hosts development tools, math verifications, and refactori
 * **Stars and Sky Map Generation**:
   * [generate_stars.py](scratch/generate_stars.py): Parses the Yale Bright Star Catalog to filter and export high-brightness navigation stars (e.g., Sirius) into C headers.
   * [test_star_proj.py](scratch/test_star_proj.py): Validates orthographic camera projections for stars on the background canvas.
+  * [gen_map.py](scratch/gen_map.py): Global land boundaries and coastline outline generator. Downloads 50m medium-resolution global geojson vectors from Natural Earth, simplifying and resampling them to output the lightweight `earth_data.h` header for fast 3D globe outline rendering.
 * **Automated Refactoring & Patching**:
   * [update_main.py](scratch/update_main.py) / [patch_main.py](scratch/patch_main.py) / [modify.py](scratch/modify.py): Automates text-search-replace operations and safety-checking insertions into the large `src/main.cpp` code file during remote pair programming sessions.
   * [benchmark.cpp](scratch/benchmark.cpp) / [test5.cpp](scratch/test5.cpp): Measures computation latency and runs compiler math optimizations benchmarks on the physical target hardware.
@@ -223,7 +224,7 @@ The system is fully compatible with future 6-digit Catalog Numbers. It utilizes 
 - `[x]` **Phase 4 (WiFi & Storage)**: Implemented WiFi scanner UI, LittleFS cache storage, and GeoIP city lookup.
 - `[x]` **Phase 5 (Interaction Upgrades)**: Added TLE multi-select list, spring-mass anti-overlapping UI labels, and Time Machine travel.
 - `[x]` **Phase 6 (Amateur Radio Frequencies)**: Integrated real-time uplink/downlink frequencies (ISS SSTV, NOAA APT) for field SDR tuning.
-- `[x]` **Phase 7 (Nightlights & Lossless Screen Stream)**: Embedded 2000 NASA nightlight dots at 30 FPS and lossless RGB565 serial screenshot receiver.
+- `[x]` **Phase 7 (Nightlights & Lossless Screen Stream)**: Embedded 12,000 NASA nightlight dots at 30 FPS and lossless RGB565 serial screenshot receiver.
 
 ## Future Outlook (TODO List)
 
@@ -269,6 +270,8 @@ To intercept and save screenshots on your PC:
 ## Data Sources & Acknowledgments
 
 - **TLE Orbital Data**: Special thanks to [CelesTrak](https://celestrak.org/) for providing high-precision, real-time Two-Line Element (TLE) datasets for satellite tracking and propagation.
+- **3D Coastline Vector Data**: Special thanks to [Natural Earth](https://www.naturalearthdata.com/) for providing free 50m medium-resolution global land boundary datasets (used by `scratch/gen_map.py` to generate the `earth_data.h` coastline path coordinates).
+- **Nightlights & Light Pollution Data**: Special thanks to [NASA GIBS (Global Imagery Browse Services)](https://gibs.earthdata.nasa.gov/) for providing the VIIRS Black Marble nightlight tiles (used by `scripts/gen_light_points.py` to generate the 12,000 nightlight points).
 - **Model Calibration & Reference**: Special thanks to [Tianwentong](https://laysky.com/) and [Heavens-Above](https://www.heavens-above.com/) for their simulated prediction results which served as essential references during model calibration and verification.
 
 

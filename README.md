@@ -44,7 +44,7 @@ SkyCompass Satellite 是 SkyCompass 项目的扩展演化版本，运行在 M5St
   为了应对成组发射任务（如星链 20~30 颗卫星）可能导致 ESP32 内存耗尽的问题，Recent Launch 模块进行了重构设计，遵循 **Mission First** 的架构：
   - **三级导航架构**：系统包含 Mission 列表（展示近期发射）、Mission Overview（展示 Hover 任务的开普勒代表轨道参数、年龄、状态评分及可见性）以及 Objects 查看（按 `O` 键进入，仅在内存中懒加载当前页 5 颗卫星，退出或翻页时即刻完全释放 SGP4 实例）。
   - **基于真实轨道相位的任务编队可视化 (Mission Formation Visualization)**：在不增加 SGP4 计算负担的前提下，利用真实轨道数据还原星座空间分布。系统解析全组卫星的 Mean Anomaly（平近点角）参数作为 AlongTrackPhase（沿轨相位），在加载时通过**环状层次聚类算法**（Agglomerative Clustering）将原始大数量卫星压缩为 5~8 个 Proxy 卫星（代理卫星），并在代表轨道上通过线性插值进行投影绘制。同时，系统通过寻找环上最大 Gap（间隙）自适应计算出编队在轨道上占据的真实物理度数（Occupancy），并在地球仪轨道上实时渲染出一段发光带。在 CPU 与内存开销几乎为零的前提下，呈现高真实度、且在时间穿梭中完全连贯移动的星链列车演化态势。
-  - **NASA 卫星夜间灯光与光污染点云叠加**：自动从 NASA GIBS 官方服务中抓取全球最新的 VIIRS Black Marble 瓦片数据，利用重要性采样算法生成 2000 个高对比度的夜景光害亮点（已通过极地地理坐标约束彻底排除了极地冰盖与瓦片边界水印的反射噪声）。在设备端的黑夜区域，通过**内联正交投影与快速背面剔除**算法以 30 FPS 进行流畅的 3D 渲染，并结合晨昏线进行**“平滑黄昏渐变”**绘制（日落时星光亮起，深夜达到满值，拂晓熄灭）。
+  - **NASA 卫星夜间灯光与光污染点云叠加**：自动从 NASA GIBS 官方服务中抓取全球最新的 VIIRS Black Marble 瓦片数据，利用重要性采样算法生成 12000 个高对比度的全球夜景光害亮点（已通过极地地理坐标约束彻底排除了极地冰盖与瓦片边界水印的反射噪声）。在设备端的黑夜区域，通过**内联正交投影与快速背面剔除**算法以 30 FPS 进行流畅的 3D 渲染，并结合晨昏线进行**“平滑黄昏渐变”**绘制（日落时星光亮起，深夜达到满值，拂晓熄灭）。
 - **观测推荐系统 (核心价值)**：
   - 在主界面按 **`Enter` 键** 可滑出左侧推荐面板。
   - 综合计算地球遮挡、太阳照明，结合亮度评分输出最佳观测窗口（AOS、最高仰角时间）。
@@ -165,6 +165,7 @@ SkyCompass Satellite 是 SkyCompass 项目的扩展演化版本，运行在 M5St
    * **点云与天表特征生成类**：
      * [generate_stars.py](scratch/generate_stars.py)：从标准耶鲁亮星目录中过滤并生成天空中高亮度导航星体的 3D 天球坐标并输出为设备端的头文件。
      * [test_star_proj.py](scratch/test_star_proj.py)：用于验证和测试天球恒星到地球正交投影视图的映射效果。
+     * [gen_map.py](scratch/gen_map.py)：全球陆地边界与海岸线轮廓生成脚本。自动从 Natural Earth 矢量数据库下载 50m 中等分辨率的全球边界 geojson 数据，进行自适应稀疏滤波重采样和 3D 三角函数坐标预计算，最终输出生成高画质且极度轻量化的设备端 3D 地球仪线条头文件 `earth_data.h`。
    * **开发重构与自动化补丁类**：
      * [update_main.py](scratch/update_main.py) / [patch_main.py](scratch/patch_main.py) / [modify.py](scratch/modify.py)：用于在向单片机添加复杂屏幕布局、状态同步和按键映射等功能时，由于 `src/main.cpp` 代码逻辑非常庞大，编写的自动化文本解析、校验及代码行合并修改工具。
      * [benchmark.cpp](scratch/benchmark.cpp) / [test5.cpp](scratch/test5.cpp)：对浮点数矩阵乘法、三角函数公式等关键渲染逻辑在单片机上进行局部跑分与开销评估 of 的源码。
@@ -230,7 +231,7 @@ SkyCompass Satellite 的架构已经按以下路径完成开发并成功落地�
 - `[x]` **Phase 4 (网络与数据基座)**：实现设备端 WiFi 扫描/连接、LittleFS 缓存、NTP 同步与 IP 城市粗定位。
 - `[x]` **Phase 5 (交互升维)**：引入动态卫星复选列表、智能防重叠 UI 布局、自动休眠省电策略以及时光机漫游功能。
 - [x] **Phase 6 (HAM 无线电通联辅助)**：卫星百科与过境推荐页新增业余无线电下行频率（如 ISS 的 APRS/SSTV、NOAA APT）展示，使设备化身为便携战术追踪器。
-- [x] **Phase 7 (光污染点云与高清截图系统)**：从 NASA GIBS VIIRS 夜视瓦片图源利用重要性采样自动生成全球 2000 个代表性点云（加入极点坐标限制过滤噪声），在设备端实现 30 FPS 极速内联 3D 渲染和动态晨昏线渐变效果；首创零压缩原始像素分段串口回传系统，成功克服设备无 PSRAM 内存短板，在 PC 端完美解码还原 24 位高保真 BMP 截图。
+- [x] **Phase 7 (光污染点云与高清截图系统)**：从 NASA GIBS VIIRS 夜视瓦片图源利用重要性采样自动生成全球 12000 个代表性点云（加入极点坐标限制过滤噪声），在设备端实现 30 FPS 极速内联 3D 渲染和动态晨昏线渐变效果；首创零压缩原始像素分段串口回传系统，成功克服设备无 PSRAM 内存短板，在 PC 端完美解码还原 24 位高保真 BMP 截图。
 
 ## 未来展望 (TODO List)
 
@@ -279,6 +280,8 @@ SkyCompass Satellite 的架构已经按以下路径完成开发并成功落地�
 ## 数据来源与致谢
 
 - **TLE 轨道数据**：特别感谢 [CelesTrak](https://celestrak.org/) 提供了高精度、实时更新的人造天体双行轨道根数 (TLE) 数据服务，为本项目提供精确的数据支持。
+- **3D 陆地轮廓矢量数据**：特别感谢 [Natural Earth](https://www.naturalearthdata.com/) 提供了免费的 50m 中等分辨率全球陆地地理边界数据（用于 `scratch/gen_map.py` 简化生成项目的 `earth_data.h` Coastline 边线坐标数据）。
+- **全球夜景灯光与光污染点云数据**：特别感谢 [NASA GIBS (Global Imagery Browse Services)](https://gibs.earthdata.nasa.gov/) 提供的 VIIRS Black Marble 全球夜景瓦片图源（用于 `scripts/gen_light_points.py` 采样生成全球近 12000 个夜间光害高亮亮点数据）。
 - **模型校准与仿真参考**：在开发和调试模型阶段，本项目参考了[天文通](https://laysky.com/)和 [Heavens-Above](https://www.heavens-above.com/) 的模拟预测结果进行算法校准，特此向这些优秀的软件和平台表示感谢。
 
 

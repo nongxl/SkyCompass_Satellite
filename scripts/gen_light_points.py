@@ -4,7 +4,7 @@ import os
 import math
 import random
 
-# Ensure Pillow is installed (we already ran pip install pillow, but let's double check imports)
+# Ensure Pillow is installed
 try:
     from PIL import Image
 except ImportError:
@@ -15,7 +15,7 @@ except ImportError:
     from PIL import Image
 
 def download_tiles():
-    # NASA GIBS VIIRS Black Marble Z=2 tiles (16 tiles in total, x:0..3, y:0..3)
+    # NASA GIBS VIIRS Black Marble Z=3 tiles (64 tiles in total, x:0..7, y:0..7)
     tile_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tiles_cache")
     if not os.path.exists(tile_dir):
         os.makedirs(tile_dir)
@@ -24,12 +24,12 @@ def download_tiles():
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     
-    print("Downloading 16 tiles from NASA GIBS...")
+    print("Downloading 64 tiles from NASA GIBS...")
     tiles = {}
-    for y in range(4):
-        for x in range(4):
-            url = f"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/GoogleMapsCompatible_Level8/2/{y}/{x}.png"
-            tile_path = os.path.join(tile_dir, f"tile_2_{y}_{x}.png")
+    for y in range(8):
+        for x in range(8):
+            url = f"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/GoogleMapsCompatible_Level8/3/{y}/{x}.png"
+            tile_path = os.path.join(tile_dir, f"tile_3_{y}_{x}.png")
             
             # Use cached tile if exists to save bandwidth
             if not os.path.exists(tile_path):
@@ -38,51 +38,45 @@ def download_tiles():
                     with urllib.request.urlopen(req, context=ctx) as r:
                         with open(tile_path, "wb") as f:
                             f.write(r.read())
-                    # print(f" Downloaded tile ({x}, {y})")
                 except Exception as e:
                     print(f"Error downloading tile ({x}, {y}) from {url}: {e}")
                     raise e
             tiles[(x, y)] = tile_path
-    print("All 16 tiles are downloaded/ready.")
+    print("All 64 tiles are downloaded/ready.")
     return tiles
 
 def assemble_and_sample(tiles):
-    # Assemble 16 tiles into a 1024x1024 master image
+    # Assemble 64 tiles into a 2048x2048 master image
     print("Assembling master image...")
-    master = Image.new("RGB", (1024, 1024))
-    for y in range(4):
-        for x in range(4):
+    master = Image.new("RGB", (2048, 2048))
+    for y in range(8):
+        for x in range(8):
             tile_img = Image.open(tiles[(x, y)])
             master.paste(tile_img, (x * 256, y * 256))
     
     print("Sampling master pixels (high resolution)...")
     lit_pixels = []
-    
-    # Pre-load master pixel data for fast access
     pixels = master.load()
     
-    # Scan every pixel in 1024x1024
-    for py in range(1024):
-        # Map Mercator Y coordinate to Lat (WGS84 radians)
-        y_merc = py / 1024.0
+    # Scan every pixel in 2048x2048
+    for py in range(2048):
+        y_merc = py / 2048.0
         val = math.exp(2.0 * math.pi * (0.5 - y_merc))
         lat_rad = 2.0 * (math.atan(val) - math.pi / 4.0)
         lat = math.degrees(lat_rad)
         
-        # Exclude polar regions to filter out ice sheet reflections and logo noise
+        # Exclude polar regions
         if lat < -60.0 or lat > 75.0:
             continue
             
-        for px in range(1024):
-            # Map Mercator X coordinate to Lon (WGS84 degrees)
-            lon = -180.0 + (px / 1024.0) * 360.0
+        for px in range(2048):
+            lon = -180.0 + (px / 2048.0) * 360.0
             
             r, g, b = pixels[px, py]
             brightness = int(0.299 * r + 0.587 * g + 0.114 * b)
             
             # Threshold filtering
-            if brightness > 20:
-                # Use moderate 1.1 power for weights to prevent megacities from starving interior capital cities
+            if brightness > 15: # Lower threshold to capture dimmer regional centers
                 weight = float(brightness) ** 1.1
                 lit_pixels.append({
                     'lat': lat,
@@ -99,15 +93,14 @@ def assemble_and_sample(tiles):
         
     random.seed(42) # Set seed for reproducible builds
     
-    # Stratified Bins definition (Lower thresholds to capture medium-large inland capitals in higher tiers)
-    tier1_cand = [p for p in lit_pixels if p['brightness'] >= 150]
-    tier2_cand = [p for p in lit_pixels if 80 <= p['brightness'] < 150]
-    tier3_cand = [p for p in lit_pixels if 40 <= p['brightness'] < 80]
-    tier4_cand = [p for p in lit_pixels if 20 <= p['brightness'] < 40]
+    # Stratified Bins definition for Z=3
+    tier1_cand = [p for p in lit_pixels if p['brightness'] >= 180]
+    tier2_cand = [p for p in lit_pixels if 80 <= p['brightness'] < 180]
+    tier3_cand = [p for p in lit_pixels if 35 <= p['brightness'] < 80]
+    tier4_cand = [p for p in lit_pixels if 15 <= p['brightness'] < 35]
     
     print(f"Tiers - T1: {len(tier1_cand)}, T2: {len(tier2_cand)}, T3: {len(tier3_cand)}, T4: {len(tier4_cand)}")
     
-    # Helper for weighted sampling without replacement
     def sample_without_replacement(candidates, k):
         if len(candidates) <= k:
             return candidates
@@ -115,21 +108,28 @@ def assemble_and_sample(tiles):
         sorted_res = [x for _, x in sorted(zip(keys, candidates), key=lambda pair: pair[0])]
         return sorted_res[:k]
         
-    # Step 1: Tier 1 (Ultra-high) -> All selected, 6 particles each
-    s1 = sample_without_replacement(tier1_cand, len(tier1_cand))
+    target_total = 12000
+    
+    # Step 1: Tier 1 -> Up to 300 points, 6 particles each
+    k1 = min(len(tier1_cand), 300)
+    s1 = sample_without_replacement(tier1_cand, k1)
     p1 = len(s1) * 6
     
-    # Step 2: Tier 2 (High) -> Target 900 skeleton, 3 particles each
-    s2 = sample_without_replacement(tier2_cand, 900)
+    # Step 2: Tier 2 -> Up to 1200 points, 3 particles each
+    k2 = min(len(tier2_cand), 1200)
+    s2 = sample_without_replacement(tier2_cand, k2)
     p2 = len(s2) * 3
     
-    # Step 3: Tier 3 (Medium) -> Target 1200 skeleton, 2 particles each
-    s3 = sample_without_replacement(tier3_cand, 1200)
+    # Step 3: Tier 3 -> Up to 2000 points, 2 particles each
+    k3 = min(len(tier3_cand), 2000)
+    s3 = sample_without_replacement(tier3_cand, k3)
     p3 = len(s3) * 2
     
-    # Step 4: Tier 4 (Low) -> Calculate remaining spots, 1 particle each
-    remaining = 9000 - (p1 + p2 + p3)
-    s4 = sample_without_replacement(tier4_cand, remaining)
+    # Step 4: Tier 4 -> Calculate remaining spots, 1 particle each
+    remaining = target_total - (p1 + p2 + p3)
+    k4 = min(len(tier4_cand), remaining)
+    s4 = sample_without_replacement(tier4_cand, k4)
+    p4 = len(s4)
     
     print(f"Skeleton selected - T1: {len(s1)}, T2: {len(s2)}, T3: {len(s3)}, T4: {len(s4)}")
     
@@ -149,16 +149,16 @@ def assemble_and_sample(tiles):
                 elif lon_jitter < -180.0: lon_jitter += 360.0
                 sampled_points.append((lat_jitter, lon_jitter))
                 
-    append_particles(s1, 6, 1.00)   # Tier 1: 1.0 degree jitter (~1.0 pixel diffuse glow)
-    append_particles(s2, 3, 0.45)   # Tier 2: 0.45 degree jitter (~0.45 pixel glow)
-    append_particles(s3, 2, 0.22)   # Tier 3: 0.22 degree jitter (~0.2 pixel glow)
+    append_particles(s1, 6, 0.15)   # Tier 1: 0.15 degree jitter (tight urban glow ~16km)
+    append_particles(s2, 3, 0.08)   # Tier 2: 0.08 degree jitter (~9km)
+    append_particles(s3, 2, 0.04)   # Tier 3: 0.04 degree jitter (~4.5km)
     append_particles(s4, 1, 0.0)    # Tier 4: No jitter (0.0 pixel, exact coordinates)
     
     # Pad if total count drifts slightly due to list sizing
-    while len(sampled_points) < 9000 and s2:
-        s = random.choice(s2)
-        lat_jitter = s['lat'] + random.uniform(-0.3, 0.3)
-        lon_jitter = s['lon'] + random.uniform(-0.3, 0.3)
+    while len(sampled_points) < target_total and s3:
+        s = random.choice(s3)
+        lat_jitter = s['lat'] + random.uniform(-0.04, 0.04)
+        lon_jitter = s['lon'] + random.uniform(-0.04, 0.04)
         lat_jitter = max(-89.9, min(89.9, lat_jitter))
         if lon_jitter > 180.0: lon_jitter -= 360.0
         elif lon_jitter < -180.0: lon_jitter += 360.0
