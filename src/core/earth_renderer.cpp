@@ -1017,6 +1017,21 @@ void EarthRenderer::drawSatelliteIcon(int x, int y, SatIconType iconType, uint16
         _canvas->drawLine(x - 5, y, x + 5, y, color);
         _canvas->drawLine(x - 2, y - 2, x + 2, y + 2, darkGrayCol);
         _canvas->drawLine(x - 2, y + 2, x + 2, y - 2, darkGrayCol);
+    } else if (iconType == ICON_DEBRIS) {
+        // Space Debris (Half regular solar grid panel on left, jagged outline and floating dots on right)
+        _canvas->fillRect(x - 6, y - 2, 6, 5, color);
+        _canvas->drawLine(x - 6, y - 2, x - 1, y - 2, lightGrayCol);
+        _canvas->drawLine(x - 6, y + 2, x - 1, y + 2, lightGrayCol);
+        _canvas->drawLine(x - 1, y - 2, x - 1, y + 2, lightGrayCol);
+        
+        // Jagged right half
+        _canvas->drawLine(x, y - 2, x + 3, y - 1, color);
+        _canvas->drawLine(x + 3, y - 1, x + 1, y + 1, color);
+        _canvas->drawLine(x + 1, y + 1, x, y + 2, color);
+        
+        // Detached drifting debris fragments
+        _canvas->drawPixel(x + 5, y - 3, color);
+        _canvas->drawPixel(x + 5, y + 2, color);
     } else if (iconType == ICON_DFH1) {
         // DongFangHong-1 (Spherical body + 4 antennas)
         _canvas->fillCircle(x, y, 3, darkGrayCol);

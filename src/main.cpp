@@ -227,7 +227,7 @@ void autoAssignIconAndColor(const String& name, SatIconType& icon, uint16_t& col
     }
     // 2. Debris
     else if (nameUpper.indexOf("DEB") != -1 || nameUpper.indexOf("DEBRIS") != -1) {
-        icon = ICON_DEEPSPACE;
+        icon = ICON_DEBRIS;
         color = TFT_DARKGREY;
     }
     // 3. Space Station
@@ -2386,6 +2386,25 @@ void drawSatSelectPage() {
                 canvas->drawFastVLine(iconX, iconY + 6, 6, satColor);
                 canvas->drawFastHLine(iconX - 6, iconY + 12, 13, satColor);
                 canvas->drawFastHLine(iconX - 3, iconY + 13, 7, satColor);
+            } else if (t == ICON_DEBRIS) {
+                // Space Debris: regular solar grid panel on left, jagged broken lines in middle, small drifting squares on right
+                // 1. Regular panel on left
+                canvas->fillRect(iconX - 18, iconY - 6, 18, 13, satColor);
+                canvas->drawRect(iconX - 18, iconY - 6, 18, 13, TFT_BLACK);
+                canvas->drawFastHLine(iconX - 18, iconY, 18, TFT_BLACK);
+                canvas->drawFastVLine(iconX - 9, iconY - 6, 13, TFT_BLACK);
+                
+                // 2. Jagged edge and outline in middle
+                canvas->drawLine(iconX, iconY - 6, iconX + 12, iconY - 3, satColor);
+                canvas->drawLine(iconX + 12, iconY - 3, iconX + 6, iconY + 3, satColor);
+                canvas->drawLine(iconX + 6, iconY + 3, iconX + 15, iconY + 7, satColor);
+                canvas->drawLine(iconX + 15, iconY + 7, iconX, iconY + 7, satColor);
+                canvas->drawLine(iconX, iconY, iconX + 9, iconY + 2, satColor);
+                
+                // 3. Detached debris chunks on right
+                canvas->fillRect(iconX + 18, iconY - 9, 3, 3, satColor);
+                canvas->fillRect(iconX + 15, iconY + 12, 4, 3, satColor);
+                canvas->fillRect(iconX + 22, iconY + 2, 3, 4, satColor);
             } else {
                 canvas->fillRect(iconX - 3, iconY - 3, 9, 9, TFT_WHITE);
                 canvas->fillRect(iconX - 15, iconY - 3, 9, 9, satColor);
@@ -5470,6 +5489,7 @@ void loop() {
             else if (visibleSatIconType == ICON_WEATHER) icon = mono_icon_weather;
             else if (visibleSatIconType == ICON_NAVIGATION) icon = mono_icon_navi;
             else if (visibleSatIconType == ICON_COMMUNICATION) icon = mono_icon_comm;
+            else if (visibleSatIconType == ICON_DEBRIS) icon = mono_icon_debris;
             
             // 缓慢呼吸效果 design：正在过境 2.5 秒一个周期
             float theta = millis() * 0.00251f;

@@ -17,7 +17,8 @@ enum SatIconType {
     ICON_BLUEWALKER3,
     ICON_WEATHER,
     ICON_NAVIGATION,
-    ICON_COMMUNICATION
+    ICON_COMMUNICATION,
+    ICON_DEBRIS
 };
 
 enum TrainState {
