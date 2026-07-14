@@ -316,7 +316,9 @@ bool OrbitDataProvider::loadRecentLaunchesFromCache(std::vector<RecentLaunchItem
 // Page load level 3 objects from jsonl file
 // Page load level 3 objects from jsonl file
 extern std::vector<LazyObjectItem> g_level3Objects;
+extern volatile bool recentLaunchDownloading;
 bool OrbitDataProvider::loadLevel3ObjectsPage(const RecentLaunchItem& item, int page) {
+    if (recentLaunchDownloading) return false;
     g_level3Objects.clear();
     File f = LittleFS.open("/json_recent_raw.jsonl", "r");
     if (!f) return false;

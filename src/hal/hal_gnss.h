@@ -86,6 +86,9 @@ public:
     virtual int available() = 0;
     virtual char read() = 0;
     virtual bool probeGrove() = 0;
+    
+    virtual bool isGroveMode() const = 0;
+    virtual bool isProbing() const = 0;
 };
 
 #endif

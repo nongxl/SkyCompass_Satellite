@@ -205,6 +205,7 @@ RecentLaunchRealtimeCache g_repSatCache;
 bool g_repSatInitialized = false;
 String g_repSatName = "";
 uint32_t recentLaunchDownloadFinishedMs = 0;
+uint32_t downloadFinishedMs = 0;
 bool showListHelp = false;
 bool isCameraTransitioning = false;
 float targetZoom = 0.95f;
@@ -321,6 +322,7 @@ static void assignShortNameAndIcon(RecentLaunchItem& item) {
 }
 
 void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
+    if (recentLaunchDownloading) return; // Prevent file read collision during background download
     if (items.empty()) return;
     
     if (!LittleFS.exists("/json_recent_raw.jsonl")) {
@@ -488,6 +490,7 @@ void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
 
 
 void initRecentLaunchCalcs(RecentLaunchItem& item) {
+    if (recentLaunchDownloading) return; // Prevent file read collision during background download
     if (!item.selected) {
         item.calc.reset();
         return;
@@ -1309,7 +1312,7 @@ void forceRefreshSingleSatTask(void* parameter) {
             }
         }
     } // All guards (wifiGuard, predGuard, guard) are safely destructed here!
-    
+    downloadFinishedMs = millis();
     vTaskDelete(NULL);
 }
 
@@ -1355,7 +1358,7 @@ void downloadCustomSatTask(void* parameter) {
                 p.iconType = ICON_SATELLITE;
                 p.tle = loaded_tle;
                 p.calc.init(p.tle);
-                p.description = "Custom added satellite.\n\nPress 'd' to delete this satellite.";
+                p.description = "Custom added satellite.\n\n";
                 p.type = SAT_TYPE_VISUAL;
                 autoAssignIconAndColor(p.name, p.iconType, p.color);
                 
@@ -1590,6 +1593,7 @@ void networkTaskImpl(void* parameter) {
     g_wifiConnecting = false;
     g_timeSynced = true; // Fallback to allow offline mock calculations if WiFi failed/finished
     triggerPrediction = true; // Wake up the prediction loop immediately
+    downloadFinishedMs = millis();
 }
 
 void networkTask(void* parameter) {
@@ -1892,7 +1896,7 @@ void setup() {
                             p.baseScore = 0;
                             p.selected = true;
                             p.iconType = ICON_SATELLITE;
-                            p.description = "Custom added satellite.\n\nPress 'd' to delete this satellite.";
+                            p.description = "Custom added satellite.\n\n";
                             p.tle = loaded_tle;
                             p.calc.init(p.tle);
                             p.type = SAT_TYPE_VISUAL;
@@ -2150,6 +2154,15 @@ void drawWiFiSetupPage() {
 }
 
 void drawSatSelectPage() {
+    if (!g_networkActive) {
+        if (downloadErrorMsg == "System Busy... Wait.") {
+            downloadErrorMsg = "";
+        }
+        if (recentLaunchErrorMsg == "System Busy... Wait.") {
+            recentLaunchErrorMsg = "";
+        }
+    }
+
     static bool lastDownloading = false;
     if (lastDownloading && !recentLaunchDownloading) {
         recentLaunchDownloadFinishedMs = millis();
@@ -2164,6 +2177,16 @@ void drawSatSelectPage() {
     if (currentSatTab == TAB_RECENT_LAUNCH) {
         if (recentLaunchDownloading || (recentLaunchDownloadFinishedMs > 0 && (millis() - recentLaunchDownloadFinishedMs < 3000))) {
             showBanner = true;
+        }
+    } else if (currentSatTab == TAB_ENCYCLOPEDIA) {
+        if (g_wifiConnecting || g_networkActive || (downloadFinishedMs > 0 && (millis() - downloadFinishedMs < 3000))) {
+            if (downloadErrorMsg.length() > 0) {
+                showBanner = true;
+            }
+        } else {
+            if (downloadErrorMsg.length() > 0) {
+                downloadErrorMsg = "";
+            }
         }
     }
     int bottomLimit = showBanner ? (height - 11) : height;
@@ -2506,9 +2529,75 @@ void drawSatSelectPage() {
             }
             
             canvas->setTextColor(TFT_LIGHTGRAY);
-            if (selSat.description) {
+            
+            // On-the-fly dynamically build specs description for custom satellites to prevent pointer dangling or memory wipes
+            String finalDesc = "";
+            if (satSelectedIndex >= NUM_BUILTIN_SATELLITES) {
+                if (selSat.tle.line1.length() >= 60 && selSat.tle.line2.length() >= 60) {
+                    // 1. Parse COSPAR ID
+                    String cospar = "";
+                    if (selSat.tle.line1.length() >= 17) {
+                        String rawCospar = selSat.tle.line1.substring(9, 17);
+                        rawCospar.trim();
+                        if (rawCospar.length() >= 5) {
+                            String yrStr = rawCospar.substring(0, 2);
+                            int yr = yrStr.toInt();
+                            String trueYr = (yr >= 50) ? ("19" + yrStr) : ("20" + yrStr);
+                            cospar = trueYr + "-" + rawCospar.substring(2);
+                        }
+                    }
+                    
+                    // 2. Parse Keplerian elements
+                    float inclination = selSat.tle.line2.substring(8, 16).toFloat();
+                    
+                    String eccRaw = selSat.tle.line2.substring(26, 33);
+                    eccRaw.trim();
+                    float eccentricity = 0.0f;
+                    if (eccRaw.length() > 0) {
+                        String eccStr = "0." + eccRaw;
+                        eccentricity = eccStr.toFloat();
+                    }
+                    
+                    float meanMotion = selSat.tle.line2.substring(52, 63).toFloat();
+                    
+                    float periodMin = 0.0f;
+                    float perigee = 0.0f;
+                    float apogee = 0.0f;
+                    
+                    if (meanMotion > 0) {
+                        periodMin = 1440.0f / meanMotion;
+                        
+                        double n = meanMotion * 2.0 * 3.141592653589793 / 86400.0;
+                        double mu = 3.986004418e14; // m^3/s^2
+                        double a = pow(mu / (n * n), 1.0 / 3.0) / 1000.0; // km
+                        
+                        perigee = a * (1.0f - eccentricity) - 6378.137f;
+                        apogee = a * (1.0f + eccentricity) - 6378.137f;
+                        if (perigee < 0) perigee = 0;
+                        if (apogee < 0) apogee = 0;
+                    }
+                    
+                    char buf[160];
+                    snprintf(buf, sizeof(buf),
+                             "Custom added satellite.\n\n"
+                             "COSPAR: %s\n"
+                             "Period: %.1f min\n"
+                             "Incl: %.2f deg\n"
+                             "Alt: %.1f/%.1f km",
+                             cospar.c_str(), periodMin, inclination, perigee, apogee);
+                    finalDesc = String(buf);
+                }
+            }
+            
+            if (finalDesc.length() == 0) {
+                if (selSat.description) {
+                    finalDesc = selSat.description;
+                }
+            }
+            
+            if (finalDesc.length() > 0) {
                 int descAreaHeight = radioY - descY - 2;
-                int totalLines = drawWrappedText(canvas, selSat.description, rightX, descY, width - rightX - 5, 10, false);
+                int totalLines = drawWrappedText(canvas, finalDesc.c_str(), rightX, descY, width - rightX - 5, 10, false);
                 int totalHeight = totalLines * 10;
                 
                 int yOffset = 0;
@@ -2522,7 +2611,7 @@ void drawSatSelectPage() {
                 }
                 
                 canvas->setClipRect(rightX, descY, width - rightX, descAreaHeight);
-                drawWrappedText(canvas, selSat.description, rightX, descY - yOffset, width - rightX - 5, 10);
+                drawWrappedText(canvas, finalDesc.c_str(), rightX, descY - yOffset, width - rightX - 5, 10);
                 canvas->clearClipRect();
             } else {
                 canvas->drawString("No description.", rightX, descY);
@@ -2932,25 +3021,42 @@ void drawSatSelectPage() {
         canvas->fillRect(0, height - 11, width, 11, canvas->color565(15, 20, 25));
         canvas->drawFastHLine(0, height - 11, width, TFT_DARKGREY);
         
-        if (recentLaunchDownloading) {
-            canvas->setTextColor(TFT_YELLOW);
-            String msg = "Recent Launch Updating: " + recentLaunchErrorMsg;
+        if (currentSatTab == TAB_RECENT_LAUNCH) {
+            if (recentLaunchDownloading) {
+                canvas->setTextColor(TFT_YELLOW);
+                String msg = "Recent Launch Updating: " + recentLaunchErrorMsg;
+                if (canvas->textWidth(msg.c_str()) > width - 8) {
+                    msg = msg.substring(0, 35) + "...";
+                }
+                canvas->drawString(msg.c_str(), 4, height - 9);
+            } else {
+                if (recentLaunchDownloadSuccess) {
+                    canvas->setTextColor(TFT_GREEN);
+                    canvas->drawString("Update Success: Cache overwritten!", 4, height - 9);
+                } else {
+                    canvas->setTextColor(TFT_RED);
+                    String failMsg = (recentLaunchErrorMsg.indexOf("Busy") != -1) ? recentLaunchErrorMsg : ("Update Failed: " + recentLaunchErrorMsg);
+                    if (canvas->textWidth(failMsg.c_str()) > width - 8) {
+                        failMsg = failMsg.substring(0, 35) + "...";
+                    }
+                    canvas->drawString(failMsg.c_str(), 4, height - 9);
+                }
+            }
+        } else if (currentSatTab == TAB_ENCYCLOPEDIA) {
+            if (downloadErrorMsg.indexOf("Success") != -1 || downloadErrorMsg.indexOf("Updated") != -1 || downloadErrorMsg.indexOf("fresh") != -1) {
+                canvas->setTextColor(TFT_GREEN);
+            } else if (downloadErrorMsg.indexOf("Busy") != -1 || downloadErrorMsg.indexOf("Wait") != -1 || 
+                       downloadErrorMsg.indexOf("Connecting") != -1 || downloadErrorMsg.indexOf("Refreshing") != -1 || 
+                       downloadErrorMsg.indexOf("Syncing") != -1 || downloadErrorMsg.indexOf("Loading") != -1) {
+                canvas->setTextColor(TFT_YELLOW);
+            } else {
+                canvas->setTextColor(TFT_RED);
+            }
+            String msg = downloadErrorMsg;
             if (canvas->textWidth(msg.c_str()) > width - 8) {
                 msg = msg.substring(0, 35) + "...";
             }
             canvas->drawString(msg.c_str(), 4, height - 9);
-        } else {
-            if (recentLaunchDownloadSuccess) {
-                canvas->setTextColor(TFT_GREEN);
-                canvas->drawString("Update Success: Cache overwritten!", 4, height - 9);
-            } else {
-                canvas->setTextColor(TFT_RED);
-                String failMsg = (recentLaunchErrorMsg.indexOf("Busy") != -1) ? recentLaunchErrorMsg : ("Update Failed: " + recentLaunchErrorMsg);
-                if (canvas->textWidth(failMsg.c_str()) > width - 8) {
-                    failMsg = failMsg.substring(0, 35) + "...";
-                }
-                canvas->drawString(failMsg.c_str(), 4, height - 9);
-            }
         }
     }
     
@@ -3119,6 +3225,7 @@ void loop() {
 
     if (g_recentLaunchRefreshPending) {
         g_recentLaunchRefreshPending = false;
+        recentLaunchDownloading = false; // Reset downloading flag early to unlock file reads for loading
         
         std::vector<RecentLaunchItem>* tempLaunches = new std::vector<RecentLaunchItem>();
         if (tempLaunches && OrbitDataProvider::loadRecentLaunchesFromCache(*tempLaunches) && !tempLaunches->empty()) {
@@ -3177,7 +3284,6 @@ void loop() {
             recentLaunchErrorMsg = "Parse Cache Failed!";
         }
         delete tempLaunches;
-        recentLaunchDownloading = false;
         recentLaunchDownloadFinishedMs = millis();
     }
 

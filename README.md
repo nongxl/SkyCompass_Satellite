@@ -14,9 +14,13 @@ SkyCompass Satellite 是 SkyCompass 项目的扩展演化版本，运行在 M5St
 
 ## 硬件支持
 
-- M5 Cardputer ADV（ESP32）
+- **M5 Cardputer** (兼容 ADV 版本与 v1.1 标准版)：
+  - **ADV 版本**：使用内置引脚 (G13/G15) 通信，内置 IMU 与键盘，支持完整姿态与定位功能。
+  - **v1.1 标准版**：通过 Grove 接口连接外部串口 GPS 模块 (如 **GPS v1.1 单元**)。
+  - **引脚自适应重映射**：系统会自动检测卡槽状态。若在 `15/13` 引脚探测不到内置 GPS (卡槽为空)，则**直接重映射至 Grove 接口 (GPIO 2 / GPIO 1) 绑定外部 GPS，且自动跳过 chain mono 探测（在界面显示 mono:no）**。此举解决了标准版背部卡槽引脚与矩阵键盘扫描线冲突的问题。
+- **物理并发并存（不占用 IMU）**：Cardputer-Adv 上的内置 IMU 运行在内部 I2C (GPIO 8/9)，与 Grove 口的 GPS (GPIO 2/1) 是完全隔离的两路总线，因此定位与 IMU 姿态可同时工作，地球仪平滑不乱跳。
 - 六轴IMU（加速度计 + 陀螺仪）
-- 内置GNSS模块（用于定位及获取高精度 UTC 时间）
+- 内置或外置GNSS模块（用于定位及获取高精度 UTC 时间，支持串口通讯默认 115200bps@8N1）
 - 键盘 + 小尺寸屏幕
 
 ![硬件接线示意图](docs/schematic_diagram.png)

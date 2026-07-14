@@ -14,9 +14,13 @@
 
 ## Hardware Support
 
-- M5 Cardputer ADV (ESP32-S3)
-- Built-in 6-Axis IMU (Accelerometer + Gyroscope)
-- Built-in GNSS Module (for positioning and high-precision UTC time synchronization)
+- **M5 Cardputer** (Compatible with both ADV version and v1.1 Standard version):
+  - **ADV Version**: Uses internal slot pins (G13/G15) for communication, built-in IMU and keyboard, supporting full motion sensing and GPS positioning.
+  - **v1.1 Standard Version**: Supports external serial GPS modules (e.g. **GPS v1.1 Unit**) via the Grove port.
+  - **Adaptive Pin Remapping**: The system automatically detects the internal slot. If no GPS module is detected on the internal slot pins `15/13` (slot empty), it **automatically remaps GPS communications to the Grove port (GPIO 2 / GPIO 1) and skips Chain Mono screen probe (displays mono:no)**. This solves the hardware pin conflicts between the rear slot and the physical matrix keyboard scanner lines on v1.1 Standard Cardputer.
+- **Physical Coexistence & Concurrent Working (No IMU contention)**: The built-in IMU on Cardputer-Adv operates on the internal I2C bus (GPIO 8/9), which is physically independent of the external Grove port (GPIO 2/1). Thus, GPS positioning and IMU motion sensing work concurrently without bus conflicts, keeping the Earth globe rendering perfectly smooth.
+- 6-Axis IMU (Accelerometer + Gyroscope)
+- Built-in or external GNSS Module (for positioning and high-precision UTC clock sync, default UART baud rate: 115200bps@8N1)
 - Physical Keyboard + Miniature TFT Screen
 
 ![Hardware Connection Diagram](docs/schematic_diagram.png)

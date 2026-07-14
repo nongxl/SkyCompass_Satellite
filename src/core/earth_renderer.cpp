@@ -308,17 +308,19 @@ void EarthRenderer::drawStars(double centerLat, double centerLon) {
         
         // Apply Camera Pitch
         float y_pitched = y * cos_pitch - z * sin_pitch;
+        float z_pitched = y * sin_pitch + z * cos_pitch;
         
-        // Star is visible if it's not blocked by the Earth sphere.
-        // Earth is at (0,0).
-        float distSq = x * x + y_pitched * y_pitched;
-        float earthR = _earthRadius + 1.0f;
-        
-        if (distSq > earthR * earthR) {
+        // Star must be in front of the camera
+        if (z_pitched < 0) {
+            float denom = -z_pitched / R_sky;
+            if (denom < 0.05f) denom = 0.05f;
+            
+            float x_proj = x / denom;
+            float y_proj = y_pitched / denom;
             
             // Apply Camera Roll
-            float rotatedX = x * cos_roll - y_pitched * sin_roll;
-            float rotatedY = x * sin_roll + y_pitched * cos_roll;
+            float rotatedX = x_proj * cos_roll - y_proj * sin_roll;
+            float rotatedY = x_proj * sin_roll + y_proj * cos_roll;
             
             int outX = _centerX + _centerOffsetX + (int)rotatedX;
             int outY = _centerY + _centerOffsetY - (int)rotatedY;
