@@ -7,6 +7,7 @@
 #include "core/earth_renderer.h"
 #include "core/observation_predictor.h"
 #include "core/tle_updater.h"
+#include "core/i18n.h"
 
 // Helper to convert UTC date/time to Unix timestamp
 uint32_t convertGNSSDateToUnix(int year, int month, int day, int hour, int min, int sec) {
@@ -21,6 +22,7 @@ uint32_t convertGNSSDateToUnix(int year, int month, int day, int hour, int min, 
     return ((days * 24 + hour) * 60 + min) * 60 + sec;
 }
 
+#include <memory>
 #include "hal/hal_imu.h"
 #include "hal/hal_gnss.h"
 #include "hal/hal_wifi.h"
@@ -30,6 +32,7 @@ uint32_t convertGNSSDateToUnix(int year, int month, int day, int hour, int min, 
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include "M5Chain.h"
+#include <esp_task_wdt.h>
 
 Chain M5Chain;
 
@@ -106,9 +109,11 @@ void pushCanvasWithFilter() {
 enum AppState {
     STATE_MAIN,
     STATE_WIFI_SETUP,
-    STATE_SAT_SELECT
+    STATE_SAT_SELECT,
+    STATE_LANG_SELECT
 };
 AppState appState = STATE_MAIN;
+int langSelectedIndex = 0;
 void saveCustomSatellites();
 
 std::vector<WiFiNetwork> wifiNetworks;
@@ -181,16 +186,10 @@ extern TaskHandle_t predictorTaskHandle;
 
 struct PredictorTaskSuspendGuard {
     PredictorTaskSuspendGuard() {
-        if (predictorTaskHandle != NULL) {
-            vTaskSuspend(predictorTaskHandle);
-            LOG_I("APP", "Predictor task suspended for network ops");
-        }
+        LOG_I("APP", "Predictor task cooperative yield for network ops");
     }
     ~PredictorTaskSuspendGuard() {
-        if (predictorTaskHandle != NULL) {
-            vTaskResume(predictorTaskHandle);
-            LOG_I("APP", "Predictor task resumed after network ops");
-        }
+        LOG_I("APP", "Predictor task cooperative resume after network ops");
     }
 };
 
@@ -348,10 +347,12 @@ void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
     }
     
     JSONParser parser;
+    int calcLineCount = 0;
     while (f.available()) {
         String singleLine = f.readStringUntil('\n');
         singleLine.trim();
         if (singleLine.length() == 0) continue;
+        calcLineCount++;
         
         OrbitRecord record;
         if (parser.parse(singleLine, record)) {
@@ -365,12 +366,22 @@ void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
                 }
             }
         }
+        
+        // Feed watchdog every 5 lines to prevent WDT timeout
+        if (calcLineCount % 5 == 0) {
+            esp_task_wdt_reset();
+            vTaskDelay(2);
+        }
     }
     f.close();
     
     for (size_t i = 0; i < items.size(); i++) {
         auto& item = items[i];
         auto& phases = (*rawPhases)[i];
+        
+        // Feed watchdog for each item during heavy formation computation
+        esp_task_wdt_reset();
+        if (i % 3 == 0) vTaskDelay(1);
         
         // 1. Assign shortName and icon
         assignShortNameAndIcon(item);
@@ -800,6 +811,8 @@ volatile uint32_t g_currentPredictingBaseTime = 0;
 
 void predictorTask(void* parameter) {
     while (true) {
+        static unsigned long lastLoopPrintMs = 0;
+        // Heartbeat print disabled to prevent Serial multi-core deadlocks
         if (!triggerPrediction || g_networkActive || !g_timeSynced) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
@@ -816,7 +829,7 @@ void predictorTask(void* parameter) {
         cancelPrediction = false; // 重置取消状态
         g_orbitCalculating = true;
         
-        ObservationPredictor predictor(baseUserLat, baseUserLon, baseUserAlt / 1000.0);
+        std::unique_ptr<ObservationPredictor> predictor(new ObservationPredictor(baseUserLat, baseUserLon, baseUserAlt / 1000.0, pos_manager));
         std::vector<PassEvent> allPasses;
         allPasses.reserve(150);
         
@@ -839,7 +852,7 @@ void predictorTask(void* parameter) {
         
         if (g_recentLaunchFocusMode) {
             if (g_repSatInitialized && g_repSatTLE.line1.length() >= 14 && g_repSatTLE.line2.length() >= 14) {
-                auto passes = predictor.predictPasses(g_repSatTLE, 3.0, startTime, 7);
+                auto passes = predictor->predictPasses(g_repSatTLE, 3.0, startTime, 7);
                 
                 // Cap passes to prevent OOM
                 if (passes.size() > 8) {
@@ -880,7 +893,8 @@ void predictorTask(void* parameter) {
                         continue;
                     }
                     
-                    auto passes = predictor.predictPasses(tle, stdMag, startTime, 7);
+                    auto passes = predictor->predictPasses(tle, stdMag, startTime, 7);
+                    // Serial.printf("[Debug] Predictor: Sat '%s' (NORAD %u) got %d passes.\n", tle.name.c_str(), g_satellites[i].noradId, (int)passes.size());
                     
                     // Cap passes to prevent OOM
                     if (passes.size() > 8) {
@@ -918,6 +932,7 @@ void predictorTask(void* parameter) {
                 upcomingPasses.push_back(pass);
             }
         }
+        // Serial.printf("[Debug] Predictor: upcomingPasses size: %d (allPasses size: %d), current_unix: %u, offset: %d\n", (int)upcomingPasses.size(), (int)allPasses.size(), current_unix, timeMachineOffset);
         
         // Sort by score descending, then by start time ascending
         std::sort(upcomingPasses.begin(), upcomingPasses.end(), [](const PassEvent& a, const PassEvent& b) {
@@ -1086,18 +1101,69 @@ int drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int w, int l
     int lines = 0;
     while (start < text.length()) {
         lines++;
-        int fitChars = w / 6; // roughly 6px per char for setTextSize(1)
-        if (start + fitChars >= text.length()) {
-            if (draw) canvas->drawString(text.substring(start).c_str(), x, y);
-            break;
+        int len = 0;
+        bool foundNewline = false;
+        
+        while (start + len < text.length()) {
+            if (text[start + len] == '\n') {
+                foundNewline = true;
+                break;
+            }
+            
+            int charLen = 1;
+            unsigned char head = (unsigned char)text[start + len];
+            if (head >= 0xF0) charLen = 4;
+            else if (head >= 0xE0) charLen = 3;
+            else if (head >= 0xC0) charLen = 2;
+            
+            if (start + len + charLen > text.length()) {
+                charLen = text.length() - (start + len);
+            }
+            
+            String sub = text.substring(start, start + len + charLen);
+            int subW = canvas->textWidth(sub.c_str());
+            if (subW > w) {
+                break;
+            }
+            len += charLen;
         }
-        int end = start + fitChars;
-        int lastSpace = text.substring(start, end).lastIndexOf(' ');
-        if (lastSpace > start && lastSpace > start + fitChars/2) {
-            end = lastSpace;
+        
+        if (len == 0 && !foundNewline) {
+            int charLen = 1;
+            unsigned char head = (unsigned char)text[start];
+            if (head >= 0xF0) charLen = 4;
+            else if (head >= 0xE0) charLen = 3;
+            else if (head >= 0xC0) charLen = 2;
+            if (start + charLen > text.length()) charLen = text.length() - start;
+            len = charLen;
         }
-        if (draw) canvas->drawString(text.substring(start, end).c_str(), x, y);
-        start = end + 1;
+        
+        int end = start + len;
+        if (end < text.length() && !foundNewline) {
+            auto isAlphaNum = [](char c) {
+                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+            };
+            if (isAlphaNum(text[end]) && isAlphaNum(text[end - 1])) {
+                int lastSpace = text.substring(start, end).lastIndexOf(' ');
+                if (lastSpace > start && lastSpace > start + len / 2) {
+                    end = lastSpace;
+                    len = end - start;
+                }
+            }
+        }
+        
+        if (draw) {
+            canvas->drawString(text.substring(start, end).c_str(), x, y);
+        }
+        
+        start = end;
+        if (foundNewline) {
+            start++; // skip the '\n'
+        } else {
+            if (start < text.length() && text[start] == ' ') {
+                start++;
+            }
+        }
         y += lineH;
     }
     return lines;
@@ -1664,7 +1730,7 @@ void imuTask(void* pvParameters) {
 volatile bool g_loadingFinished = false;
 volatile int g_loadingProgress = 18;
 
-void drawStartupScreen(int progressPercentage) {
+void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int selectedLangIndex = 0) {
     if (!earth_renderer) return;
     
     float pitch = 0.0f;
@@ -1702,17 +1768,78 @@ void drawStartupScreen(int progressPercentage) {
     
     canvas->setTextColor(TFT_YELLOW);
     canvas->setTextSize(1);
-    canvas->drawString("Loading Satellite Orbit Models...", 120 - canvas->textWidth("Loading Satellite Orbit Models...") / 2, 50);
+    canvas->drawString(I18N::get(TXT_LOADING_MODELS), 120 - canvas->textWidth(I18N::get(TXT_LOADING_MODELS)) / 2, 50);
     
     // Draw progress bar
     canvas->drawRect(35, 108, 170, 8, TFT_DARKGREY);
     canvas->fillRect(37, 110, (int)(166.0f * (progressPercentage / 100.0f)), 4, TFT_GREEN);
+    
+    // Draw language selection dialog if needed
+    if (showLangSelect) {
+        int dialogW = 140;
+        int dialogH = 70;
+        int dialogX = 120 - dialogW / 2;
+        int dialogY = 67 - dialogH / 2 - 10;
+        
+        canvas->fillRect(dialogX, dialogY, dialogW, dialogH, canvas->color565(30, 40, 50));
+        canvas->drawRect(dialogX, dialogY, dialogW, dialogH, TFT_YELLOW);
+        
+        canvas->setTextColor(TFT_WHITE);
+        canvas->drawString("Select Language", dialogX + (dialogW - canvas->textWidth("Select Language")) / 2, dialogY + 8);
+        
+        if (selectedLangIndex == 0) {
+            canvas->setTextColor(TFT_GREEN);
+            canvas->drawString("> English", dialogX + 25, dialogY + 28);
+        } else {
+            canvas->setTextColor(TFT_LIGHTGRAY);
+            canvas->drawString("  English", dialogX + 25, dialogY + 28);
+        }
+        
+        if (selectedLangIndex == 1) {
+            canvas->setTextColor(TFT_GREEN);
+            canvas->drawString("> 简体中文", dialogX + 25, dialogY + 45);
+        } else {
+            canvas->setTextColor(TFT_LIGHTGRAY);
+            canvas->drawString("  简体中文", dialogX + 25, dialogY + 45);
+        }
+    }
     
     // Push to screen
     if (earth_renderer && earth_renderer->getVisualMode() == 1) {
         applyNightVisionFilter(canvas);
     }
     canvas->pushSprite(0, 0);
+}
+
+void drawLangSelectDialog(LGFX_Sprite* canvas) {
+    if (!canvas) return;
+    
+    int w = 140, h = 70;
+    int x = (canvas->width() - w) / 2;
+    int y = (canvas->height() - h) / 2;
+    
+    canvas->fillRect(x, y, w, h, canvas->color565(30, 40, 50));
+    canvas->drawRect(x, y, w, h, TFT_YELLOW);
+    
+    canvas->setTextColor(TFT_WHITE);
+    canvas->setTextSize(1);
+    canvas->drawString(I18N::get(TXT_LANGUAGE_MENU), x + (w - canvas->textWidth(I18N::get(TXT_LANGUAGE_MENU))) / 2, y + 8);
+    
+    if (langSelectedIndex == 0) {
+        canvas->setTextColor(TFT_GREEN);
+        canvas->drawString("> English", x + 25, y + 28);
+    } else {
+        canvas->setTextColor(TFT_LIGHTGRAY);
+        canvas->drawString("  English", x + 25, y + 28);
+    }
+    
+    if (langSelectedIndex == 1) {
+        canvas->setTextColor(TFT_GREEN);
+        canvas->drawString("> 简体中文", x + 25, y + 45);
+    } else {
+        canvas->setTextColor(TFT_LIGHTGRAY);
+        canvas->drawString("  简体中文", x + 25, y + 45);
+    }
 }
 
 void setup() {
@@ -1723,6 +1850,7 @@ void setup() {
 
     auto cfg = M5.config();
     M5Cardputer.begin(cfg, true);
+    I18N::begin();
     M5Cardputer.Display.setBrightness(currentBrightness);
     
     earth_renderer = new EarthRenderer(&M5Cardputer.Display);
@@ -1770,6 +1898,13 @@ void setup() {
                     baseUserAlt = posPrefs.getDouble("cached_alt", 0.0);
                     isManualLocationMode = posPrefs.getBool("use_manual_pos", false);
                     gnssLocationFixed = false; // Loaded from cache, not a live GNSS fix yet!
+                    
+                    if (abs(baseUserLat) < 0.0001 && abs(baseUserLon) < 0.0001) {
+                        baseUserLat = 39.90; // Beijing
+                        baseUserLon = 116.40;
+                        baseUserAlt = 50.0;
+                        LOG_I("APP", "Cached position was zero (0, 0). Fallback to Beijing default coordinates.");
+                    }
                     
                     // Sync loaded position to pos_manager
                     PositionData pos = {baseUserLat, baseUserLon, baseUserAlt};
@@ -1920,7 +2055,7 @@ void setup() {
             xTaskCreatePinnedToCore(
                 predictorTask,
                 "PredictorTask",
-                8192,
+                16384,
                 NULL,
                 1,
                 &predictorTaskHandle,
@@ -2054,13 +2189,38 @@ void setup() {
     );
     
     // Smooth 30 FPS rendering loop on Core 1 (main setup thread)
-    while (!g_loadingFinished) {
-        drawStartupScreen(g_loadingProgress);
+    bool needsLangSelect = I18N::isFirstStart();
+    int selectedLangIdx = 0;
+    while (!g_loadingFinished || needsLangSelect) {
+        M5Cardputer.update();
+        if (needsLangSelect) {
+            static bool lastSemi = false;
+            static bool lastDot = false;
+            static bool lastEnter = false;
+            bool currSemi = M5Cardputer.Keyboard.isKeyPressed(';');
+            bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
+            bool currEnter = M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER);
+            if (currSemi && !lastSemi) {
+                selectedLangIdx = (selectedLangIdx == 0) ? 1 : 0;
+            }
+            if (currDot && !lastDot) {
+                selectedLangIdx = (selectedLangIdx == 0) ? 1 : 0;
+            }
+            if (currEnter && !lastEnter) {
+                I18N::setLanguage(selectedLangIdx == 0 ? LANG_EN : LANG_ZH);
+                I18N::setFirstStartDone();
+                needsLangSelect = false;
+            }
+            lastSemi = currSemi;
+            lastDot = currDot;
+            lastEnter = currEnter;
+        }
+        drawStartupScreen(g_loadingProgress, needsLangSelect, selectedLangIdx);
         delay(33); // ~30 FPS
     }
     
     // Draw the final complete state and pause slightly to show completion
-    drawStartupScreen(100);
+    drawStartupScreen(100, false, 0);
     delay(50);
     
     // Restore decorations for main system view
@@ -2087,28 +2247,28 @@ void drawWiFiSetupPage() {
     canvas->fillRect(0, 0, width, 25, canvas->color565(30, 60, 100));
     canvas->setTextColor(TFT_WHITE);
     canvas->setTextSize(2);
-    canvas->drawString("WiFi Setup", 10, 5);
+    canvas->drawString(I18N::get(TXT_WIFI_SETUP), 10, 5);
     
     canvas->setTextColor(TFT_WHITE);
     canvas->setTextSize(1);
     
     if (wifiIsScanning) {
-        canvas->drawString("Scanning for networks...", 20, 50);
+        canvas->drawString(I18N::get(TXT_SCANNING_NETWORKS), 20, 50);
         return; // Will be handled in main loop
     }
     
     if (wifiNetworks.empty() && !wifiIsScanning) {
-        canvas->drawString("No networks found.", 20, 80);
-        canvas->drawString("Press [R] to rescan", 20, 100);
+        canvas->drawString(I18N::get(TXT_NO_NETWORKS_FOUND), 20, 80);
+        canvas->drawString(I18N::get(TXT_PRESS_R_RESCAN), 20, 100);
     } else {
         if (wifiIsInputtingPassword) {
-            canvas->drawString("Connect to:", 20, 40);
+            canvas->drawString(I18N::get(TXT_CONNECT_TO), 20, 40);
             canvas->setTextColor(TFT_GREEN);
             String ssid = wifiNetworks[wifiSelectedIndex].ssid;
             canvas->drawString(ssid.c_str(), 20, 55);
             
             canvas->setTextColor(TFT_WHITE);
-            canvas->drawString("Password:", 20, 80);
+            canvas->drawString(I18N::get(TXT_PASSWORD), 20, 80);
             
             canvas->fillRect(20, 95, width - 40, 25, canvas->color565(50, 50, 50));
             canvas->drawRect(20, 95, width - 40, 25, TFT_WHITE);
@@ -2118,9 +2278,9 @@ void drawWiFiSetupPage() {
             canvas->drawString(displayStr, 25, 100);
             
             canvas->setTextColor(TFT_LIGHTGRAY);
-            canvas->drawString("[Enter] Connect   [ESC] Cancel", 10, height - 15);
+            canvas->drawString(I18N::get(TXT_WIFI_HELP_CONN), 10, height - 15);
         } else {
-            canvas->drawString("Select Network:", 10, 30);
+            canvas->drawString(I18N::get(TXT_SELECT_NETWORK), 10, 30);
             
             int yPos = 45;
             int itemsPerPage = 4;
@@ -2148,17 +2308,17 @@ void drawWiFiSetupPage() {
             }
             
             canvas->setTextColor(TFT_LIGHTGRAY);
-            canvas->drawString("[^/v] Sel [Enter] Input [R] Scan [ESC] Exit", 5, height - 15);
+            canvas->drawString(I18N::get(TXT_WIFI_HELP_SEL), 5, height - 15);
         }
     }
 }
 
 void drawSatSelectPage() {
     if (!g_networkActive) {
-        if (downloadErrorMsg == "System Busy... Wait.") {
+        if (downloadErrorMsg == I18N::get(TXT_SYS_BUSY)) {
             downloadErrorMsg = "";
         }
-        if (recentLaunchErrorMsg == "System Busy... Wait.") {
+        if (recentLaunchErrorMsg == I18N::get(TXT_SYS_BUSY)) {
             recentLaunchErrorMsg = "";
         }
     }
@@ -2189,7 +2349,7 @@ void drawSatSelectPage() {
             }
         }
     }
-    int bottomLimit = showBanner ? (height - 11) : height;
+    int bottomLimit = showBanner ? (height - 13) : height;
 
     
     // Background
@@ -2203,12 +2363,12 @@ void drawSatSelectPage() {
     canvas->fillRect(0, 0, width/2, 20, tab1Bg);
     canvas->setTextColor(TFT_WHITE);
     canvas->setTextSize(1);
-    canvas->drawString("Encyclopedia", 70 - canvas->textWidth("Encyclopedia")/2, 6);
+    canvas->drawString(I18N::get(TXT_TAB_ENCYCLOPEDIA), 70 - canvas->textWidth(I18N::get(TXT_TAB_ENCYCLOPEDIA))/2, 6);
     
     // Tab 2: Recent Launch
     uint16_t tab2Bg = (currentSatTab == TAB_RECENT_LAUNCH) ? canvas->color565(100, 50, 200) : canvas->color565(30, 40, 50);
     canvas->fillRect(width/2, 0, width/2, 20, tab2Bg);
-    canvas->drawString("Recent Launch", 166 - canvas->textWidth("Recent Launch")/2, 6);
+    canvas->drawString(I18N::get(TXT_TAB_RECENT_LAUNCH), 166 - canvas->textWidth(I18N::get(TXT_TAB_RECENT_LAUNCH))/2, 6);
     
     // Bottom border for Top Bar
     canvas->drawFastHLine(0, 20, width, TFT_DARKGREY);
@@ -2279,25 +2439,27 @@ void drawSatSelectPage() {
         canvas->fillRect(batX + batW, batY + 4, 2, 4, batColor);
         
         // Battery percentage text inside (centered)
+        canvas->setFont(&fonts::Font0);
         canvas->setTextColor(batColor);
         String pctStr = String(batPct);
         int textX = batX + (batW - canvas->textWidth(pctStr.c_str())) / 2;
         int textY = batY + 2; // standard char height is 8
         canvas->drawString(pctStr.c_str(), textX, textY);
+        canvas->setFont(&fonts::efontCN_12);
     }
 
     
     if (currentSatTab == TAB_ENCYCLOPEDIA) {
         // Left Panel (List)
         int yPos = 25;
-        int itemsPerPage = showBanner ? 6 : 7;
-        int itemSpacing = showBanner ? 16 : 15;
+        int itemsPerPage = showBanner ? 6 : 8;
+        int itemSpacing = 13;
         int startIndex = (satSelectedIndex / itemsPerPage) * itemsPerPage;
         
         for (int i = 0; i < itemsPerPage && (startIndex + i) <= NUM_SATELLITES; i++) {
             int index = startIndex + i;
             if (index == satSelectedIndex) {
-                canvas->fillRect(2, yPos - 2, 82, itemSpacing - 1, canvas->color565(0, 120, 255));
+                canvas->fillRect(2, yPos - 1, 82, 12, canvas->color565(0, 120, 255));
                 canvas->setTextColor(TFT_WHITE);
             } else {
                 canvas->setTextColor(TFT_LIGHTGRAY);
@@ -2315,7 +2477,7 @@ void drawSatSelectPage() {
                     canvas->drawString(nameStr.c_str(), 28, yPos);
                 }
             } else {
-                String text = isDownloadingCustom ? "Downloading..." : ("[+] " + noradInput + "_");
+                String text = isDownloadingCustom ? I18N::get(TXT_DOWNLOADING) : ("[+] " + noradInput + "_");
                 canvas->drawString(text.c_str(), 4, yPos);
             }
             
@@ -2331,7 +2493,7 @@ void drawSatSelectPage() {
             char pageBuf[32];
             sprintf(pageBuf, "(%d %d/%d)", currentIdx, currentPage, totalPages);
             canvas->setTextColor(canvas->color565(110, 150, 180));
-            canvas->drawString(pageBuf, 28, bottomLimit - 9);
+            canvas->drawString(pageBuf, 28, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
         }
         
         // Right Panel (Description)
@@ -2434,11 +2596,11 @@ void drawSatSelectPage() {
                 canvas->fillRect(iconX - 6, iconY - 1, 3, 3, TFT_LIGHTGRAY);
             }
             
-            drawScrollingText(canvas, selSat.name.c_str(), rightX + 48, descY + 8, width - rightX - 48 - 4, selSat.color);
+            drawScrollingText(canvas, selSat.name.c_str(), rightX + 48, descY + 6, width - rightX - 48 - 4, selSat.color);
             
             // Draw NORAD ID for tracking
             canvas->setTextColor(TFT_LIGHTGRAY);
-            canvas->drawString(("ID: " + String(selSat.noradId)).c_str(), rightX + 48, descY + 18);
+            canvas->drawString((String(I18N::get(TXT_ID)) + String(selSat.noradId)).c_str(), rightX + 48, descY + 20);
             
             if (selSat.tle.line1.length() >= 32) {
                 uint32_t currentSimTime = current_unix + timeMachineOffset;
@@ -2451,23 +2613,23 @@ void drawSatSelectPage() {
                 char ageBuf[32];
                 uint16_t ageColor = TFT_GREEN;
                 if (ageDays < 0) {
-                    sprintf(ageBuf, "GP Age:N/A");
+                    sprintf(ageBuf, "%s", I18N::get(TXT_GP_AGE_NA));
                     ageColor = TFT_RED;
                 } else {
-                    sprintf(ageBuf, "GP Age:%dd", ageDays);
+                    sprintf(ageBuf, "%s%dd", I18N::get(TXT_GP_AGE), ageDays);
                     if (ageDays <= 7) ageColor = TFT_GREEN;
                     else if (ageDays <= 14) ageColor = TFT_ORANGE;
                     else ageColor = TFT_RED;
                 }
                 canvas->setTextColor(ageColor);
                 int ageW = canvas->textWidth(ageBuf);
-                canvas->drawString(ageBuf, width - ageW - 4, descY - 2);
+                canvas->drawString(ageBuf, width - ageW - 4, descY - 5);
             } else {
                 canvas->setTextColor(TFT_RED);
-                canvas->drawString("GP Age:N/A", width - canvas->textWidth("GP Age:N/A") - 4, descY - 2);
+                canvas->drawString(I18N::get(TXT_GP_AGE_NA), width - canvas->textWidth(I18N::get(TXT_GP_AGE_NA)) - 4, descY - 5);
             }
             
-            descY += 32;
+            descY += 36;
             
             double tx, ty, tz;
             bool isTracking = false;
@@ -2579,47 +2741,52 @@ void drawSatSelectPage() {
                     
                     char buf[160];
                     snprintf(buf, sizeof(buf),
-                             "Custom added satellite.\n\n"
+                             "%s"
                              "COSPAR: %s\n"
                              "Period: %.1f min\n"
                              "Incl: %.2f deg\n"
                              "Alt: %.1f/%.1f km",
-                             cospar.c_str(), periodMin, inclination, perigee, apogee);
+                             I18N::get(TXT_CUSTOM_ADDED_SAT), cospar.c_str(), periodMin, inclination, perigee, apogee);
                     finalDesc = String(buf);
                 }
             }
             
             if (finalDesc.length() == 0) {
-                if (selSat.description) {
+                const char* localDesc = I18N::getSatDescription(selSat.noradId);
+                if (localDesc) {
+                    finalDesc = localDesc;
+                } else if (selSat.description) {
                     finalDesc = selSat.description;
                 }
             }
             
             if (finalDesc.length() > 0) {
                 int descAreaHeight = radioY - descY - 2;
-                int totalLines = drawWrappedText(canvas, finalDesc.c_str(), rightX, descY, width - rightX - 5, 10, false);
-                int totalHeight = totalLines * 10;
+                int totalLines = drawWrappedText(canvas, finalDesc.c_str(), rightX, descY, width - rightX - 5, 13, false);
+                int totalHeight = totalLines * 13;
                 
                 int yOffset = 0;
-                if (totalHeight > descAreaHeight && descAreaHeight > 10) {
-                    int scrollRange = totalHeight - descAreaHeight + 10;
-                    int cycleTime = scrollRange * 33 + 2000;
+                if (totalHeight > descAreaHeight && descAreaHeight > 13) {
+                    int scrollSpeedMs = 66;
+                    int holdTimeMs = 1500;
+                    int scrollRange = totalHeight - descAreaHeight + 13;
+                    int cycleTime = scrollRange * scrollSpeedMs + holdTimeMs * 2;
                     int t = millis() % cycleTime;
-                    if (t < 1000) yOffset = 0;
-                    else if (t < cycleTime - 1000) yOffset = (t - 1000) / 33;
+                    if (t < holdTimeMs) yOffset = 0;
+                    else if (t < cycleTime - holdTimeMs) yOffset = (t - holdTimeMs) / scrollSpeedMs;
                     else yOffset = scrollRange;
                 }
                 
                 canvas->setClipRect(rightX, descY, width - rightX, descAreaHeight);
-                drawWrappedText(canvas, finalDesc.c_str(), rightX, descY - yOffset, width - rightX - 5, 10);
+                drawWrappedText(canvas, finalDesc.c_str(), rightX, descY - yOffset, width - rightX - 5, 13);
                 canvas->clearClipRect();
             } else {
-                canvas->drawString("No description.", rightX, descY);
+                canvas->drawString(I18N::get(TXT_NO_DESCRIPTION), rightX, descY);
             }
             
             if (satSelectedIndex >= NUM_BUILTIN_SATELLITES && requiredLines == 0) {
                 canvas->setTextColor(TFT_YELLOW);
-                canvas->drawString("Press 'd' to delete", rightX, bottomLimit - 12);
+                canvas->drawString(I18N::get(TXT_PRESS_D_DELETE), rightX, bottomLimit - 12);
             }
             
             if (requiredLines > 0) {
@@ -2660,7 +2827,7 @@ void drawSatSelectPage() {
                         canvas->drawString(dopBuf, rightX + canvas->textWidth(freqBuf) + 2, radioY + 11);
                         
                         canvas->setTextColor(TFT_LIGHTGRAY);
-                        canvas->drawString("Mode: " + selSat.radioMode, rightX, radioY + 22);
+                        canvas->drawString((String(I18N::get(TXT_MODE)) + selSat.radioMode).c_str(), rightX, radioY + 22);
                     }
                     else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
                         double dlFreq2 = 145.825;
@@ -2676,7 +2843,7 @@ void drawSatSelectPage() {
                         canvas->drawString(f2, rightX, radioY + 22);
                         
                         canvas->setTextColor(TFT_LIGHTGRAY);
-                        canvas->drawString("Mode: FM/Packet", rightX, radioY + 33);
+                        canvas->drawString((String(I18N::get(TXT_MODE)) + "FM/Packet").c_str(), rightX, radioY + 33);
                     }
                     else if (selSat.type == SAT_TYPE_HAM) {
                         canvas->setTextColor(TFT_GREEN);
@@ -2699,23 +2866,23 @@ void drawSatSelectPage() {
                         }
                         
                         canvas->setTextColor(TFT_LIGHTGRAY);
-                        canvas->drawString("Mode: " + selSat.radioMode, rightX, nextLineY);
+                        canvas->drawString((String(I18N::get(TXT_MODE)) + selSat.radioMode).c_str(), rightX, nextLineY);
                     }
                 } else {
                     if (selSat.type == SAT_TYPE_WEATHER) {
                         canvas->setTextColor(TFT_GREEN);
                         canvas->drawString("Rx: " + selSat.downlinkFreq + " MHz", rightX, radioY);
                         canvas->setTextColor(TFT_CYAN);
-                        canvas->drawString("Mode: " + selSat.radioMode, rightX, radioY + 11);
+                        canvas->drawString((String(I18N::get(TXT_MODE)) + selSat.radioMode).c_str(), rightX, radioY + 11);
                         canvas->setTextColor(TFT_LIGHTGRAY);
-                        canvas->drawString("Weather Imaging", rightX, radioY + 22);
+                        canvas->drawString(I18N::get(TXT_WEATHER_IMAGING), rightX, radioY + 22);
                     }
                     else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
                         canvas->setTextColor(TFT_GREEN);
                         canvas->drawString("APRS: 145.825 MHz", rightX, radioY);
                         canvas->drawString("SSTV: 145.800 MHz", rightX, radioY + 11);
                         canvas->setTextColor(TFT_CYAN);
-                        canvas->drawString("Mode: FM/Packet", rightX, radioY + 22);
+                        canvas->drawString((String(I18N::get(TXT_MODE)) + "FM/Packet").c_str(), rightX, radioY + 22);
                     }
                     else if (selSat.type == SAT_TYPE_HAM) {
                         canvas->setTextColor(TFT_GREEN);
@@ -2731,7 +2898,7 @@ void drawSatSelectPage() {
                         }
                         
                         canvas->setTextColor(TFT_CYAN);
-                        canvas->drawString("Mode: " + selSat.radioMode, rightX, nextLineY);
+                        canvas->drawString((String(I18N::get(TXT_MODE)) + selSat.radioMode).c_str(), rightX, nextLineY);
                         nextLineY += 11;
                         
                         PassEvent nextPass;
@@ -2758,8 +2925,8 @@ void drawSatSelectPage() {
                             
                             char aosStr[32];
                             char losStr[32];
-                            sprintf(aosStr, "AOS: %s", aosBuf);
-                            sprintf(losStr, "LOS: %s El:%02d", losBuf, (int)nextPass.maxElevation);
+                            sprintf(aosStr, "%s%s", I18N::get(TXT_AOS), aosBuf);
+                            sprintf(losStr, "%s%s El:%02d", I18N::get(TXT_LOS), losBuf, (int)nextPass.maxElevation);
                             
                             canvas->drawString(aosStr, rightX, nextLineY);
                             canvas->drawString(losStr, rightX, nextLineY + 11);
@@ -2770,13 +2937,13 @@ void drawSatSelectPage() {
         } else {
             if (downloadErrorMsg.length() > 0) {
                 canvas->setTextColor(TFT_RED);
-                drawWrappedText(canvas, downloadErrorMsg.c_str(), rightX, descY, width - rightX - 5, 10);
+                drawWrappedText(canvas, downloadErrorMsg.c_str(), rightX, descY, width - rightX - 5, 13);
             } else {
                 canvas->setTextColor(TFT_LIGHTGRAY);
-                int lines = drawWrappedText(canvas, "Enter 5 or 6-digit NORAD ID to add custom satellite.", rightX, descY, width - rightX - 5, 10);
+                int lines = drawWrappedText(canvas, I18N::get(TXT_ENTER_NORAD_ADD), rightX, descY, width - rightX - 5, 13);
                 
                 canvas->setTextColor(TFT_YELLOW);
-                canvas->drawString("Source: celestrak.org", rightX, descY + lines * 10 + 4);
+                canvas->drawString(I18N::get(TXT_SOURCE_CELESTRAK), rightX, descY + lines * 13 + 4);
             }
         }
     } else {
@@ -2784,7 +2951,7 @@ void drawSatSelectPage() {
         if (!recentLaunchDownloadSuccess && g_recentLaunches.empty()) {
             if (recentLaunchDownloading) {
                 canvas->setTextColor(TFT_YELLOW);
-                canvas->drawString("Downloading GP JSONs...", width/2 - canvas->textWidth("Downloading GP JSONs...")/2, height/2 - 10);
+                canvas->drawString(I18N::get(TXT_DOWNLOADING_GP_JSONS), width/2 - canvas->textWidth(I18N::get(TXT_DOWNLOADING_GP_JSONS))/2, height/2 - 10);
                 if (recentLaunchErrorMsg.length() > 0) {
                     canvas->setTextColor(TFT_LIGHTGRAY);
                     canvas->drawString(recentLaunchErrorMsg.c_str(), width/2 - canvas->textWidth(recentLaunchErrorMsg.c_str())/2, height/2 + 5);
@@ -2794,10 +2961,10 @@ void drawSatSelectPage() {
                 canvas->drawRect(10, 30, width - 20, height - 55, TFT_YELLOW);
                 
                 canvas->setTextColor(TFT_YELLOW);
-                canvas->drawString("Recent Launch is an online feature.", width/2 - canvas->textWidth("Recent Launch is an online feature.")/2, height/2 - 20);
+                canvas->drawString(I18N::get(TXT_RL_ONLINE_FEATURE), width/2 - canvas->textWidth(I18N::get(TXT_RL_ONLINE_FEATURE))/2, height/2 - 20);
                 canvas->setTextColor(TFT_WHITE);
-                canvas->drawString("Press 'w' to connect WiFi", width/2 - canvas->textWidth("Press 'w' to connect WiFi")/2, height/2 - 2);
-                canvas->drawString("& download latest launcher groups.", width/2 - canvas->textWidth("& download latest launcher groups.")/2, height/2 + 8);
+                canvas->drawString(I18N::get(TXT_PRESS_W_CONNECT_WIFI), width/2 - canvas->textWidth(I18N::get(TXT_PRESS_W_CONNECT_WIFI))/2, height/2 - 2);
+                canvas->drawString(I18N::get(TXT_DOWNLOAD_LATEST_GROUPS), width/2 - canvas->textWidth(I18N::get(TXT_DOWNLOAD_LATEST_GROUPS))/2, height/2 + 8);
                 
                 if (recentLaunchErrorMsg.length() > 0) {
                     canvas->setTextColor(TFT_RED);
@@ -2806,15 +2973,15 @@ void drawSatSelectPage() {
             }
         } else {
             int yPos = 25;
-            int itemsPerPage = showBanner ? 6 : 7;
-            int itemSpacing = showBanner ? 16 : 15;
+            int itemsPerPage = showBanner ? 6 : 8;
+            int itemSpacing = 13;
             int startIndex = (recentLaunchSelectedIndex / itemsPerPage) * itemsPerPage;
             int totalItems = g_recentLaunches.size();
             
             for (int i = 0; i < itemsPerPage && (startIndex + i) < totalItems; i++) {
                 int index = startIndex + i;
                 if (index == recentLaunchSelectedIndex) {
-                    canvas->fillRect(2, yPos - 2, 82, itemSpacing - 1, canvas->color565(0, 120, 255));
+                    canvas->fillRect(2, yPos - 1, 82, 12, canvas->color565(0, 120, 255));
                     canvas->setTextColor(TFT_WHITE);
                 } else {
                     canvas->setTextColor(TFT_LIGHTGRAY);
@@ -2846,7 +3013,7 @@ void drawSatSelectPage() {
                 char pageBuf[32];
                 sprintf(pageBuf, "(%d %d/%d)", currentIdx, currentPage, totalPages);
                 canvas->setTextColor(canvas->color565(110, 150, 180));
-                canvas->drawString(pageBuf, 28, bottomLimit - 9);
+                canvas->drawString(pageBuf, 28, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
             }
             
             canvas->drawFastVLine(85, 20, bottomLimit - 20, TFT_DARKGREY);
@@ -2874,11 +3041,23 @@ void drawSatSelectPage() {
                 else stars = "**---";
                 
                 if (!recentLaunchInObjectsView) {
+                    int y0 = (I18N::getLanguage() == LANG_ZH && !showBanner) ? 22 : 23;
+                    auto getY = [&](int k) -> int {
+                        if (I18N::getLanguage() == LANG_ZH && !showBanner) {
+                            if (k <= 6) return y0 + k * 11;
+                            if (k == 7) return y0 + 6 * 11 + 12; // 88 + 12 = 100
+                            if (k == 8) return y0 + 6 * 11 + 24; // 88 + 24 = 112
+                            if (k == 9) return y0 + 6 * 11 + 36; // 88 + 36 = 124
+                        }
+                        int localStep = (I18N::getLanguage() == LANG_ZH && !showBanner) ? 11 : 10;
+                        return y0 + k * localStep;
+                    };
+                    
                     int starsW = canvas->textWidth(stars);
-                    drawScrollingText(canvas, item.displayName.c_str(), rightX, 23, width - rightX - starsW - 8, TFT_GOLD);
+                    drawScrollingText(canvas, item.displayName.c_str(), rightX, getY(0), width - rightX - starsW - 8, TFT_GOLD);
                     
                     canvas->setTextColor(TFT_YELLOW);
-                    canvas->drawString(stars, width - starsW - 4, 23);
+                    canvas->drawString(stars, width - starsW - 4, getY(0));
                     
                     canvas->setTextColor(TFT_CYAN);
                     String formattedBatch = item.batchId;
@@ -2887,23 +3066,23 @@ void drawSatSelectPage() {
                         String century = (yr >= 50) ? "19" : "20";
                         formattedBatch = century + item.batchId.substring(0, 2) + "-" + item.batchId.substring(2);
                     }
-                    canvas->drawString(("Batch: " + formattedBatch).c_str(), rightX, 33);
+                    canvas->drawString(("Batch: " + formattedBatch).c_str(), rightX, getY(1));
                     
                     // Age placement on the right
-                    char ageBuf[16];
+                    char ageBuf[32];
                     uint16_t ageColor = TFT_GREEN;
                     if (ageDays < 0) {
-                        sprintf(ageBuf, "Age: N/A");
+                        sprintf(ageBuf, "%sN/A", I18N::get(TXT_RL_AGE));
                         ageColor = TFT_RED;
                     } else {
-                        sprintf(ageBuf, "%dd", ageDays);
+                        sprintf(ageBuf, "%s%dd", I18N::get(TXT_RL_AGE), ageDays);
                         if (ageDays <= 7) ageColor = TFT_GREEN;
                         else if (ageDays <= 14) ageColor = TFT_ORANGE;
                         else ageColor = TFT_RED;
                     }
                     canvas->setTextColor(ageColor);
                     int ageW = canvas->textWidth(ageBuf);
-                    canvas->drawString(ageBuf, width - ageW - 4, 33);
+                    canvas->drawString(ageBuf, width - ageW - 4, getY(1));
                     
                     char dateBuf[32];
                     if (epoch > 0) {
@@ -2914,43 +3093,43 @@ void drawSatSelectPage() {
                         sprintf(dateBuf, "N/A");
                     }
                     canvas->setTextColor(TFT_LIGHTGRAY);
-                    canvas->drawString(("Epoch: " + String(dateBuf)).c_str(), rightX, 43);
+                    canvas->drawString((String(I18N::get(TXT_RL_EPOCH)) + String(dateBuf)).c_str(), rightX, getY(2));
                     
                     // Draw representative satellite name
-                    String repSatText = "Rep: " + item.repSatName;
-                    drawScrollingText(canvas, repSatText.c_str(), rightX, 53, width - rightX - 4, TFT_LIGHTGRAY);
+                    String repSatText = String(I18N::get(TXT_RL_REP)) + item.repSatName;
+                    drawScrollingText(canvas, repSatText.c_str(), rightX, getY(3), width - rightX - 4, TFT_LIGHTGRAY);
                     
                     // Display real count of objects and clustered proxies
                     char satsBuf[64];
                     int proxyCount = item.proxyFormation.size();
-                    sprintf(satsBuf, "Objects: %d | Proxy: %d", item.satelliteCount, proxyCount);
-                    canvas->drawString(satsBuf, rightX, 63);
+                    sprintf(satsBuf, "%s%d | Proxy: %d", I18N::get(TXT_RL_OBJECTS), item.satelliteCount, proxyCount);
+                    canvas->drawString(satsBuf, rightX, getY(4));
                     
                     char orbitBuf[48];
-                    sprintf(orbitBuf, "Orbit: %dkm, %.1f*", (int)avgAlt, inclination);
-                    canvas->drawString(orbitBuf, rightX, 73);
+                    sprintf(orbitBuf, "%s%dkm, %.1f*", I18N::get(TXT_RL_ORBIT), (int)avgAlt, inclination);
+                    canvas->drawString(orbitBuf, rightX, getY(5));
                     
                     // Formation State & Occupancy degree
                     canvas->setTextColor(TFT_GREEN);
-                    canvas->drawString("Status:", rightX, 83);
+                    canvas->drawString(I18N::get(TXT_RL_STATUS), rightX, getY(6));
                     canvas->setTextColor(TFT_WHITE);
-                    const char* formState = "Operational";
-                    if (item.occupancy < 15.0f) formState = "Tight Train";
-                    else if (item.occupancy < 60.0f) formState = "Train Formation";
-                    else if (item.occupancy < 120.0f) formState = "Expanding";
-                    canvas->drawString(formState, rightX + 45, 83);
+                    const char* formState = I18N::get(TXT_FORM_OPERATIONAL);
+                    if (item.occupancy < 15.0f) formState = I18N::get(TXT_FORM_TIGHT_TRAIN);
+                    else if (item.occupancy < 60.0f) formState = I18N::get(TXT_FORM_TRAIN_FORMATION);
+                    else if (item.occupancy < 120.0f) formState = I18N::get(TXT_FORM_EXPANDING);
+                    canvas->drawString(formState, rightX + 45, getY(6));
                     
                     char occBuf[32];
                     sprintf(occBuf, "Occ: %d*", (int)item.occupancy);
                     canvas->setTextColor(TFT_CYAN);
                     int occW = canvas->textWidth(occBuf);
-                    canvas->drawString(occBuf, width - occW - 4, 103);
+                    canvas->drawString(occBuf, width - occW - 4, getY(8));
                     
                     // Distribution indicator (8 refined blocks)
                     canvas->setTextColor(TFT_GREEN);
-                    canvas->drawString("Distribution:", rightX, 93);
+                    canvas->drawString("Distribution:", rightX, getY(7));
                     
-                    int barY = 103;
+                    int barY = getY(8);
                     int filledCount = (int)((item.occupancy / 360.0f) * 8.0f + 0.5f);
                     if (filledCount < 1 && item.occupancy > 0.0f) filledCount = 1;
                     if (filledCount > 8) filledCount = 8;
@@ -2965,18 +3144,15 @@ void drawSatSelectPage() {
                     }
                     
                     canvas->setTextColor(TFT_GREEN);
-                    canvas->drawString("Visibility:", rightX, 113);
+                    canvas->drawString(I18N::get(TXT_RL_VISIBILITY), rightX, getY(9));
                     canvas->setTextColor(TFT_YELLOW);
                     if (avgAlt >= 250 && avgAlt <= 600) {
-                        canvas->drawString("Excellent", rightX + 65, 113);
+                        canvas->drawString(I18N::get(TXT_VIS_EXCELLENT), rightX + 65, getY(9));
                     } else if (avgAlt > 0) {
-                        canvas->drawString("Moderate", rightX + 65, 113);
+                        canvas->drawString(I18N::get(TXT_VIS_MODERATE), rightX + 65, getY(9));
                     } else {
-                        canvas->drawString("N/A", rightX + 65, 113);
+                        canvas->drawString(I18N::get(TXT_VIS_NA), rightX + 65, getY(9));
                     }
-                    
-                    canvas->setTextColor(TFT_LIGHTGRAY);
-                    canvas->drawString("Press 'O' for Objects", rightX, bottomLimit - 8);
                 } else {
                     String title = item.displayName + " Objects";
                     drawScrollingText(canvas, title.c_str(), rightX, 25, width - rightX - 4, TFT_GOLD);
@@ -3009,7 +3185,7 @@ void drawSatSelectPage() {
                     
                     if (g_level3Objects.empty()) {
                         canvas->setTextColor(TFT_RED);
-                        canvas->drawString("No Objects Found.", rightX, memY);
+                        canvas->drawString(I18N::get(TXT_NO_OBJECTS_FOUND), rightX, memY);
                     }
                 }
             }
@@ -3018,36 +3194,39 @@ void drawSatSelectPage() {
     
     // Draw Bottom Guide Banner (Only when updating or showing feedback)
     if (showBanner) {
-        canvas->fillRect(0, height - 11, width, 11, canvas->color565(15, 20, 25));
-        canvas->drawFastHLine(0, height - 11, width, TFT_DARKGREY);
+        canvas->fillRect(0, height - 13, width, 13, canvas->color565(15, 20, 25));
+        canvas->drawFastHLine(0, height - 13, width, TFT_DARKGREY);
         
         if (currentSatTab == TAB_RECENT_LAUNCH) {
             if (recentLaunchDownloading) {
                 canvas->setTextColor(TFT_YELLOW);
-                String msg = "Recent Launch Updating: " + recentLaunchErrorMsg;
+                String msg = String(I18N::get(TXT_TAB_RECENT_LAUNCH)) + " " + I18N::get(TXT_DOWNLOADING) + " " + recentLaunchErrorMsg;
                 if (canvas->textWidth(msg.c_str()) > width - 8) {
                     msg = msg.substring(0, 35) + "...";
                 }
-                canvas->drawString(msg.c_str(), 4, height - 9);
+                canvas->drawString(msg.c_str(), 4, height - 12);
             } else {
                 if (recentLaunchDownloadSuccess) {
                     canvas->setTextColor(TFT_GREEN);
-                    canvas->drawString("Update Success: Cache overwritten!", 4, height - 9);
+                    canvas->drawString(I18N::get(TXT_UPDATE_SUCCESS_CACHE), 4, height - 12);
                 } else {
                     canvas->setTextColor(TFT_RED);
-                    String failMsg = (recentLaunchErrorMsg.indexOf("Busy") != -1) ? recentLaunchErrorMsg : ("Update Failed: " + recentLaunchErrorMsg);
+                    String failMsg = (recentLaunchErrorMsg.indexOf("Busy") != -1 || recentLaunchErrorMsg.indexOf(u8"繁忙") != -1) ? 
+                                     recentLaunchErrorMsg : (String(I18N::get(TXT_UPDATE_FAILED)) + recentLaunchErrorMsg);
                     if (canvas->textWidth(failMsg.c_str()) > width - 8) {
                         failMsg = failMsg.substring(0, 35) + "...";
                     }
-                    canvas->drawString(failMsg.c_str(), 4, height - 9);
+                    canvas->drawString(failMsg.c_str(), 4, height - 12);
                 }
             }
         } else if (currentSatTab == TAB_ENCYCLOPEDIA) {
-            if (downloadErrorMsg.indexOf("Success") != -1 || downloadErrorMsg.indexOf("Updated") != -1 || downloadErrorMsg.indexOf("fresh") != -1) {
+            if (downloadErrorMsg.indexOf("Success") != -1 || downloadErrorMsg.indexOf(u8"成功") != -1 || 
+                downloadErrorMsg.indexOf("Updated") != -1 || downloadErrorMsg.indexOf(u8"更新") != -1 || 
+                downloadErrorMsg.indexOf("fresh") != -1) {
                 canvas->setTextColor(TFT_GREEN);
-            } else if (downloadErrorMsg.indexOf("Busy") != -1 || downloadErrorMsg.indexOf("Wait") != -1 || 
-                       downloadErrorMsg.indexOf("Connecting") != -1 || downloadErrorMsg.indexOf("Refreshing") != -1 || 
-                       downloadErrorMsg.indexOf("Syncing") != -1 || downloadErrorMsg.indexOf("Loading") != -1) {
+            } else if (downloadErrorMsg.indexOf("Busy") != -1 || downloadErrorMsg.indexOf(u8"繁忙") != -1 || 
+                       downloadErrorMsg.indexOf("Connecting") != -1 || downloadErrorMsg.indexOf(u8"连接") != -1 || 
+                       downloadErrorMsg.indexOf("Refreshing") != -1 || downloadErrorMsg.indexOf(u8"刷新") != -1) {
                 canvas->setTextColor(TFT_YELLOW);
             } else {
                 canvas->setTextColor(TFT_RED);
@@ -3056,7 +3235,7 @@ void drawSatSelectPage() {
             if (canvas->textWidth(msg.c_str()) > width - 8) {
                 msg = msg.substring(0, 35) + "...";
             }
-            canvas->drawString(msg.c_str(), 4, height - 9);
+            canvas->drawString(msg.c_str(), 4, height - 12);
         }
     }
     
@@ -3141,8 +3320,8 @@ void loop() {
     // Resume suspended predictorTask after 500ms debounce of time machine adjustments
     if (lastTimeAdjustMillis != 0 && millis() - lastTimeAdjustMillis > 500) {
         lastTimeAdjustMillis = 0;
-        if (predictorTaskHandle != NULL && eTaskGetState(predictorTaskHandle) == eSuspended) {
-            vTaskResume(predictorTaskHandle);
+        if (predictorTaskHandle != NULL) {
+            // Suspended check removed in cooperative mode
             
             // Only perform day-crossing prediction checks if the recommended passes panel is actually open
             if (showRecommendations) {
@@ -3275,13 +3454,13 @@ void loop() {
             recentLaunchSelectedIndex = 0;
             recentLaunchDownloadSuccess = true;
             if (recentLaunchBypassed) {
-                recentLaunchErrorMsg = "Cached (<2h old). Press C to force.";
+                recentLaunchErrorMsg = I18N::get(TXT_RL_CACHED_LIMIT);
             } else {
-                recentLaunchErrorMsg = "Downloaded successfully!";
+                recentLaunchErrorMsg = I18N::get(TXT_UPDATE_SUCCESS_CACHE);
             }
             LOG_I("APP", "Applied new recent launches safely on main core.");
         } else {
-            recentLaunchErrorMsg = "Parse Cache Failed!";
+            recentLaunchErrorMsg = I18N::get(TXT_PARSE_CACHE_FAILED);
         }
         delete tempLaunches;
         recentLaunchDownloadFinishedMs = millis();
@@ -3328,6 +3507,7 @@ void loop() {
         static bool lastN = false;
         static bool lastD = false;
         static bool lastTab = false;
+        static bool lastL = false;
 
         bool currSemi = M5Cardputer.Keyboard.isKeyPressed(';');
         bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
@@ -3351,6 +3531,7 @@ void loop() {
         bool currN = M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed('N');
         bool currD = M5Cardputer.Keyboard.isKeyPressed('d') || M5Cardputer.Keyboard.isKeyPressed('D');
         bool currTab = M5Cardputer.Keyboard.isKeyPressed(KEY_TAB);
+        bool currL = M5Cardputer.Keyboard.isKeyPressed('l') || M5Cardputer.Keyboard.isKeyPressed('L');
 
         bool justSemi = currSemi && !lastSemi;
         bool justDot = currDot && !lastDot;
@@ -3374,7 +3555,8 @@ void loop() {
         bool justN = currN && !lastN;
         bool justD = currD && !lastD;
         bool justTab = currTab && !lastTab;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justTab;
+        bool justL = currL && !lastL;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justTab || justL;
 
         if (showHelp) {
             if (millis() < 3000) {
@@ -3429,8 +3611,8 @@ void loop() {
                 } else if ((isSatViewMode || (!isManualLocationMode)) && !showRecommendations) {
                     if (key == ',' || key == '/') {
                         lastTimeAdjustMillis = millis();
-                        if (predictorTaskHandle != NULL && eTaskGetState(predictorTaskHandle) != eSuspended) {
-                            vTaskSuspend(predictorTaskHandle);
+                        if (predictorTaskHandle != NULL) {
+                            // Suspended check removed in cooperative mode
                         }
                     }
                     if (key == ',') timeMachineOffset -= 60;
@@ -3746,6 +3928,9 @@ void loop() {
                             entrySelectedSatellites.push_back(g_satellites[i].noradId);
                         }
                     }
+                } else if (justL) {
+                    appState = STATE_LANG_SELECT;
+                    langSelectedIndex = (I18N::getLanguage() == LANG_EN) ? 0 : 1;
                 } else if (justH) {
                     showHelp = !showHelp;
                 } else if (justG) {
@@ -4022,7 +4207,7 @@ void loop() {
                 } else if (justW || justC) {
                     if (currentSatTab == TAB_RECENT_LAUNCH) {
                         if (g_networkActive) {
-                            recentLaunchErrorMsg = "System Busy... Wait.";
+                            recentLaunchErrorMsg = I18N::get(TXT_SYS_BUSY);
                             recentLaunchDownloadSuccess = false;
                             recentLaunchDownloadFinishedMs = millis();
                             drawSatSelectPage();
@@ -4035,13 +4220,13 @@ void loop() {
                                 }
                             }
                             recentLaunchDownloading = true;
-                            recentLaunchErrorMsg = "Connecting WiFi...";
+                            recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
                             drawSatSelectPage();
                             pushCanvasWithFilter();
                             BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 8192, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 recentLaunchDownloading = false;
-                                recentLaunchErrorMsg = "Task Init Failed!";
+                                recentLaunchErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
                             }
@@ -4049,40 +4234,40 @@ void loop() {
                     } else {
                         if (justC && currentSatTab == TAB_ENCYCLOPEDIA && satSelectedIndex >= 0 && satSelectedIndex < NUM_SATELLITES) {
                             if (g_networkActive) {
-                                downloadErrorMsg = "System Busy... Wait.";
+                                downloadErrorMsg = I18N::get(TXT_SYS_BUSY);
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
                             } else {
-                                downloadErrorMsg = "Refreshing GP JSON...";
+                                downloadErrorMsg = I18N::get(TXT_REFRESHING_GP);
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
                                 BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 8192, (void*)(intptr_t)satSelectedIndex, 1, NULL, 0);
                                 if (res != pdPASS) {
-                                    downloadErrorMsg = "Task Init Failed!";
+                                    downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
                                     drawSatSelectPage();
                                     pushCanvasWithFilter();
                                 }
                             }
                         } else if (!justC) { // Prevent C from triggering WiFi toggle in other tabs
                             if (g_networkActive) {
-                                downloadErrorMsg = "System Busy... Wait.";
+                                downloadErrorMsg = I18N::get(TXT_SYS_BUSY);
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
                             } else if (!HalWifi::isConnected()) {
                                 manualWifiToggle = true;
-                                downloadErrorMsg = "Connecting to WiFi...";
+                                downloadErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
                                 BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
                                 if (res != pdPASS) {
-                                    downloadErrorMsg = "Task Init Failed!";
+                                    downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
                                     drawSatSelectPage();
                                     pushCanvasWithFilter();
                                 }
                             } else {
                                 WiFi.disconnect(true);
                                 WiFi.mode(WIFI_OFF);
-                                downloadErrorMsg = "WiFi Disconnected.";
+                                downloadErrorMsg = I18N::get(TXT_WIFI_DISCONNECTED);
                             }
                         }
                     }
@@ -4203,7 +4388,7 @@ void loop() {
                                 BaseType_t res = xTaskCreatePinnedToCore(downloadCustomSatTask, "DownloadCustomSatTask", 8192, (void*)(intptr_t)id, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     isDownloadingCustom = false;
-                                    downloadErrorMsg = "Task Init Failed!";
+                                    downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
                                 }
                             }
                         } else {
@@ -4253,6 +4438,17 @@ void loop() {
                         }
                     }
                 }
+            } else if (appState == STATE_LANG_SELECT) {
+                if (justEsc || justTick || justBack) {
+                    appState = STATE_MAIN;
+                } else if (justEnter) {
+                    I18N::setLanguage(langSelectedIndex == 0 ? LANG_EN : LANG_ZH);
+                    appState = STATE_MAIN;
+                } else if (justSemi) { // UP
+                    langSelectedIndex = (langSelectedIndex == 0) ? 1 : 0;
+                } else if (justDot) { // DOWN
+                    langSelectedIndex = (langSelectedIndex == 0) ? 1 : 0;
+                }
             }
         }
 
@@ -4279,6 +4475,7 @@ void loop() {
         lastN = currN;
         lastD = currD;
         lastTab = currTab;
+        lastL = currL;
         
         if (appState == STATE_WIFI_SETUP) {
             drawWiFiSetupPage();
@@ -4308,7 +4505,7 @@ void loop() {
         if (gnss && !gnss->isInStandbyMode()) {
             if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
                 GnssData gData = gnss->getData();
-                if (gData.isValid) {
+                if (gData.isValid && (abs(gData.latitude) > 0.0001 || abs(gData.longitude) > 0.0001)) {
                     double oldLat = baseUserLat;
                     double oldLon = baseUserLon;
                     double oldAlt = baseUserAlt;
@@ -4997,7 +5194,7 @@ void loop() {
         earth_renderer->render(viewLat, viewLon, renderUserLat, baseUserLon, sats);
         
         // Draw coordinate overlay
-        if (!showRecommendations && !showHelp && appState == STATE_MAIN && showHud) {
+        if (!showRecommendations && !showHelp && (appState == STATE_MAIN || appState == STATE_LANG_SELECT) && showHud) {
             earth_renderer->getCanvas()->setTextSize(1);
             
             char latDir = baseUserLat >= 0 ? 'N' : 'S';
@@ -5044,44 +5241,57 @@ void loop() {
             
             canvas->setTextColor(TFT_WHITE);
             canvas->setTextSize(1);
-            canvas->drawString("--- Help & Shortcuts ---", x + 25, y + 5);
+            canvas->drawString(I18N::get(TXT_HELP_TITLE), x + 25, y + 5);
             
             auto drawHotKey = [&](const char* word, char keyChar, int dx, int dy) {
                 int cx = dx;
                 bool highlighted = false;
-                for (int i = 0; word[i] != '\0'; i++) {
-                    if (!highlighted && tolower(word[i]) == tolower(keyChar) && keyChar != '\0') {
+                int i = 0;
+                while (word[i] != '\0') {
+                    int charLen = 1;
+                    unsigned char head = (unsigned char)word[i];
+                    if (head >= 0xF0) charLen = 4;
+                    else if (head >= 0xE0) charLen = 3;
+                    else if (head >= 0xC0) charLen = 2;
+                    
+                    char cstr[5] = {0};
+                    for (int j = 0; j < charLen && word[i + j] != '\0'; j++) {
+                        cstr[j] = word[i + j];
+                    }
+                    
+                    if (charLen == 1 && !highlighted && tolower(cstr[0]) == tolower(keyChar) && keyChar != '\0') {
                         canvas->setTextColor(TFT_YELLOW);
                         highlighted = true;
                     } else {
                         canvas->setTextColor(TFT_LIGHTGRAY);
                     }
-                    char cstr[2] = {word[i], '\0'};
+                    
                     canvas->drawString(cstr, cx, dy);
                     cx += canvas->textWidth(cstr);
+                    i += charLen;
                 }
             };
 
             int ty = y + 20;
-            drawHotKey("Bright[ ]", '[', x + 5, ty);
-            drawHotKey("GNSS", 'g', x + 105, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_BRIGHT), '[', x + 5, ty);
+            drawHotKey(I18N::get(TXT_HELP_GNSS), 'g', x + 105, ty); ty += 12;
             
-            drawHotKey("Help", 'h', x + 5, ty);
-            drawHotKey("HUD[Del]", 'd', x + 105, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_HELP), 'h', x + 5, ty);
+            drawHotKey(I18N::get(TXT_HELP_HUD), 'd', x + 105, ty); ty += 12;
             
-            drawHotKey("Lock[Spc]", 'l', x + 5, ty);
-            drawHotKey("PassList[Ent]", 'e', x + 105, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_LOCK), 'l', x + 5, ty);
+            drawHotKey(I18N::get(TXT_HELP_PASSLIST), 'e', x + 105, ty); ty += 12;
             
-            drawHotKey("Satellites", 's', x + 5, ty);
-            drawHotKey("Time( , / . )", ',', x + 105, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_SATS), 's', x + 5, ty);
+            drawHotKey(I18N::get(TXT_HELP_TIME), ',', x + 105, ty); ty += 12;
             
-            drawHotKey("View(Sat)", 'v', x + 5, ty);
-            drawHotKey("WiFi", 'w', x + 105, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_VIEW), 'v', x + 5, ty);
+            drawHotKey(I18N::get(TXT_HELP_WIFI), 'w', x + 105, ty); ty += 12;
             
-            drawHotKey("Config(Loc&Alt[])", 'c', x + 5, ty);
-            drawHotKey("RealTime(Reset)", 'r', x + 105, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_CONFIG), 'c', x + 5, ty);
+            drawHotKey(I18N::get(TXT_HELP_REALTIME), 'r', x + 105, ty); ty += 12;
             
-            drawHotKey("Tab(Visual)", 't', x + 5, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_TAB), 't', x + 5, ty); ty += 12;
         }
         
         if (showRecommendations) {
@@ -5091,38 +5301,75 @@ void loop() {
             
             earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
             earth_renderer->getCanvas()->setTextSize(1);
-            earth_renderer->getCanvas()->drawString(" RECOMMENDED PASSES", 2, 5);
+            earth_renderer->getCanvas()->drawString(I18N::get(TXT_RECOMMENDED_PASSES), 2, 5);
             
+            bool localPredictionsReady = false;
+            int localPredictionProgress = 0;
+            bool localTimeSynced = false;
+            std::vector<PassEvent> localRecommendedPasses;
+            std::vector<TreeItem> localDisplayTree;
+
             portENTER_CRITICAL(&passMutex);
-            if (!predictionsReady) {
+            localPredictionsReady = predictionsReady;
+            localPredictionProgress = predictionProgress;
+            localTimeSynced = g_timeSynced;
+            if (localPredictionsReady) {
+                localRecommendedPasses = recommendedPasses;
+                localDisplayTree = displayTree;
+            }
+            portEXIT_CRITICAL(&passMutex);
+
+            if (!localPredictionsReady) {
                 earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
-                char buf[32];
-                sprintf(buf, "Calculating... %d%%", predictionProgress);
-                earth_renderer->getCanvas()->drawString(buf, 5, 30);
+                if (!localTimeSynced) {
+                    earth_renderer->getCanvas()->drawString(I18N::get(TXT_WAITING_TIME_SYNC), 5, 30);
+                } else {
+                    char buf[32];
+                    sprintf(buf, "%s %d%%", I18N::get(TXT_PASS_CALCULATING), localPredictionProgress);
+                    earth_renderer->getCanvas()->drawString(buf, 5, 30);
+                }
             } else {
-                if (recommendedPasses.empty()) {
+                if (localRecommendedPasses.empty()) {
                     earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                    earth_renderer->getCanvas()->drawString("No passes in 7 days", 5, 30);
+                    earth_renderer->getCanvas()->drawString(I18N::get(TXT_NO_PASSES_7D), 5, 30);
+                    
+                    // Detect if selected satellites have stale TLEs
+                    bool hasStaleTle = false;
+                    uint32_t currentSimTime = current_unix + timeMachineOffset;
+                    for (int i = 0; i < NUM_SATELLITES; i++) {
+                        if (g_satellites[i].selected && g_satellites[i].tle.line1.length() >= 32) {
+                            uint32_t ep = parseTleEpoch(g_satellites[i].tle.line1);
+                            if (ep > 0 && currentSimTime > ep && (currentSimTime - ep) > 30 * 86400) {
+                                hasStaleTle = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (hasStaleTle) {
+                        earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
+                        earth_renderer->getCanvas()->drawString(I18N::getLanguage() == LANG_ZH ? "TLE过期,请连WiFi更新" : "Stale TLE, sync WiFi", 5, 48);
+                    }
                 } else if (selectedPassIndex != -1) {
                     // Draw Detail View
-                    const auto& p = recommendedPasses[selectedPassIndex];
+                    const auto& p = localRecommendedPasses[selectedPassIndex];
                     earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
-                    earth_renderer->getCanvas()->drawString("Name:", 5, 25);
+                    earth_renderer->getCanvas()->drawString(I18N::get(TXT_PASS_NAME), 5, 20);
                     earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
-                    earth_renderer->getCanvas()->drawString(p.satName.c_str(), 40, 25);
+                    earth_renderer->getCanvas()->drawString(p.satName.c_str(), 40, 20);
                     
-                    // Score: (y=37)
+                    // Score: (y=32)
                     earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
-                    earth_renderer->getCanvas()->drawString("Score:", 5, 37);
+                    earth_renderer->getCanvas()->drawString(I18N::get(TXT_PASS_SCORE), 5, 32);
                     String stars = "";
                     for(int s=0;s<p.score;s++) stars += "*";
                     uint16_t starColor = (p.score==5) ? TFT_GOLD : (p.score>=3 ? TFT_GREEN : TFT_LIGHTGRAY);
                     earth_renderer->getCanvas()->setTextColor(starColor);
-                    earth_renderer->getCanvas()->drawString(stars.c_str(), 45, 37);
+                    int scoreX = (I18N::getLanguage() == LANG_ZH) ? 60 : 45;
+                    earth_renderer->getCanvas()->drawString(stars.c_str(), scoreX, 32);
                     
-                    // Orbit: MM/DD (y=49)
+                    // Orbit: MM/DD (y=45)
                     earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
-                    earth_renderer->getCanvas()->drawString("Orbit:", 5, 49);
+                    earth_renderer->getCanvas()->drawString(I18N::get(TXT_RL_ORBIT), 5, 45);
                     
                     int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : 8*3600;
                     time_t aos_t = (time_t)p.aosTime + tzOffsetSec;
@@ -5135,41 +5382,44 @@ void loop() {
                     char dateStr[32];
                     sprintf(dateStr, "%02d/%02d", aos_tm.tm_mon + 1, aos_tm.tm_mday);
                     earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
-                    earth_renderer->getCanvas()->drawString(dateStr, 45, 49);
+                    earth_renderer->getCanvas()->drawString(dateStr, 45, 45);
                     
-                    // Time: HH:MM:SS - HH:MM:SS (y=61)
+                    // Time: HH:MM:SS - HH:MM:SS (y=57)
                     char timeStr[64];
                     sprintf(timeStr, "%02d:%02d:%02d-%02d:%02d:%02d", 
                             aos_tm.tm_hour, aos_tm.tm_min, aos_tm.tm_sec, 
                             los_tm.tm_hour, los_tm.tm_min, los_tm.tm_sec);
                     earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                    earth_renderer->getCanvas()->drawString(timeStr, 5, 61);
+                    earth_renderer->getCanvas()->drawString(timeStr, 5, 57);
                     
-                    // Mag & Peak (y=73)
+                    // Mag & Peak (y=70)
                     earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
-                    earth_renderer->getCanvas()->drawString("Mag:", 5, 73);
+                    earth_renderer->getCanvas()->drawString(I18N::get(TXT_PASS_MAG), 5, 70);
                     earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
                     char magBuf[16];
                     if (p.maxBrightness < 98.0) {
                         sprintf(magBuf, "%.1f", p.maxBrightness);
                     } else {
-                        sprintf(magBuf, "N/A");
+                        sprintf(magBuf, "%s", I18N::get(TXT_VIS_NA));
                     }
-                    earth_renderer->getCanvas()->drawString(magBuf, 35, 73);
+                    int magX = (I18N::getLanguage() == LANG_ZH) ? 40 : 35;
+                    earth_renderer->getCanvas()->drawString(magBuf, magX, 70);
                     
                     earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
-                    earth_renderer->getCanvas()->drawString("Peak:", 65, 73);
+                    earth_renderer->getCanvas()->drawString(I18N::get(TXT_PASS_MAX_EL), 65, 70);
                     earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
-                    earth_renderer->getCanvas()->drawString((String((int)p.maxElevation) + "deg").c_str(), 100, 73);
+                    int maxElX = (I18N::getLanguage() == LANG_ZH) ? 120 : 100;
+                    earth_renderer->getCanvas()->drawString((String((int)p.maxElevation) + "deg").c_str(), maxElX, 70);
                     
-                    // Reason: (y=85)
+                    // Reason: (y=82)
                     earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
-                    earth_renderer->getCanvas()->drawString("Reason:", 5, 85);
-                    String reason = "Dark sky";
-                    if (p.maxElevation > 60) reason += "+Zenith";
-                    if (p.visibleDuration > 300) reason += "+Long";
+                    earth_renderer->getCanvas()->drawString(I18N::get(TXT_PASS_REASON), 5, 82);
+                    String reason = I18N::get(TXT_PASS_REASON_DARK);
+                    if (p.maxElevation > 60) reason += I18N::get(TXT_PASS_REASON_ZENITH);
+                    if (p.visibleDuration > 300) reason += I18N::get(TXT_PASS_REASON_LONG);
                     earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                    earth_renderer->getCanvas()->drawString(reason.c_str(), 50, 85);
+                    int reasonX = (I18N::getLanguage() == LANG_ZH) ? 40 : 50;
+                    earth_renderer->getCanvas()->drawString(reason.c_str(), reasonX, 82);
                     
                     int sIdx = -1;
                     for (int i = 0; i < NUM_SATELLITES; i++) {
@@ -5219,7 +5469,7 @@ void loop() {
                             earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
                             char azaltBuf[32];
                             sprintf(azaltBuf, "Az:%03d Alt:%02d", (int)az, (int)el);
-                            earth_renderer->getCanvas()->drawString(azaltBuf, 5, 97);
+                            earth_renderer->getCanvas()->drawString(azaltBuf, 5, 95);
                             
                             if (satType == SAT_TYPE_SPACE_STATION && noradId == 25544) {
                                 double freq_aprs = 145.825;
@@ -5231,8 +5481,8 @@ void loop() {
                                 char rx2Buf[32];
                                 sprintf(rx1Buf, "Rx1:%07.3f", freq_aprs + shift_aprs/1000.0);
                                 sprintf(rx2Buf, "Rx2:%07.3f", freq_sstv + shift_sstv/1000.0);
-                                earth_renderer->getCanvas()->drawString(rx1Buf, 5, 109);
-                                earth_renderer->getCanvas()->drawString(rx2Buf, 5, 121);
+                                earth_renderer->getCanvas()->drawString(rx1Buf, 5, 108);
+                                earth_renderer->getCanvas()->drawString(rx2Buf, 5, 120);
                             }
                             else if (satType == SAT_TYPE_WEATHER) {
                                 if (downlinkFreq.length() > 0) {
@@ -5240,7 +5490,7 @@ void loop() {
                                     double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
                                     char rxBuf[32];
                                     sprintf(rxBuf, "Rx:%s (%+.1f)", downlinkFreq.c_str(), shift_khz);
-                                    earth_renderer->getCanvas()->drawString(rxBuf, 5, 109);
+                                    earth_renderer->getCanvas()->drawString(rxBuf, 5, 108);
                                 }
                             }
                             else if (satType == SAT_TYPE_HAM) {
@@ -5249,31 +5499,36 @@ void loop() {
                                     double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
                                     char rxBuf[32];
                                     sprintf(rxBuf, "Rx:%s (%+.1f)", downlinkFreq.c_str(), shift_khz);
-                                    earth_renderer->getCanvas()->drawString(rxBuf, 5, 109);
+                                    earth_renderer->getCanvas()->drawString(rxBuf, 5, 108);
                                 }
                                 if (uplinkFreq.length() > 0) {
                                     earth_renderer->getCanvas()->setTextColor(TFT_ORANGE);
                                     String txStr = "Tx:" + uplinkFreq;
                                     if (tone.length() > 0) txStr += " T:" + tone;
-                                    earth_renderer->getCanvas()->drawString(txStr.c_str(), 5, 121);
+                                    earth_renderer->getCanvas()->drawString(txStr.c_str(), 5, 120);
                                 }
                             }
                         }
                     }
                     
-                } else {
                     // Draw Tree View
-                    const char* catNames[] = {"Tonight", "Next 7 Days", "Highly Recommended", "All Passes"};
+                    const char* catNames[] = {
+                        I18N::get(TXT_CAT_TONIGHT),
+                        I18N::get(TXT_CAT_NEXT_7D),
+                        I18N::get(TXT_CAT_HIGHLY_REC),
+                        I18N::get(TXT_CAT_ALL_PASSES)
+                    };
+                    int lineH = (I18N::getLanguage() == LANG_ZH) ? 14 : 11;
                     int y = 20;
-                    int itemsPerPage = 8;
+                    int itemsPerPage = (I18N::getLanguage() == LANG_ZH) ? 6 : 7;
                     int startIndex = (passScrollIndex / itemsPerPage) * itemsPerPage;
                     
-                    for (int i = 0; i < itemsPerPage && (startIndex + i) < displayTree.size(); i++) {
+                    for (int i = 0; i < itemsPerPage && (startIndex + i) < localDisplayTree.size(); i++) {
                         int idx = startIndex + i;
-                        const auto& item = displayTree[idx];
+                        const auto& item = localDisplayTree[idx];
                         
                         if (idx == passScrollIndex) {
-                            earth_renderer->getCanvas()->fillRect(2, y-1, 136, 11, earth_renderer->getCanvas()->color565(0, 120, 255));
+                            earth_renderer->getCanvas()->fillRect(2, y-1, 136, lineH, earth_renderer->getCanvas()->color565(0, 120, 255));
                         }
                         
                         if (item.isCategory) {
@@ -5281,7 +5536,7 @@ void loop() {
                             String prefix = catExpanded[item.categoryIndex] ? "[-] " : "[+] ";
                             earth_renderer->getCanvas()->drawString((prefix + catNames[item.categoryIndex]).c_str(), 5, y);
                         } else {
-                            const auto& p = recommendedPasses[item.passIndex];
+                            const auto& p = localRecommendedPasses[item.passIndex];
                             earth_renderer->getCanvas()->setTextColor(idx == passScrollIndex ? TFT_WHITE : TFT_LIGHTGRAY);
                             String name = String(p.satName.c_str());
                             if (name.length() > 8) name = name.substring(0, 7) + ".";
@@ -5307,59 +5562,58 @@ void loop() {
                                 earth_renderer->getCanvas()->drawString(dayStr, 105, y);
                             }
                         }
-                        y += 11;
+                        y += lineH;
                     }
                     
-                    if (displayTree.size() > itemsPerPage) {
+                    if (localDisplayTree.size() > itemsPerPage) {
                         earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
                         earth_renderer->getCanvas()->drawString("[^/v]", 110, 5);
                     }
                 }
             }
-            portEXIT_CRITICAL(&passMutex);
             
             // Draw GNSS and WiFi Status at the bottom of the panel
-            earth_renderer->getCanvas()->drawFastHLine(0, 108, 140, TFT_DARKGREY);
+            earth_renderer->getCanvas()->drawFastHLine(0, 104, 140, TFT_DARKGREY);
             
             // Draw WiFi Status
             if (HalWifi::isConnected()) {
                 earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                earth_renderer->getCanvas()->drawString("WF:ON", 5, 115);
+                earth_renderer->getCanvas()->drawString("WF:ON", 5, 111);
             } else {
                 earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                earth_renderer->getCanvas()->drawString("WF:OFF", 5, 115);
+                earth_renderer->getCanvas()->drawString("WF:OFF", 5, 111);
             }
             
             // Draw GNSS Status
             if (gnss) {
                 if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
                     earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                    earth_renderer->getCanvas()->drawString("GP:FIX", 52, 115);
+                    earth_renderer->getCanvas()->drawString("GP:FIX", 52, 111);
                 } else if (gnss->isInStandbyMode()) {
                     if (gnssTimedOut) {
                         earth_renderer->getCanvas()->setTextColor(TFT_RED);
-                        earth_renderer->getCanvas()->drawString("GP:TMO", 52, 115);
+                        earth_renderer->getCanvas()->drawString("GP:TMO", 52, 111);
                     } else {
                         earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                        earth_renderer->getCanvas()->drawString("GP:OFF", 52, 115);
+                        earth_renderer->getCanvas()->drawString("GP:OFF", 52, 111);
                     }
                 } else {
                     earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
-                    earth_renderer->getCanvas()->drawString("GP:SCH", 52, 115);
+                    earth_renderer->getCanvas()->drawString("GP:SCH", 52, 111);
                 }
             }
             
             // Draw M5Chain Mono Status
             if (isMonoInitialized) {
                 earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                earth_renderer->getCanvas()->drawString("MN:OK", 100, 115);
+                earth_renderer->getCanvas()->drawString("MN:OK", 100, 111);
             } else {
                 earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
-                earth_renderer->getCanvas()->drawString("MN:ND", 100, 115); // Not Detected
+                earth_renderer->getCanvas()->drawString("MN:ND", 100, 111); // Not Detected
             }
             
             // Draw GP Epoch Version
-            String tleEpoch = "GP Epoch: ";
+            String tleEpoch = String(I18N::get(TXT_RL_EPOCH));
             if (g_satellites[0].tle.line1.length() >= 24) {
                 int year = 2000 + g_satellites[0].tle.line1.substring(18, 20).toInt();
                 int doy = g_satellites[0].tle.line1.substring(20, 23).toInt();
@@ -5373,14 +5627,14 @@ void loop() {
                 snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month + 1, doy);
                 tleEpoch += buf;
             } else {
-                tleEpoch += "Unknown";
+                tleEpoch += I18N::get(TXT_VIS_NA);
             }
             earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-            earth_renderer->getCanvas()->drawString(tleEpoch.c_str(), 5, 125);
+            earth_renderer->getCanvas()->drawString(tleEpoch.c_str(), 5, 121);
         }
         
         // Draw Time Machine at bottom right
-        if (appState == STATE_MAIN && showHud && !showHelp && !showRecommendations) {
+        if ((appState == STATE_MAIN || appState == STATE_LANG_SELECT) && showHud && !showHelp && !showRecommendations) {
             char timeStr[32];
             int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
             time_t local_t = current_unix + timeMachineOffset + tzOffsetSec;
@@ -5505,10 +5759,12 @@ void loop() {
                 }
             }
 
+        if (appState == STATE_LANG_SELECT) {
+            drawLangSelectDialog(earth_renderer->getCanvas());
         }
-        
-        pushCanvasWithFilter();
     }
+    
+    pushCanvasWithFilter();
 
     // Update Chain Mono Display (dynamic interval: 100ms normally, skipped during fast forwarding to prevent lag)
     static unsigned long lastChainMonoTick = 0;
@@ -5680,4 +5936,5 @@ void loop() {
             M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
         }
     }
+}
 }

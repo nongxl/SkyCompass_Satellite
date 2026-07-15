@@ -59,10 +59,11 @@ String getCommonPrefix(const String& name) {
 #define DEG_TO_RAD 0.017453292519943295769236907684886
 #define RAD_TO_DEG 57.295779513082320876798154814105
 
-ObservationPredictor::ObservationPredictor(double userLat, double userLon, double userAlt) {
+ObservationPredictor::ObservationPredictor(double userLat, double userLon, double userAlt, PositionManager* pm) {
     _userLat = userLat;
     _userLon = userLon;
     _userAlt = userAlt;
+    _pm = pm;
 }
 
 int ObservationPredictor::calculateScore(float maxElevation, float visibleDuration, float maxBrightness) {
@@ -99,7 +100,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
     SGP4Calc sgp4;
     sgp4.init(tle);
     
-    SunCalculator sunCalc(nullptr);
+    SunCalculator sunCalc(_pm);
     
     uint32_t endTime = startTime + daysToPredict * 24 * 3600;
     uint32_t stepSeconds = 240; // Optimize: Increase coarse step to 240 seconds (4 minutes)

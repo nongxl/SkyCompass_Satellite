@@ -4,6 +4,7 @@
 #include "core/sky_hemisphere.h"
 #include "hal/hal_gnss.h"
 #include <math.h>
+#include "i18n.h"
 
 /**
  * @brief 构造函数
@@ -804,9 +805,9 @@ void UIManager::drawSkyMap(int16_t x, int16_t y, uint16_t radius, float heading,
     
     // 添加虚拟北的说明，让用户知道这是虚拟北而不是地理北
     _display->setColor(180, 180, 180);
-    _display->drawText(10, height - 30, "Camera View Mode", 1);
+    _display->drawText(10, height - 30, I18N::get(TXT_CAMERA_VIEW_MODE), 1);
     _display->setColor(150, 150, 150);
-    _display->drawText(10, height - 15, "Press 'S' to set reference", 1);
+    _display->drawText(10, height - 15, I18N::get(TXT_PRESS_S_REFERENCE), 1);
     
 
     
@@ -1113,18 +1114,18 @@ void UIManager::drawSunDataPage() {
     
     // 绘制标题
     _display->setColor(255, 255, 255);
-    _display->drawText(10, 10, "Sun Data", 2);
+    _display->drawText(10, 10, I18N::get(TXT_SUN_DATA), 2);
     
     // 绘制太阳参数
     char buffer[64];
     
-    sprintf(buffer, "Azimuth: %.2f°", sunPos.azimuth);
+    sprintf(buffer, "%s%.2f°", I18N::get(TXT_SUN_AZIMUTH), sunPos.azimuth);
     _display->drawText(10, 40, buffer, 1);
     
-    sprintf(buffer, "Altitude: %.2f°", sunPos.altitude);
+    sprintf(buffer, "%s%.2f°", I18N::get(TXT_SUN_ELEVATION), sunPos.altitude);
     _display->drawText(10, 60, buffer, 1);
     
-    sprintf(buffer, "Distance: %.4f AU", sunPos.distance);
+    sprintf(buffer, "%s%.4f AU", I18N::get(TXT_SUN_DIST), sunPos.distance);
     _display->drawText(10, 80, buffer, 1);
     
     // 绘制日出日落时间
@@ -1132,18 +1133,18 @@ void UIManager::drawSunDataPage() {
     uint32_t sunset = sunPos.sunset;
     uint32_t noon = sunPos.noon;
     
-    sprintf(buffer, "Sunrise: %02d:%02d", sunrise / 3600, (sunrise % 3600) / 60);
+    sprintf(buffer, "%s%02d:%02d", I18N::get(TXT_SUN_SUNRISE), sunrise / 3600, (sunrise % 3600) / 60);
     _display->drawText(10, 100, buffer, 1);
     
-    sprintf(buffer, "Sunset: %02d:%02d", sunset / 3600, (sunset % 3600) / 60);
+    sprintf(buffer, "%s%02d:%02d", I18N::get(TXT_SUN_SUNSET), sunset / 3600, (sunset % 3600) / 60);
     _display->drawText(10, 120, buffer, 1);
     
-    sprintf(buffer, "Noon: %02d:%02d", noon / 3600, (noon % 3600) / 60);
+    sprintf(buffer, "%s%02d:%02d", I18N::get(TXT_SUN_NOON), noon / 3600, (noon % 3600) / 60);
     _display->drawText(10, 140, buffer, 1);
     
     // 绘制提示信息
     _display->setColor(128, 128, 128);
-    _display->drawText(10, height - 20, "Press ESC to return", 1);
+    _display->drawText(10, height - 20, I18N::get(TXT_PRESS_ESC_RETURN), 1);
 }
 
 /**
@@ -1156,17 +1157,17 @@ void UIManager::drawTimeMachinePage() {
     
     // 绘制标题
     _display->setColor(255, 255, 255);
-    _display->drawText(10, 10, "Time Machine", 2);
+    _display->drawText(10, 10, I18N::get(TXT_TM_TITLE), 2);
     
     // 绘制提示信息
     _display->setColor(255, 255, 0);
-    _display->drawText(10, 40, "Use arrow keys to adjust time", 1);
-    _display->drawText(10, 60, "Press OK to confirm", 1);
-    _display->drawText(10, 80, "Press ESC to cancel", 1);
+    _display->drawText(10, 40, I18N::get(TXT_TM_ADJUST), 1);
+    _display->drawText(10, 60, I18N::get(TXT_TM_CONFIRM), 1);
+    _display->drawText(10, 80, I18N::get(TXT_TM_CANCEL), 1);
     
     // 绘制当前时间（这里需要与时间机器模块集成）
     _display->setColor(255, 255, 255);
-    _display->drawText(10, 120, "Current Time:", 1);
+    _display->drawText(10, 120, I18N::get(TXT_TM_CURRENT_TIME), 1);
     _display->drawText(10, 140, "YYYY-MM-DD HH:MM:SS", 1);
 }
 
@@ -1198,11 +1199,11 @@ void UIManager::drawSettingsPage() {
     
     // 绘制标题
     _display->setColor(255, 255, 255);
-    _display->drawText(dialogX + 10, dialogY + 10, "Settings", 2);
+    _display->drawText(dialogX + 10, dialogY + 10, I18N::get(TXT_SETTINGS_TITLE), 2);
     
     // 绘制经度输入
     _display->setColor(255, 255, 255);
-    _display->drawText(dialogX + 10, dialogY + 40, "Lon:", 2);
+    _display->drawText(dialogX + 10, dialogY + 40, I18N::get(TXT_LON), 2);
     
     // 绘制经度输入框（默认白色，选中时绿色）
     if (_settingsSelectedField == 0) {
@@ -1225,7 +1226,7 @@ void UIManager::drawSettingsPage() {
     
     // 绘制纬度输入
     _display->setColor(255, 255, 255);
-    _display->drawText(dialogX + 10, dialogY + 70, "Lat:", 2);
+    _display->drawText(dialogX + 10, dialogY + 70, I18N::get(TXT_LAT), 2);
     
     // 绘制纬度输入框（默认白色，选中时绿色）
     if (_settingsSelectedField == 1) {
@@ -1248,7 +1249,7 @@ void UIManager::drawSettingsPage() {
     
     // 绘制海拔输入
     _display->setColor(255, 255, 255);
-    _display->drawText(dialogX + 10, dialogY + 100, "Alt(m):", 2);
+    _display->drawText(dialogX + 10, dialogY + 100, I18N::get(TXT_ALT), 2);
     
     // 绘制海拔输入框（默认白色，选中时绿色）
     if (_settingsSelectedField == 2) {
@@ -1273,12 +1274,12 @@ void UIManager::drawSettingsPage() {
     _display->setColor(40, 255, 120);
     _display->drawRect(dialogX + 110, dialogY + 138, 60, 25, true);
     _display->setColor(255, 255, 255);
-    _display->drawText(dialogX + 128, dialogY + 144, "OK", 2);
+    _display->drawText(dialogX + 128, dialogY + 144, I18N::get(TXT_OK), 2);
     
     
     // 绘制操作提示
     _display->setColor(128, 128, 128);
-    _display->drawText(dialogX + 10, dialogY + 120, "Tab: field, Del: delete, OK: save", 1);
+    _display->drawText(dialogX + 10, dialogY + 120, I18N::get(TXT_SETTINGS_HELP), 1);
 }
 
 /**
@@ -1295,34 +1296,34 @@ void UIManager::drawPositionSettingsPage() {
     
     // 绘制标题
     _display->setColor(255, 255, 255);
-    _display->drawText(10, 10, "Position Settings", 2);
+    _display->drawText(10, 10, I18N::get(TXT_POS_SETTINGS_TITLE), 2);
     
     // 绘制经度
     _display->setColor(_selectedField == 0 ? 0 : 255, _selectedField == 0 ? 255 : 255, _selectedField == 0 ? 255 : 255);
-    _display->drawText(10, 50, "Longitude:", 1);
+    _display->drawText(10, 50, I18N::get(TXT_LONGITUDE), 1);
     char lonStr[20];
     dtostrf(_editLongitude, 10, 6, lonStr);
     _display->drawText(10, 70, lonStr, 2);
     
     // 绘制纬度
     _display->setColor(_selectedField == 1 ? 0 : 255, _selectedField == 1 ? 255 : 255, _selectedField == 1 ? 255 : 255);
-    _display->drawText(10, 100, "Latitude:", 1);
+    _display->drawText(10, 100, I18N::get(TXT_LATITUDE), 1);
     char latStr[20];
     dtostrf(_editLatitude, 10, 6, latStr);
     _display->drawText(10, 120, latStr, 2);
     
     // 绘制海拔
     _display->setColor(_selectedField == 2 ? 0 : 255, _selectedField == 2 ? 255 : 255, _selectedField == 2 ? 255 : 255);
-    _display->drawText(10, 150, "Altitude (m):", 1);
+    _display->drawText(10, 150, I18N::get(TXT_ALTITUDE_M), 1);
     char altStr[20];
     dtostrf(_editAltitude, 10, 1, altStr);
     _display->drawText(10, 170, altStr, 2);
     
     // 绘制操作提示
     _display->setColor(128, 128, 128);
-    _display->drawText(10, height - 50, "UP/DOWN: +/- value", 1);
-    _display->drawText(10, height - 35, "LEFT/RIGHT: select field", 1);
-    _display->drawText(10, height - 20, "OK: save  ESC: cancel", 1);
+    _display->drawText(10, height - 50, I18N::get(TXT_POS_HELP_VAL), 1);
+    _display->drawText(10, height - 35, I18N::get(TXT_POS_HELP_FIELD), 1);
+    _display->drawText(10, height - 20, I18N::get(TXT_POS_HELP_SAVE), 1);
 }
 
 /**

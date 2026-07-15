@@ -38,7 +38,7 @@ struct PassEvent {
 
 class ObservationPredictor {
 public:
-    ObservationPredictor(double userLat, double userLon, double userAlt);
+    ObservationPredictor(double userLat, double userLon, double userAlt, class PositionManager* pm = nullptr);
     
     // Predict passes for a satellite over a given number of days starting from startTime
     std::vector<PassEvent> predictPasses(const TLEData& tle, double stdMag, uint32_t startTime, int daysToPredict);
@@ -50,6 +50,7 @@ private:
     double _userLat;
     double _userLon;
     double _userAlt;
+    class PositionManager* _pm;
     
     // Helper to calculate score based on max elevation, visible duration, and max brightness
     int calculateScore(float maxElevation, float visibleDuration, float maxBrightness);

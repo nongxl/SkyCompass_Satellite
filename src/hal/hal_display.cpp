@@ -39,6 +39,7 @@ public:
         
         // 设置默认背景颜色
         _canvas.fillScreen(BLACK);
+        _canvas.setFont(&fonts::efontCN_12);
         _canvas.pushSprite(0, 0);
         
         return true;

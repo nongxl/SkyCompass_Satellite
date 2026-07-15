@@ -68,7 +68,7 @@ SunPositionData SunCalculator::calculatePosition(uint32_t timestamp, double lati
     uint8_t seconds = timeData.second;
     
     // 计算儒略日（传入完整年份 2026）
-    double julianDay = calculateJulianDay(year + 2000, month, day, hours, minutes, seconds);
+    double julianDay = calculateJulianDay((year < 100) ? (year + 2000) : year, month, day, hours, minutes, seconds);
     
     // 计算儒略世纪数
     double jc = calculateJulianCentury(julianDay);

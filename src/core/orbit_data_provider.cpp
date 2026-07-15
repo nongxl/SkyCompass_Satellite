@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <LittleFS.h>
+#include <esp_task_wdt.h>
 
 // Helper to streamingly read a single JSON object from stream
 static String readNextJsonObject(WiFiClient* stream, int& totalReadBytes) {
@@ -305,6 +306,12 @@ bool OrbitDataProvider::loadRecentLaunchesFromCache(std::vector<RecentLaunchItem
             if (lineCount <= 5) {
                 LOG_I("DEBUG", "JSON Parse Failed for Line %d", lineCount);
             }
+        }
+        
+        // Feed watchdog every 5 lines to prevent WDT timeout during heavy parsing
+        if (lineCount % 5 == 0) {
+            esp_task_wdt_reset();
+            vTaskDelay(2);
         }
     }
     
