@@ -241,9 +241,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                     }
                     currentPass.epoch = parseTleEpoch(tle.line1);
  
-                    // 1. Calculate moon separation for MOON_PASS
-                    PositionManager pm(nullptr);
-                    MoonCalculator moonCalc(&pm);
+                    MoonCalculator moonCalc(_pm);
                     MoonPositionData moonPos = moonCalc.calculatePosition(currentPass.maxElevTime, _userLat, _userLon);
                     
                     double theta_deg = 999.0;

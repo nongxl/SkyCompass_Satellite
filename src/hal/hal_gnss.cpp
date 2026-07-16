@@ -98,23 +98,11 @@ public:
         
         // 2. 如果内置没找到（说明卡槽为空，没有 cap-lora 1262 模块）
         if (!found) {
-            // 直接判定：Grove 口 (2/1) 连接的是 GPS 模块而非 chain mono
-            LOG_I("GNSS", "No cap-lora 1262 on 15/13. Remapping GPS to Grove port (2/1) instead of chain mono.");
-            
-            // 彻底释放 GPIO 2 / 1 上的 I2C 控制权，防止硬件外设锁定导致串口接收到 0 字符
-            Wire.end();
-            
-            // 我们开启探测状态保护，开始直接绑定到 Grove 引脚 (115200bps)
-            _isProbing = true;
-            _config.rxPin = 2;
-            _config.txPin = 1;
-            _config.baudRate = 115200;
-            
-            Serial1.end();
-            Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
-            
-            found = true; // 直接标记为找到
-            _config.enableGroveProbe = true;
+            // 在 Cardputer 平台上，Grove 引脚 (2/1) 与内部 I2C 物理上是相同的引脚，绝对不允许将其重映射为串口，否则会由于信号冲突彻底破坏 I2C 设备的读取，导致 IMU 乱跳和 GPS 串口数据乱码。
+            LOG_I("GNSS", "No internal GNSS on 15/13. Cardputer Grove pins (2/1) are shared with internal I2C. Skipping Grove UART mapping to protect IMU.");
+            _enabled = false;
+            _isInitialized = false;
+            return false;
         }
         
         _isProbing = false; // Scan complete

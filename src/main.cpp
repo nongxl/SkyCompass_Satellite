@@ -743,6 +743,7 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
 #include "core/observation_predictor.h"
 
 TaskHandle_t predictorTaskHandle = NULL;
+portMUX_TYPE passMutex = portMUX_INITIALIZER_UNLOCKED;
 std::vector<PassEvent> recommendedPasses;
 bool showRecommendations = false;
 int passScrollIndex = 0;
@@ -777,6 +778,200 @@ void rebuildTree(uint32_t current_unix) {
     }
 }
 
+void updateChainMonoDisplay() {
+    // Update Chain Mono Display (dynamic interval: 100ms normally)
+    static unsigned long lastChainMonoTick = 0;
+    if (isMonoInitialized && millis() - lastChainMonoTick >= 100) {
+        lastChainMonoTick = millis();
+        
+        bool anyVisibleNow = false;
+        String visibleSatName = "";
+        SatIconType visibleSatIconType = ICON_SATELLITE;
+        
+        if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES) {
+            anyVisibleNow = true;
+            visibleSatName = g_satellites[focusSatIndex].name;
+            visibleSatIconType = g_satellites[focusSatIndex].iconType;
+        } else {
+            if (g_recentLaunchFocusMode) {
+                if (g_repSatCache.lastGeoValid && g_repSatCache.isVisible) {
+                    anyVisibleNow = true;
+                    visibleSatName = g_repSatName;
+                    visibleSatIconType = ICON_SATELLITE;
+                }
+            } else {
+                for (int i = 0; i < NUM_SATELLITES; i++) {
+                    if (g_satellites[i].selected && g_satCaches[i].lastGeoValid && g_satCaches[i].isVisible) {
+                        anyVisibleNow = true;
+                        visibleSatName = g_satellites[i].name;
+                        visibleSatIconType = g_satellites[i].iconType;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        static MonoState state = MONO_STATE_NONE;
+        static int lastDispMinutes = -1;
+        static int lastDispSeconds = -1;
+        
+        bool isUpcomingPass = false;
+        int timeDiff = -1;
+        
+        if (!anyVisibleNow) {
+            // 寻找即将到来的最早可见过境倒计时（全局搜索最小的 aosTime）
+            PassEvent nextPass;
+            bool foundNextPass = false;
+            uint32_t earliestAos = 0xFFFFFFFF;
+            
+            portENTER_CRITICAL(&passMutex);
+            for (const auto& pass : recommendedPasses) {
+                uint32_t passTime = pass.aosTime;
+                uint32_t currentSimTime = current_unix + timeMachineOffset;
+                if (passTime > currentSimTime && pass.isVisible) {
+                    if (passTime < earliestAos) {
+                        earliestAos = passTime;
+                        nextPass = pass;
+                        foundNextPass = true;
+                    }
+                }
+            }
+            portEXIT_CRITICAL(&passMutex);
+            
+            if (foundNextPass) {
+                timeDiff = nextPass.aosTime - (current_unix + timeMachineOffset);
+                // 只有在未来 10 分钟（600 秒）内发生的过境，才在 Chain 屏显示倒计时
+                if (timeDiff >= 0 && timeDiff <= 600) {
+                    isUpcomingPass = true;
+                    visibleSatName = nextPass.satName;
+                    // 遍历 g_satellites 寻找匹配的 iconType
+                    for (int i = 0; i < NUM_SATELLITES; i++) {
+                        if (g_satellites[i].name == nextPass.satName) {
+                            visibleSatIconType = g_satellites[i].iconType;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (anyVisibleNow) {
+            // --- 状态 1：当前有可见过境，以缓慢呼吸效果显示飞行器图标 ---
+            if (state != MONO_STATE_PASSING) {
+                state = MONO_STATE_PASSING;
+                lastDispMinutes = -1;
+                lastDispSeconds = -1;
+                M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
+                M5Chain.setMonoClear(mono_id, &operation_status);
+            }
+            
+            // 选择对应的 8x8 像素图标
+            const uint8_t* icon = mono_icon_satellite;
+            if (visibleSatIconType == ICON_STATION) icon = mono_icon_station;
+            else if (visibleSatIconType == ICON_TELESCOPE) icon = mono_icon_telescope;
+            else if (visibleSatIconType == ICON_ROCKET) icon = mono_icon_rocket;
+            else if (visibleSatIconType == ICON_DEEPSPACE) icon = mono_icon_deepspace;
+            else if (visibleSatIconType == ICON_DFH1) icon = mono_icon_dfh1;
+            else if (visibleSatIconType == ICON_BLUEWALKER3) icon = mono_icon_bw3;
+            else if (visibleSatIconType == ICON_WEATHER) icon = mono_icon_weather;
+            else if (visibleSatIconType == ICON_NAVIGATION) icon = mono_icon_navi;
+            else if (visibleSatIconType == ICON_COMMUNICATION) icon = mono_icon_comm;
+            else if (visibleSatIconType == ICON_DEBRIS) icon = mono_icon_debris;
+            
+            // 缓慢呼吸效果 design：正在过境 2.5 秒一个周期
+            float theta = millis() * 0.00251f;
+            float breatheVal = 0.5f + 0.5f * sinf(theta - 1.57079f); // 从最暗起步
+            
+            // 亮度在 1 到 7 之间变化
+            mono_brightness_level_t brightness = (mono_brightness_level_t)(MONO_BRIGHTNESS_LEVEL_1 + (uint8_t)(breatheVal * 6.0f));
+            M5Chain.setMonoBrightness(mono_id, brightness, &operation_status);
+            
+            uint8_t temp[8];
+            memcpy(temp, icon, 8);
+            M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
+            
+        } else if (isUpcomingPass) {
+            // --- 状态 2：10分钟倒计时阶段，显示静止数字，从60秒开始每秒刷新 ---
+            if (state != MONO_STATE_COUNTDOWN) {
+                state = MONO_STATE_COUNTDOWN;
+                lastDispMinutes = -1;
+                lastDispSeconds = -1;
+                M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
+                M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_6, &operation_status);
+                M5Chain.setMonoClear(mono_id, &operation_status);
+            }
+            
+            if (timeDiff <= 60) {
+                // 秒阶段：每秒刷新，从 60 秒到 0 秒
+                if (timeDiff != lastDispSeconds) {
+                    lastDispSeconds = timeDiff;
+                    lastDispMinutes = -1;
+                    
+                    uint8_t D1 = timeDiff / 10;
+                    uint8_t D2 = timeDiff % 10;
+                    
+                    uint8_t temp[8] = {0};
+                    for (int r = 0; r < 5; r++) {
+                        temp[r + 2] = (font_3x5[D1][r] << 5) | font_3x5[D2][r];
+                    }
+                    M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
+                }
+            } else {
+                // 分钟阶段：10分到1分静止显示，不闪烁。采用两位数显示（如 05），使其完全对称
+                int minutes = (timeDiff == 600) ? 10 : (timeDiff / 60);
+                if (minutes != lastDispMinutes) {
+                    lastDispMinutes = minutes;
+                    lastDispSeconds = -1;
+                    
+                    uint8_t D1 = minutes / 10;
+                    uint8_t D2 = minutes % 10;
+                    
+                    uint8_t temp[8] = {0};
+                    for (int r = 0; r < 5; r++) {
+                        temp[r + 2] = (font_3x5[D1][r] << 5) | font_3x5[D2][r];
+                    }
+                    M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
+                }
+            }
+        } else {
+            // --- 状态 3：无临近过境，显示 Cortana 动态圆圈 ---
+            if (state != MONO_STATE_IDLE) {
+                state = MONO_STATE_IDLE;
+                lastDispMinutes = -1;
+                lastDispSeconds = -1;
+                M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
+                M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_6, &operation_status);
+                M5Chain.setMonoClear(mono_id, &operation_status);
+            }
+            
+            uint8_t temp[8];
+            drawCortanaCircle(temp);
+            M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
+        }
+    }
+}
+
+void rebuildTreeLocal(std::vector<TreeItem>& tree, const std::vector<PassEvent>& passes, uint32_t current_unix) {
+    tree.clear();
+    for (int c = 0; c < 4; c++) {
+        tree.push_back({true, c, -1});
+        if (catExpanded[c]) {
+            for (int i = 0; i < passes.size(); i++) {
+                const auto& p = passes[i];
+                bool match = false;
+                if (c == 0 && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
+                else if (c == 1 && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
+                else if (c == 2 && p.score >= 4 && p.losTime >= current_unix) match = true;
+                else if (c == 3 && p.losTime >= current_unix) match = true;
+                
+                if (match) {
+                    tree.push_back({false, c, i});
+                }
+            }
+        }
+    }
+}
+
 
 // IMU Lock State
 bool isImuLocked = false;
@@ -803,7 +998,7 @@ String noradInput = "";
 String downloadErrorMsg = "";
 int deleteConfirmIndex = -1;
 bool isDownloadingCustom = false;
-portMUX_TYPE passMutex = portMUX_INITIALIZER_UNLOCKED;
+
 
 volatile bool triggerPrediction = true;
 uint32_t lastTimeAdjustMillis = 0;
@@ -940,19 +1135,23 @@ void predictorTask(void* parameter) {
             return a.aosTime < b.aosTime;
         });
         
-        portENTER_CRITICAL(&passMutex);
-        recommendedPasses = upcomingPasses;
-        predictionsReady = true;
-        lastPredictionBaseTime = startTime; // 写入本次成功的基准时间缓存
-        g_currentPredictingBaseTime = 0;
-        
         // Auto-expand first category on finish
         catExpanded[0] = true;
         catExpanded[1] = false;
         catExpanded[2] = false;
         catExpanded[3] = false;
+
+        // Compute local temporary variables outside the critical section to prevent malloc/OOM within spinlocks
+        std::vector<PassEvent> tempRecommendedPasses = upcomingPasses;
+        std::vector<TreeItem> tempDisplayTree;
+        rebuildTreeLocal(tempDisplayTree, tempRecommendedPasses, current_unix + timeMachineOffset);
         
-        rebuildTree(current_unix + timeMachineOffset);
+        portENTER_CRITICAL(&passMutex);
+        recommendedPasses.swap(tempRecommendedPasses);
+        displayTree.swap(tempDisplayTree);
+        predictionsReady = true;
+        lastPredictionBaseTime = startTime; // 写入本次成功的基准时间缓存
+        g_currentPredictingBaseTime = 0;
         portEXIT_CRITICAL(&passMutex);
         
         if (g_orbitCalculating) {
@@ -960,8 +1159,7 @@ void predictorTask(void* parameter) {
             g_readyStartTime = millis(); // Trigger 2-second READY effect
         }
         
-        // Lower priority back to 1 (LOW) when finished
-        vTaskPrioritySet(NULL, 1);
+
     }
 }
 
@@ -1889,6 +2087,111 @@ void setup() {
             pos_manager = new PositionManager(gnss);
             pos_manager->begin(); 
             
+            // Initialize Chain Mono on Serial2 (Grove Port) early so it lights up during boot progress
+#if ENABLE_CHAIN_MONO
+            bool skipMonoProbe = false;
+            if (gnss && !skipMonoProbe) {
+                GnssConfig gnssCfg = gnss->getConfig();
+                if (gnssCfg.rxPin == 2) {
+                    skipMonoProbe = true;
+                    LOG_I("APP", "Grove port is occupied by GNSS (pin 2/1). Skipping Chain Mono probe.");
+                }
+            }
+
+            bool foundChain = false;
+            uint8_t usedRx = 2;
+            uint8_t usedTx = 1;
+            uint16_t device_nums = 0;
+            
+            if (!skipMonoProbe) {
+                LOG_I("APP", "Initializing Chain Mono on Serial2 (Auto-detecting pins)...");
+                M5Chain.begin(&Serial2, 115200, 2, 1);
+                delay(100);
+                int retry = 2;
+                while (retry > 0) {
+                    if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
+                        foundChain = true;
+                        usedRx = 2;
+                        usedTx = 1;
+                        break;
+                    }
+                    retry--;
+                    if (retry > 0) delay(50);
+                }
+                
+                if (!foundChain) {
+                    LOG_I("APP", "Chain Mono not found on RX=2,TX=1. Swapping pins (RX=1,TX=2) and retrying...");
+                    Serial2.end();
+                    delay(50);
+                    M5Chain.begin(&Serial2, 115200, 1, 2);
+                    delay(100);
+                    retry = 2;
+                    while (retry > 0) {
+                        if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
+                            foundChain = true;
+                            usedRx = 1;
+                            usedTx = 2;
+                            break;
+                        }
+                        retry--;
+                        if (retry > 0) delay(50);
+                    }
+                }
+                
+                if (foundChain) {
+                    LOG_I("APP", "Chain Mono successfully detected on RX=%d, TX=%d! Device count: %d", usedRx, usedTx, device_nums);
+                    device_info_t *infos = (device_info_t *)malloc(sizeof(device_info_t) * device_nums);
+                    if (infos != nullptr) {
+                        memset(infos, 0, sizeof(device_info_t) * device_nums);
+                        device_list_t devices;
+                        devices.count = device_nums;
+                        devices.devices = infos;
+                        if (M5Chain.getDeviceList(&devices, 150)) {
+                            for (uint8_t i = 0; i < devices.count; i++) {
+                                if (devices.devices[i].device_type == CHAIN_MONO_TYPE_CODE) {
+                                    mono_id = devices.devices[i].id;
+                                    isMonoInitialized = true;
+                                    break;
+                                }
+                            }
+                        }
+                        free(infos);
+                    }
+                }
+            }
+            
+            if (isMonoInitialized) {
+                LOG_I("APP", "Chain Mono found on Grove port. ID: %d", mono_id);
+                M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
+                M5Chain.setMonoRotation(mono_id, MONO_ROTATION_0, &operation_status);
+                M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_7, &operation_status);
+                M5Chain.setMonoClear(mono_id, &operation_status);
+                
+                if (gnss) {
+                    GnssConfig gnssCfg = gnss->getConfig();
+                    gnssCfg.enableGroveProbe = false;
+                    gnss->setConfig(gnssCfg);
+                }
+            } else {
+                if (!skipMonoProbe) {
+                    LOG_I("APP", "Chain Mono module not detected. Releasing Grove pins for GNSS.");
+                    Serial2.end();
+                    if (gnss) {
+                        LOG_I("APP", "Triggering late GNSS Grove port probe...");
+                        gnss->probeGrove();
+                    }
+                } else {
+                    LOG_I("APP", "Skipped Chain Mono probe as Grove is occupied by GNSS.");
+                }
+            }
+#else
+            isMonoInitialized = false;
+            if (gnss) {
+                LOG_I("APP", "Chain Mono is disabled. Probing Grove port late for GNSS.");
+                gnss->probeGrove();
+            }
+#endif 
+            
             // Load cached position from Preferences
             Preferences posPrefs;
             if (posPrefs.begin("position", true)) {
@@ -2066,114 +2369,6 @@ void setup() {
             manualWifiToggle = false;
             xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
 
-            // Initialize Chain Mono on Serial2 (Grove Port)
-#if ENABLE_CHAIN_MONO
-            bool skipMonoProbe = false;
-            if (M5.getBoard() == m5::board_t::board_M5Cardputer) {
-                skipMonoProbe = true;
-                LOG_I("APP", "Original Cardputer detected. Grove pins are used for internal I2C. Skipping Mono probe.");
-            }
-            if (gnss && !skipMonoProbe) {
-                GnssConfig gnssCfg = gnss->getConfig();
-                if (gnssCfg.rxPin == 2) {
-                    skipMonoProbe = true;
-                    LOG_I("APP", "Grove port is occupied by GNSS (pin 2/1). Skipping Chain Mono probe.");
-                }
-            }
-
-            bool foundChain = false;
-            uint8_t usedRx = 2;
-            uint8_t usedTx = 1;
-            uint16_t device_nums = 0;
-            
-            if (!skipMonoProbe) {
-                LOG_I("APP", "Initializing Chain Mono on Serial2 (Auto-detecting pins)...");
-                M5Chain.begin(&Serial2, 115200, 2, 1);
-                delay(100);
-                int retry = 2;
-                while (retry > 0) {
-                    if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
-                        foundChain = true;
-                        usedRx = 2;
-                        usedTx = 1;
-                        break;
-                    }
-                    retry--;
-                    if (retry > 0) delay(50);
-                }
-                
-                if (!foundChain) {
-                    LOG_I("APP", "Chain Mono not found on RX=2,TX=1. Swapping pins (RX=1,TX=2) and retrying...");
-                    Serial2.end();
-                    delay(50);
-                    M5Chain.begin(&Serial2, 115200, 1, 2);
-                    delay(100);
-                    retry = 2;
-                    while (retry > 0) {
-                        if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
-                            foundChain = true;
-                            usedRx = 1;
-                            usedTx = 2;
-                            break;
-                        }
-                        retry--;
-                        if (retry > 0) delay(50);
-                    }
-                }
-                
-                if (foundChain) {
-                    LOG_I("APP", "Chain Mono successfully detected on RX=%d, TX=%d! Device count: %d", usedRx, usedTx, device_nums);
-                    device_info_t *infos = (device_info_t *)malloc(sizeof(device_info_t) * device_nums);
-                    if (infos != nullptr) {
-                        memset(infos, 0, sizeof(device_info_t) * device_nums);
-                        device_list_t devices;
-                        devices.count = device_nums;
-                        devices.devices = infos;
-                        if (M5Chain.getDeviceList(&devices, 150)) {
-                            for (uint8_t i = 0; i < devices.count; i++) {
-                                if (devices.devices[i].device_type == CHAIN_MONO_TYPE_CODE) {
-                                    mono_id = devices.devices[i].id;
-                                    isMonoInitialized = true;
-                                    break;
-                                }
-                            }
-                        }
-                        free(infos);
-                    }
-                }
-            }
-            
-            if (isMonoInitialized) {
-                LOG_I("APP", "Chain Mono found on Grove port. ID: %d", mono_id);
-                M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
-                M5Chain.setMonoRotation(mono_id, MONO_ROTATION_0, &operation_status);
-                M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_7, &operation_status);
-                M5Chain.setMonoClear(mono_id, &operation_status);
-                
-                if (gnss) {
-                    GnssConfig gnssCfg = gnss->getConfig();
-                    gnssCfg.enableGroveProbe = false;
-                    gnss->setConfig(gnssCfg);
-                }
-            } else {
-                if (!skipMonoProbe) {
-                    LOG_I("APP", "Chain Mono module not detected. Releasing Grove pins for GNSS.");
-                    Serial2.end();
-                    if (gnss) {
-                        LOG_I("APP", "Triggering late GNSS Grove port probe...");
-                        gnss->probeGrove();
-                    }
-                } else {
-                    LOG_I("APP", "Skipped Chain Mono probe as Grove is occupied by GNSS.");
-                }
-            }
-#else
-            isMonoInitialized = false;
-            if (gnss) {
-                LOG_I("APP", "Chain Mono is disabled. Probing Grove port late for GNSS.");
-                gnss->probeGrove();
-            }
-#endif
             tryLoadRecentLaunchCache();
             
             g_loadingProgress = 100;
@@ -2216,6 +2411,7 @@ void setup() {
             lastEnter = currEnter;
         }
         drawStartupScreen(g_loadingProgress, needsLangSelect, selectedLangIdx);
+        updateChainMonoDisplay();
         delay(33); // ~30 FPS
     }
     
@@ -3467,7 +3663,7 @@ void loop() {
     }
 
     M5Cardputer.update();
-    bool isFastForwarding = (lastTimeAdjustMillis != 0);
+    bool isFastForwarding = (lastTimeAdjustMillis != 0) || showRecommendations;
 
     // BtnG0 (side button): trigger screenshot transfer via serial
     if (M5Cardputer.BtnA.wasPressed()) {
@@ -3584,7 +3780,7 @@ void loop() {
         static unsigned long keyHoldStartTime = 0;
         static char lastKey = 0;
         static unsigned long lastKeyRepeat = 0;
-        isFastForwarding = (lastTimeAdjustMillis != 0);
+        isFastForwarding = (lastTimeAdjustMillis != 0) || showRecommendations;
         static double targetFocusAlt = 0.0;
         
         if (appState == STATE_MAIN) {
@@ -3875,9 +4071,7 @@ void loop() {
                             triggerPrediction = true;
                         }
                         
-                        if (!predictionsReady && predictorTaskHandle != NULL) {
-                            vTaskPrioritySet(predictorTaskHandle, 2);
-                        }
+
                         
                         rebuildTree(current_unix + timeMachineOffset);
                     } else if (showRecommendations) {
@@ -4480,6 +4674,7 @@ void loop() {
         if (appState == STATE_WIFI_SETUP) {
             drawWiFiSetupPage();
             pushCanvasWithFilter();
+            updateChainMonoDisplay();
             
             if (wifiIsScanning) {
                 wifiNetworks = HalWifi::scanNetworks();
@@ -4490,6 +4685,7 @@ void loop() {
         } else if (appState == STATE_SAT_SELECT) {
             drawSatSelectPage();
             pushCanvasWithFilter();
+            updateChainMonoDisplay();
             return;
         }
 
@@ -5510,6 +5706,7 @@ void loop() {
                             }
                         }
                     }
+                } else {
                     
                     // Draw Tree View
                     const char* catNames[] = {
@@ -5766,175 +5963,7 @@ void loop() {
     
     pushCanvasWithFilter();
 
-    // Update Chain Mono Display (dynamic interval: 100ms normally, skipped during fast forwarding to prevent lag)
-    static unsigned long lastChainMonoTick = 0;
-    if (isMonoInitialized && !isFastForwarding && millis() - lastChainMonoTick >= 100) {
-        lastChainMonoTick = millis();
-        
-        bool anyVisibleNow = false;
-        String visibleSatName = "";
-        SatIconType visibleSatIconType = ICON_SATELLITE;
-        
-        if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES) {
-            anyVisibleNow = true;
-            visibleSatName = g_satellites[focusSatIndex].name;
-            visibleSatIconType = g_satellites[focusSatIndex].iconType;
-        } else {
-            if (g_recentLaunchFocusMode) {
-                if (g_repSatCache.lastGeoValid && g_repSatCache.isVisible) {
-                    anyVisibleNow = true;
-                    visibleSatName = g_repSatName;
-                    visibleSatIconType = ICON_SATELLITE;
-                }
-            } else {
-                for (int i = 0; i < NUM_SATELLITES; i++) {
-                    if (g_satellites[i].selected && g_satCaches[i].lastGeoValid && g_satCaches[i].isVisible) {
-                        anyVisibleNow = true;
-                        visibleSatName = g_satellites[i].name;
-                        visibleSatIconType = g_satellites[i].iconType;
-                        break;
-                    }
-                }
-            }
-        }
-        
-        static MonoState state = MONO_STATE_NONE;
-        static int lastDispMinutes = -1;
-        static int lastDispSeconds = -1;
-        
-        bool isUpcomingPass = false;
-        int timeDiff = -1;
-        
-        if (!anyVisibleNow) {
-            // 寻找即将到来的最早可见过境倒计时（全局搜索最小的 aosTime）
-            PassEvent nextPass;
-            bool foundNextPass = false;
-            uint32_t earliestAos = 0xFFFFFFFF;
-            
-            portENTER_CRITICAL(&passMutex);
-            for (const auto& pass : recommendedPasses) {
-                uint32_t passTime = pass.aosTime;
-                uint32_t currentSimTime = current_unix + timeMachineOffset;
-                if (passTime > currentSimTime && pass.isVisible) {
-                    if (passTime < earliestAos) {
-                        earliestAos = passTime;
-                        nextPass = pass;
-                        foundNextPass = true;
-                    }
-                }
-            }
-            portEXIT_CRITICAL(&passMutex);
-            
-            if (foundNextPass) {
-                timeDiff = nextPass.aosTime - (current_unix + timeMachineOffset);
-                // 只有在未来 10 分钟（600 秒）内发生的过境，才在 Chain 屏显示倒计时
-                if (timeDiff >= 0 && timeDiff <= 600) {
-                    isUpcomingPass = true;
-                    visibleSatName = nextPass.satName;
-                    // 遍历 g_satellites 寻找匹配的 iconType
-                    for (int i = 0; i < NUM_SATELLITES; i++) {
-                        if (g_satellites[i].name == nextPass.satName) {
-                            visibleSatIconType = g_satellites[i].iconType;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        
-        if (anyVisibleNow) {
-            // --- 状态 1：当前有可见过境，以缓慢呼吸效果显示飞行器图标 ---
-            if (state != MONO_STATE_PASSING) {
-                state = MONO_STATE_PASSING;
-                lastDispMinutes = -1;
-                lastDispSeconds = -1;
-                M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
-                M5Chain.setMonoClear(mono_id, &operation_status);
-            }
-            
-            // 选择对应的 8x8 像素图标
-            const uint8_t* icon = mono_icon_satellite;
-            if (visibleSatIconType == ICON_STATION) icon = mono_icon_station;
-            else if (visibleSatIconType == ICON_TELESCOPE) icon = mono_icon_telescope;
-            else if (visibleSatIconType == ICON_ROCKET) icon = mono_icon_rocket;
-            else if (visibleSatIconType == ICON_DEEPSPACE) icon = mono_icon_deepspace;
-            else if (visibleSatIconType == ICON_DFH1) icon = mono_icon_dfh1;
-            else if (visibleSatIconType == ICON_BLUEWALKER3) icon = mono_icon_bw3;
-            else if (visibleSatIconType == ICON_WEATHER) icon = mono_icon_weather;
-            else if (visibleSatIconType == ICON_NAVIGATION) icon = mono_icon_navi;
-            else if (visibleSatIconType == ICON_COMMUNICATION) icon = mono_icon_comm;
-            else if (visibleSatIconType == ICON_DEBRIS) icon = mono_icon_debris;
-            
-            // 缓慢呼吸效果 design：正在过境 2.5 秒一个周期
-            float theta = millis() * 0.00251f;
-            float breatheVal = 0.5f + 0.5f * sinf(theta - 1.57079f); // 从最暗起步
-            
-            // 亮度在 1 到 7 之间变化
-            mono_brightness_level_t brightness = (mono_brightness_level_t)(MONO_BRIGHTNESS_LEVEL_1 + (uint8_t)(breatheVal * 6.0f));
-            M5Chain.setMonoBrightness(mono_id, brightness, &operation_status);
-            
-            uint8_t temp[8];
-            memcpy(temp, icon, 8);
-            M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
-            
-        } else if (isUpcomingPass) {
-            // --- 状态 2：10分钟倒计时阶段，显示静止数字，从60秒开始每秒刷新 ---
-            if (state != MONO_STATE_COUNTDOWN) {
-                state = MONO_STATE_COUNTDOWN;
-                lastDispMinutes = -1;
-                lastDispSeconds = -1;
-                M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
-                M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_6, &operation_status);
-                M5Chain.setMonoClear(mono_id, &operation_status);
-            }
-            
-            if (timeDiff <= 60) {
-                // 秒阶段：每秒刷新，从 60 秒到 0 秒
-                if (timeDiff != lastDispSeconds) {
-                    lastDispSeconds = timeDiff;
-                    lastDispMinutes = -1;
-                    
-                    uint8_t D1 = timeDiff / 10;
-                    uint8_t D2 = timeDiff % 10;
-                    
-                    uint8_t temp[8] = {0};
-                    for (int r = 0; r < 5; r++) {
-                        temp[r + 2] = (font_3x5[D1][r] << 5) | font_3x5[D2][r];
-                    }
-                    M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
-                }
-            } else {
-                // 分钟阶段：10分到1分静止显示，不闪烁。采用两位数显示（如 05），使其完全对称
-                int minutes = (timeDiff == 600) ? 10 : (timeDiff / 60);
-                if (minutes != lastDispMinutes) {
-                    lastDispMinutes = minutes;
-                    lastDispSeconds = -1;
-                    
-                    uint8_t D1 = minutes / 10;
-                    uint8_t D2 = minutes % 10;
-                    
-                    uint8_t temp[8] = {0};
-                    for (int r = 0; r < 5; r++) {
-                        temp[r + 2] = (font_3x5[D1][r] << 5) | font_3x5[D2][r];
-                    }
-                    M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
-                }
-            }
-        } else {
-            // --- 状态 3：无临近过境，显示 Cortana 动态圆圈 ---
-            if (state != MONO_STATE_IDLE) {
-                state = MONO_STATE_IDLE;
-                lastDispMinutes = -1;
-                lastDispSeconds = -1;
-                M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
-                M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_6, &operation_status);
-                M5Chain.setMonoClear(mono_id, &operation_status);
-            }
-            
-            uint8_t temp[8];
-            drawCortanaCircle(temp);
-            M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
-        }
-    }
+    // Update Chain Mono Display (dynamic interval: 100ms normally)
+    updateChainMonoDisplay();
 }
 }
