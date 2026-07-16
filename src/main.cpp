@@ -8,6 +8,7 @@
 #include "core/observation_predictor.h"
 #include "core/tle_updater.h"
 #include "core/i18n.h"
+#include "core/encyclopedia.h"
 
 // Helper to convert UTC date/time to Unix timestamp
 uint32_t convertGNSSDateToUnix(int year, int month, int day, int hour, int min, int sec) {
@@ -567,34 +568,12 @@ void getRepresentativeOrbitParams(const String& line2, float& inclination, float
 }
 String recentLaunchErrorMsg = "";
 bool recentLaunchBypassed = false;
-
-const int MAX_SATELLITES = 50;
+const int MAX_SATELLITES = 70;
 SatRealtimeCache g_satCaches[MAX_SATELLITES];
-const int NUM_BUILTIN_SATELLITES = 20;
-int NUM_SATELLITES = NUM_BUILTIN_SATELLITES;
+int NUM_BUILTIN_SATELLITES = 0;
+int NUM_SATELLITES = 0;
 
-SatProfile g_satellites[MAX_SATELLITES] = {
-    {25544, "ISS", TFT_YELLOW, 2, -1.8, true, ICON_STATION, "International Space Station. The largest human-made structure in space, visible as a very bright moving star.", "145.800", "FM/SSTV", "", "", {}, {}, {}, SAT_TYPE_SPACE_STATION},
-    {48274, "Tiangong", TFT_GREEN, 1, -0.5, true, ICON_STATION, "China's Tiangong Space Station. A permanent modular space station in LEO.", "", "", "", "", {}, {}, {}, SAT_TYPE_SPACE_STATION},
-    {20580, "Hubble", TFT_CYAN, 0, 1.5, true, ICON_TELESCOPE, "Hubble Space Telescope. A vital observatory that revolutionized our understanding of the universe.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {33591, "NOAA 19", TFT_ORANGE, 0, 3.5, false, ICON_WEATHER, "NOAA weather satellite. Known for transmitting APT weather images back to Earth.", "137.100", "APT", "", "", {}, {}, {}, SAT_TYPE_WEATHER},
-    {50463, "JWST", TFT_GOLD, 0, 10.0, false, ICON_DEEPSPACE, "James Webb Space Telescope. Located at L2 point 1.5 million km away, observing in infrared.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {53807, "BlueWalker 3", TFT_WHITE, 0, 1.0, false, ICON_BLUEWALKER3, "AST SpaceMobile's prototype. Features a massive 64 sqm array, very bright and controversial.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {118, "Ablestar R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ablestar rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {25732, "CZ-4B R/B", TFT_ORANGE, 0, 4.0, false, ICON_ROCKET, "Long March 4B rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {6155, "Centaur R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Centaur rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {28499, "Ariane 5 R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ariane 5 rocket body.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {41882, "Fengyun-4A", TFT_BLUE, 0, 10.0, false, ICON_WEATHER, "Chinese geostationary meteorological satellite, located 35,786 km above the equator.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {43539, "BeiDou-3", TFT_RED, 0, 10.0, false, ICON_NAVIGATION, "Medium Earth Orbit navigation satellite part of the BeiDou system (BDS).", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {27386, "Envisat", TFT_LIGHTGRAY, 0, 2.5, false, ICON_SATELLITE, "A huge 8-ton inactive Earth observation satellite. Now one of the largest pieces of space debris.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {4382, "DFH-1", TFT_RED, 0, 6.0, true, ICON_DFH1, "Dong Fang Hong I. China's first satellite launched in 1970, still orbiting today as a silent monument.\n\nLaunch: 1970-04-24\nStatus: Inactive\nComms: Unavailable\nHAM: Not Supported", "20.009", "Beacon", "", "", {}, {}, {}, SAT_TYPE_HISTORICAL},
-    {25994, "Terra", TFT_PINK, 0, 3.0, false, ICON_SATELLITE, "NASA's flagship Earth Observing System satellite.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {27424, "Aqua", TFT_MAGENTA, 0, 3.0, false, ICON_SATELLITE, "NASA Earth observation satellite focusing on the water cycle.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {42956, "Iridium 127", TFT_WHITE, 0, 4.0, false, ICON_COMMUNICATION, "Iridium NEXT network. The original 1st-gen Iridium satellites produced legendary 'flares' up to mag -8.", "", "", "", "", {}, {}, {}, SAT_TYPE_VISUAL},
-    {57165, "Meteor-M2", TFT_WHITE, 0, 3.5, false, ICON_WEATHER, "Russian meteorological satellite transmitting LRPT weather images.", "137.100", "LRPT", "", "", {}, {}, {}, SAT_TYPE_WEATHER},
-    {27607, "SO-50", TFT_GREEN, 0, 6.5, false, ICON_COMMUNICATION, "SaudiSat 1C (SO-50). A long-lived, highly active FM voice repeater amateur satellite, very popular for quick handheld contacts.", "145.850", "FM", "436.795", "67.0", {}, {}, {}, SAT_TYPE_HAM},
-    {43017, "AO-91", TFT_MAGENTA, 0, 6.0, false, ICON_COMMUNICATION, "RadFxSat (AO-91). A Fox-1B series amateur radio satellite carrying a U/V FM voice repeater.", "145.960", "FM", "435.250", "67.0", {}, {}, {}, SAT_TYPE_HAM}
-};
+SatProfile g_satellites[MAX_SATELLITES];
 
 // We use a simulated time starting near the TLE epoch for Phase 3 offline testing
 uint32_t current_unix = 0; // Will be set in setup()
@@ -1292,6 +1271,60 @@ String readValLine(WiFiClient* stream) {
     }
     line.trim();
     return line;
+}
+std::vector<String> g_descWrappedLines;
+int g_descLastSatIndex = -1;
+int g_descLastLang = -1;
+uint32_t g_lastSatSelectTime = 0;
+
+void wrapTextIntoLines(LGFX_Sprite* canvas, const String& text, int w, std::vector<String>& outLines) {
+    int start = 0;
+    while (start < text.length()) {
+        int len = 0;
+        bool foundNewline = false;
+        
+        while (start + len < text.length()) {
+            if (text[start + len] == '\n') {
+                foundNewline = true;
+                break;
+            }
+            
+            int charLen = 1;
+            unsigned char head = (unsigned char)text[start + len];
+            if (head >= 0xF0) charLen = 4;
+            else if (head >= 0xE0) charLen = 3;
+            else if (head >= 0xC0) charLen = 2;
+            
+            if (start + len + charLen > text.length()) {
+                charLen = text.length() - (start + len);
+            }
+            
+            String sub = text.substring(start, start + len + charLen);
+            int subW = canvas->textWidth(sub.c_str());
+            if (subW > w) {
+                break;
+            }
+            len += charLen;
+        }
+        
+        if (len == 0 && !foundNewline) {
+            int charLen = 1;
+            unsigned char head = (unsigned char)text[start];
+            if (head >= 0xF0) charLen = 4;
+            else if (head >= 0xE0) charLen = 3;
+            else if (head >= 0xC0) charLen = 2;
+            if (start + charLen > text.length()) charLen = text.length() - start;
+            len = charLen;
+        }
+        
+        outLines.push_back(text.substring(start, start + len));
+        
+        if (foundNewline) {
+            start += len + 1; // skip '\n'
+        } else {
+            start += len;
+        }
+    }
 }
 
 int drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int w, int lineH, bool draw = true) {
@@ -2083,6 +2116,30 @@ void setup() {
     // Spawn background loader task on Core 0 to parse TLEs off the UI thread
     xTaskCreatePinnedToCore(
         [](void* p) {
+            // Curated satellites data initialization
+            NUM_BUILTIN_SATELLITES = Encyclopedia::getEntryCount();
+            if (NUM_BUILTIN_SATELLITES > MAX_SATELLITES - 20) {
+                NUM_BUILTIN_SATELLITES = MAX_SATELLITES - 20;
+            }
+            NUM_SATELLITES = NUM_BUILTIN_SATELLITES;
+            
+            const EncyclopediaEntry* entries = Encyclopedia::getEntries();
+            for (int i = 0; i < NUM_BUILTIN_SATELLITES; i++) {
+                g_satellites[i].noradId = entries[i].norad;
+                g_satellites[i].name = entries[i].name;
+                g_satellites[i].color = entries[i].color;
+                g_satellites[i].baseScore = entries[i].baseScore;
+                g_satellites[i].stdMag = entries[i].stdMag;
+                g_satellites[i].selected = (i == 0 || i == 1);
+                g_satellites[i].iconType = entries[i].icon;
+                g_satellites[i].description = entries[i].description_en;
+                g_satellites[i].downlinkFreq = entries[i].downlinkFreq;
+                g_satellites[i].radioMode = entries[i].radioMode;
+                g_satellites[i].uplinkFreq = entries[i].uplinkFreq;
+                g_satellites[i].tone = entries[i].tone;
+                g_satellites[i].type = entries[i].type;
+            }
+
             // Initialize Position & Sun Calculator
             pos_manager = new PositionManager(gnss);
             pos_manager->begin(); 
@@ -2256,13 +2313,14 @@ void setup() {
                     loaded_tle.baseScore = g_satellites[i].baseScore;
                     g_satellites[i].tle = loaded_tle;
                 } else {
-                    // Fallback for first 3 if no cache
-                    if (i == 0) g_satellites[i].tle = TLEManager::getISS_TLE();
-                    else if (i == 1) g_satellites[i].tle = TLEManager::getTiangong_TLE();
-                    else if (i == 2) g_satellites[i].tle = TLEManager::getHubble_TLE();
-                    else if (g_satellites[i].noradId == 50463) g_satellites[i].tle = TLEManager::getJWST_TLE();
-                    else if (g_satellites[i].noradId == 27607) g_satellites[i].tle = TLEManager::getSO50_TLE();
-                    else if (g_satellites[i].noradId == 43017) g_satellites[i].tle = TLEManager::getAO91_TLE();
+                    // Fallback using noradId instead of hardcoded index
+                    uint32_t norad = g_satellites[i].noradId;
+                    if (norad == 25544) g_satellites[i].tle = TLEManager::getISS_TLE();
+                    else if (norad == 48274) g_satellites[i].tle = TLEManager::getTiangong_TLE();
+                    else if (norad == 20580) g_satellites[i].tle = TLEManager::getHubble_TLE();
+                    else if (norad == 50463) g_satellites[i].tle = TLEManager::getJWST_TLE();
+                    else if (norad == 27607) g_satellites[i].tle = TLEManager::getSO50_TLE();
+                    else if (norad == 43017) g_satellites[i].tle = TLEManager::getAO91_TLE();
                 }
                 
                 if (g_satellites[i].tle.line1.length() > 0) {
@@ -2956,26 +3014,96 @@ void drawSatSelectPage() {
                 }
             }
             
+            // Badges will be drawn at the bottom of the scrollable description
+            
             if (finalDesc.length() > 0) {
-                int descAreaHeight = radioY - descY - 2;
-                int totalLines = drawWrappedText(canvas, finalDesc.c_str(), rightX, descY, width - rightX - 5, 13, false);
-                int totalHeight = totalLines * 13;
-                
-                int yOffset = 0;
-                if (totalHeight > descAreaHeight && descAreaHeight > 13) {
-                    int scrollSpeedMs = 66;
-                    int holdTimeMs = 1500;
-                    int scrollRange = totalHeight - descAreaHeight + 13;
-                    int cycleTime = scrollRange * scrollSpeedMs + holdTimeMs * 2;
-                    int t = millis() % cycleTime;
-                    if (t < holdTimeMs) yOffset = 0;
-                    else if (t < cycleTime - holdTimeMs) yOffset = (t - holdTimeMs) / scrollSpeedMs;
-                    else yOffset = scrollRange;
+                int currLang = I18N::getLanguage();
+                if (satSelectedIndex != g_descLastSatIndex || currLang != g_descLastLang) {
+                    g_descLastSatIndex = satSelectedIndex;
+                    g_descLastLang = currLang;
+                    g_descWrappedLines.clear();
+                    wrapTextIntoLines(canvas, finalDesc, width - rightX - 5, g_descWrappedLines);
+                    g_lastSatSelectTime = millis(); // Reset the scroll timer to start from top
                 }
-                
-                canvas->setClipRect(rightX, descY, width - rightX, descAreaHeight);
-                drawWrappedText(canvas, finalDesc.c_str(), rightX, descY - yOffset, width - rightX - 5, 13);
-                canvas->clearClipRect();
+
+                if (!g_descWrappedLines.empty()) {
+                    int descAreaHeight = radioY - descY - 2;
+                    int totalLines = g_descWrappedLines.size();
+                    // Add 20px space at the bottom for the category/flag badges
+                    int totalHeight = totalLines * 13 + 20;
+                    
+                    int yOffset = 0;
+                    if (totalHeight > descAreaHeight && descAreaHeight > 13) {
+                        int scrollSpeedMs = 66;
+                        int holdTimeMs = 1500;
+                        int scrollRange = totalHeight - descAreaHeight + 13;
+                        int cycleTime = scrollRange * scrollSpeedMs + holdTimeMs * 2;
+                        int t = (millis() - g_lastSatSelectTime) % cycleTime;
+                        if (t < holdTimeMs) yOffset = 0;
+                        else if (t < cycleTime - holdTimeMs) yOffset = (t - holdTimeMs) / scrollSpeedMs;
+                        else yOffset = scrollRange;
+                    }
+                    
+                    canvas->setClipRect(rightX, descY, width - rightX, descAreaHeight);
+                    
+                    // 1. Draw introduction wrapped text
+                    for (int idx = 0; idx < totalLines; idx++) {
+                        int lineY = descY + idx * 13 - yOffset;
+                        if (lineY >= descY - 13 && lineY <= descY + descAreaHeight) {
+                            canvas->drawString(g_descWrappedLines[idx].c_str(), rightX, lineY);
+                        }
+                    }
+                    
+                    // 2. Draw Category and Flag Badges below text (fully synchronized with scrolling)
+                    int badgeY = descY + totalLines * 13 + 6 - yOffset;
+                    const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(selSat.noradId);
+                    if (entry && badgeY >= descY - 13 && badgeY <= descY + descAreaHeight) {
+                        int badgeX = rightX;
+                        
+                        // 2.1) Category Badge
+                        String catName = Encyclopedia::getCategoryName(entry->category);
+                        int badgeW = canvas->textWidth(catName.c_str()) + 6;
+                        canvas->fillRoundRect(badgeX, badgeY, badgeW, 13, 2, canvas->color565(60, 80, 110));
+                        canvas->setTextColor(TFT_WHITE);
+                        canvas->drawString(catName.c_str(), badgeX + 3, badgeY + 1);
+                        badgeX += badgeW + 4;
+                        
+                        // 2.2) Flag Badges
+                        uint32_t flags = entry->flags;
+                        uint32_t allFlags[] = {
+                            FLAG_VISIBLE, FLAG_CREWED, FLAG_HISTORIC, FLAG_ROCKET_BODY,
+                            FLAG_DEBRIS, FLAG_WEATHER, FLAG_RADIO, FLAG_NAVIGATION,
+                            FLAG_SCIENCE, FLAG_EARTH_OBS
+                        };
+                        for (uint32_t f : allFlags) {
+                            if ((flags & f) && badgeX < width - 15) {
+                                String fName = Encyclopedia::getFlagName(f);
+                                if (fName.length() > 0) {
+                                    int fW = canvas->textWidth(fName.c_str()) + 6;
+                                    uint16_t bgColor = canvas->color565(40, 50, 60);
+                                    uint16_t textColor = TFT_LIGHTGRAY;
+                                    if (f == FLAG_VISIBLE) { bgColor = canvas->color565(90, 80, 20); textColor = TFT_YELLOW; }
+                                    else if (f == FLAG_CREWED) { bgColor = canvas->color565(20, 90, 50); textColor = TFT_GREEN; }
+                                    else if (f == FLAG_HISTORIC) { bgColor = canvas->color565(90, 50, 20); textColor = TFT_ORANGE; }
+                                    else if (f == FLAG_RADIO) { bgColor = canvas->color565(80, 30, 80); textColor = TFT_MAGENTA; }
+                                    else if (f == FLAG_SCIENCE) { bgColor = canvas->color565(50, 30, 90); textColor = TFT_GOLD; }
+                                    else if (f == FLAG_WEATHER) { bgColor = canvas->color565(20, 60, 90); textColor = TFT_CYAN; }
+                                    else if (f == FLAG_EARTH_OBS) { bgColor = canvas->color565(30, 80, 80); textColor = TFT_GREEN; }
+                                    else if (f == FLAG_NAVIGATION) { bgColor = canvas->color565(80, 20, 20); textColor = TFT_RED; }
+                                    
+                                    canvas->fillRoundRect(badgeX, badgeY, fW, 13, 2, bgColor);
+                                    canvas->setTextColor(textColor);
+                                    canvas->drawString(fName.c_str(), badgeX + 3, badgeY + 1);
+                                    badgeX += fW + 4;
+                                }
+                            }
+                        }
+                    }
+                    
+                    canvas->clearClipRect();
+                } else {
+                    canvas->drawString(I18N::get(TXT_NO_DESCRIPTION), rightX, descY);
+                }
             } else {
                 canvas->drawString(I18N::get(TXT_NO_DESCRIPTION), rightX, descY);
             }

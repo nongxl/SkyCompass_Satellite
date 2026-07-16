@@ -1,5 +1,6 @@
 #include "i18n.h"
 #include <Preferences.h>
+#include "encyclopedia.h"
 
 Language I18N::_currentLang = LANG_EN;
 bool I18N::_initialized = false;
@@ -384,30 +385,5 @@ void I18N::setFirstStartDone() {
 }
 
 const char* I18N::getSatDescription(int noradId) {
-    if (_currentLang == LANG_ZH) {
-        switch (noradId) {
-            case 25544: return "国际空间站。太空中最大的人造结构，可视为一颗非常明亮的移动恒星。";
-            case 48274: return "中国天宫空间站。低地球轨道上的永久模块化空间站。";
-            case 20580: return "哈勃空间望远镜。一台彻底改变了我们对宇宙认识的重要天文台。";
-            case 33591: return "NOAA气象卫星。以向地球传输APT气象图像而闻名。";
-            case 50463: return "James Webb空间望远镜。位于150万公里外的L2点，进行红外线观测。";
-            case 53807: return "BlueWalker 3原理样机。拥有64平方米的巨型天线阵列，极其明亮且备受争议。";
-            case 118: return "Ablestar 火箭残骸。";
-            case 25732: return "长征四号乙火箭残骸。";
-            case 6155: return "半人马座火箭残骸。";
-            case 28499: return "阿里安5号火箭残骸。";
-            case 41882: return "中国静止轨道气象卫星，位于赤道上方35786公里。";
-            case 43539: return "北斗系统（BDS）的中地球轨道导航卫星。";
-            case 27386: return "一颗重达8吨的失效地球观测卫星。目前是最大的空间碎片之一。";
-            case 4382: return "东方红一号。中国于1970年发射的第一颗人造卫星，至今仍在轨道上运行，是一座无声的丰碑。\n\n发射：1970-04-24\n状态：失效\n通信：不可用\n业余无线电：不支持";
-            case 25994: return "NASA旗舰级地球观测系统卫星。";
-            case 27424: return "NASA的地球观测卫星，重点关注水循环。";
-            case 42956: return "铱星二代（Iridium NEXT）网络。初代铱星曾产生高达-8等的传奇“闪光”。";
-            case 57165: return "俄罗斯气象卫星，传输LRPT格式的气象图像。";
-            case 27607: return "沙特之星1C（SO-50）。一颗寿命长、非常活跃的调频语音中继业余卫星，极受手持终端快捷联络的欢迎。";
-            case 43017: return "RadFxSat（AO-91）。Fox-1B系列业余无线电卫星，搭载U/V调频语音中继。";
-            default: return nullptr;
-        }
-    }
-    return nullptr;
+    return Encyclopedia::getDescription(noradId);
 }
