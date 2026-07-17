@@ -42,18 +42,20 @@ bool HalWifi::syncNTPTime(long gmtOffset_sec, int daylightOffset_sec) {
     
     struct tm timeinfo;
     int retries = 0;
-    while (!getLocalTime(&timeinfo) && retries < 10) {
+    // Reduced from 10 (5s) to 6 (3s) to shorten boot time.
+    // Pool NTP servers usually respond within 1~2 retries on a healthy network.
+    while (!getLocalTime(&timeinfo) && retries < 6) {
         delay(500);
         log_i(".");
         retries++;
     }
     
-    if (retries < 10) {
+    if (retries < 6) {
         LOG_I("APP", "\nTime synced successfully!");
         log_i("Current time: %s", asctime(&timeinfo));
         return true;
     } else {
-        LOG_I("APP", "\nFailed to sync NTP time.");
+        LOG_I("APP", "\nFailed to sync NTP time (timeout).");
         return false;
     }
 }
