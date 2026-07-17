@@ -722,6 +722,7 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
 #include "core/observation_predictor.h"
 
 TaskHandle_t predictorTaskHandle = NULL;
+TaskHandle_t imuTaskHandle = NULL; // IMU task handle, used to pause IMU during Grove bus probing
 portMUX_TYPE passMutex = portMUX_INITIALIZER_UNLOCKED;
 std::vector<PassEvent> recommendedPasses;
 bool showRecommendations = false;
@@ -2105,7 +2106,7 @@ void setup() {
             4096,
             NULL,
             3, // High priority
-            NULL,
+            &imuTaskHandle,  // Save handle so we can suspend during Grove bus probing
             0  // Pinned to Core 0
         );
     }
@@ -2131,7 +2132,7 @@ void setup() {
                 g_satellites[i].color = entries[i].color;
                 g_satellites[i].baseScore = entries[i].baseScore;
                 g_satellites[i].stdMag = entries[i].stdMag;
-                g_satellites[i].selected = (i == 0 || i == 1);
+                g_satellites[i].selected = entries[i].defaultSelected;
                 g_satellites[i].iconType = entries[i].icon;
                 g_satellites[i].description = entries[i].description_en;
                 g_satellites[i].downlinkFreq = entries[i].downlinkFreq;
@@ -2163,6 +2164,15 @@ void setup() {
             
             if (!skipMonoProbe) {
                 LOG_I("APP", "Initializing Chain Mono on Serial2 (Auto-detecting pins)...");
+                
+                // CRITICAL: GPIO 1/2 are shared between Grove port (Serial2) and internal I²C (IMU).
+                // Suspend IMU task before driving these pins with UART to prevent I²C bus corruption
+                // which would cause the IMU to output garbage data and the globe to jump around.
+                if (imuTaskHandle != NULL) {
+                    vTaskSuspend(imuTaskHandle);
+                    LOG_I("APP", "IMU task suspended for Grove bus probing");
+                }
+                
                 M5Chain.begin(&Serial2, 115200, 2, 1);
                 delay(100);
                 int retry = 2;
@@ -2194,6 +2204,20 @@ void setup() {
                         retry--;
                         if (retry > 0) delay(50);
                     }
+                }
+                
+                // Restore I²C bus and resume IMU task regardless of probe result.
+                // If Chain Mono was not found, release GPIO 1/2 back to I²C.
+                // If Chain Mono was found, Wire.begin() re-asserts I²C so other I²C devices still work.
+                if (!foundChain) {
+                    Serial2.end(); // Release GPIO 1/2 from UART
+                    LOG_I("APP", "Chain Mono not found. Released GPIO 1/2. Restoring I²C bus.");
+                }
+                Wire.begin(); // Re-assert I²C master on GPIO 1(SCL)/2(SDA)
+                delay(10);    // Short stabilisation before resuming IMU reads
+                if (imuTaskHandle != NULL) {
+                    vTaskResume(imuTaskHandle);
+                    LOG_I("APP", "IMU task resumed after Grove bus probing");
                 }
                 
                 if (foundChain) {
@@ -2708,7 +2732,7 @@ void drawSatSelectPage() {
         // Left Panel (List)
         int yPos = 25;
         int itemsPerPage = showBanner ? 6 : 8;
-        int itemSpacing = 13;
+        int itemSpacing = 12;
         int startIndex = (satSelectedIndex / itemsPerPage) * itemsPerPage;
         
         for (int i = 0; i < itemsPerPage && (startIndex + i) <= NUM_SATELLITES; i++) {
@@ -3369,7 +3393,7 @@ void drawSatSelectPage() {
         } else {
             int yPos = 25;
             int itemsPerPage = showBanner ? 6 : 8;
-            int itemSpacing = 13;
+            int itemSpacing = 12;
             int startIndex = (recentLaunchSelectedIndex / itemsPerPage) * itemsPerPage;
             int totalItems = g_recentLaunches.size();
             
@@ -5969,46 +5993,47 @@ void loop() {
             }
             
             // Draw GNSS and WiFi Status at the bottom of the panel
-            earth_renderer->getCanvas()->drawFastHLine(0, 104, 140, TFT_DARKGREY);
+            // Divider moved down 5px (104→109) to give the content area more vertical space.
+            earth_renderer->getCanvas()->drawFastHLine(0, 109, 140, TFT_DARKGREY);
             
             // Draw WiFi Status
             if (HalWifi::isConnected()) {
                 earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                earth_renderer->getCanvas()->drawString("WF:ON", 5, 111);
+                earth_renderer->getCanvas()->drawString("WF:ON", 5, 116);
             } else {
                 earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                earth_renderer->getCanvas()->drawString("WF:OFF", 5, 111);
+                earth_renderer->getCanvas()->drawString("WF:OFF", 5, 116);
             }
             
             // Draw GNSS Status
             if (gnss && gnss->isModuleInitialized()) {
                 if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
                     earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                    earth_renderer->getCanvas()->drawString("GP:FIX", 52, 111);
+                    earth_renderer->getCanvas()->drawString("GP:FIX", 52, 116);
                 } else if (gnss->isInStandbyMode()) {
                     if (gnssTimedOut) {
                         earth_renderer->getCanvas()->setTextColor(TFT_RED);
-                        earth_renderer->getCanvas()->drawString("GP:TMO", 52, 111);
+                        earth_renderer->getCanvas()->drawString("GP:TMO", 52, 116);
                     } else {
                         earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                        earth_renderer->getCanvas()->drawString("GP:OFF", 52, 111);
+                        earth_renderer->getCanvas()->drawString("GP:OFF", 52, 116);
                     }
                 } else {
                     earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
-                    earth_renderer->getCanvas()->drawString("GP:SCH", 52, 111);
+                    earth_renderer->getCanvas()->drawString("GP:SCH", 52, 116);
                 }
             } else {
                 earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
-                earth_renderer->getCanvas()->drawString("GP:N/A", 52, 111);
+                earth_renderer->getCanvas()->drawString("GP:N/A", 52, 116);
             }
             
             // Draw M5Chain Mono Status
             if (isMonoInitialized) {
                 earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                earth_renderer->getCanvas()->drawString("MN:OK", 100, 111);
+                earth_renderer->getCanvas()->drawString("MN:OK", 100, 116);
             } else {
                 earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
-                earth_renderer->getCanvas()->drawString("MN:ND", 100, 111); // Not Detected
+                earth_renderer->getCanvas()->drawString("MN:ND", 100, 116); // Not Detected
             }
             
             // Draw GP Epoch Version
@@ -6029,7 +6054,7 @@ void loop() {
                 tleEpoch += I18N::get(TXT_VIS_NA);
             }
             earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-            earth_renderer->getCanvas()->drawString(tleEpoch.c_str(), 5, 121);
+            earth_renderer->getCanvas()->drawString(tleEpoch.c_str(), 5, 126);
         }
         
         // Draw Time Machine at bottom right

@@ -1074,6 +1074,47 @@ void EarthRenderer::drawSatelliteIcon(int x, int y, SatIconType iconType, uint16
         _canvas->drawLine(x, y - 2, x + 3, y - 6, color);
         _canvas->drawFastVLine(x, y + 2, 2, color);
         _canvas->drawFastHLine(x - 2, y + 4, 5, color);
+    } else if (iconType == ICON_SPACEPLANE) {
+        // Spaceplane (X-37B) — top-down view: blunt nose, delta wings, vertical stabiliser
+        // Nose
+        _canvas->fillRect(x - 1, y - 4, 3, 2, darkGrayCol);
+        // Fuselage
+        _canvas->fillRect(x - 2, y - 2, 5, 5, darkGrayCol);
+        // Delta wings (widest at centre)
+        _canvas->fillTriangle(x - 4, y + 1, x - 1, y - 1, x - 1, y + 3, color);
+        _canvas->fillTriangle(x + 5, y + 1, x + 2, y - 1, x + 2, y + 3, color);
+        // Vertical tail fin (offset slightly right)
+        _canvas->drawFastVLine(x + 1, y + 3, 3, color);
+    } else if (iconType == ICON_SOLAR_PROBE) {
+        // Solar Probe (Parker) — heat shield (wide disc) + instrument boom + two tiny wings
+        // Heat shield
+        _canvas->fillEllipse(x, y - 1, 4, 3, lightGrayCol);
+        _canvas->drawEllipse(x, y - 1, 4, 3, color);
+        // Instrument boom below shield
+        _canvas->drawFastVLine(x, y + 2, 3, darkGrayCol);
+        // Tiny solar panels flanking boom
+        _canvas->fillRect(x - 3, y + 3, 2, 1, color);
+        _canvas->fillRect(x + 2, y + 3, 2, 1, color);
+    } else if (iconType == ICON_CHAIN_MONO) {
+        // Chain Mono module — rectangular body with screen and Grove connector nub
+        _canvas->fillRect(x - 4, y - 3, 9, 7, darkGrayCol);   // Module body
+        _canvas->fillRect(x - 3, y - 2, 7, 5, color);          // Screen area (lighter)
+        _canvas->fillRect(x - 2, y - 1, 5, 3, darkGrayCol);    // Screen content (dark pixels)
+        _canvas->fillRect(x - 5, y + 1, 1, 2, lightGrayCol);   // Left Grove nub
+    } else if (iconType == ICON_LANDER) {
+        // Lander — hexagonal body + top antenna + three landing legs
+        // Antenna
+        _canvas->drawFastVLine(x, y - 4, 2, color);
+        // Main body (flat hexagon)
+        _canvas->fillRect(x - 2, y - 2, 5, 4, darkGrayCol);
+        // Three landing legs (left, centre-right, right)
+        _canvas->drawLine(x - 2, y + 2, x - 4, y + 4, color);
+        _canvas->drawLine(x,     y + 2, x,     y + 4, color);
+        _canvas->drawLine(x + 2, y + 2, x + 4, y + 4, color);
+        // Foot pads
+        _canvas->drawFastHLine(x - 5, y + 4, 2, color);
+        _canvas->drawPixel(x, y + 5, color);
+        _canvas->drawFastHLine(x + 4, y + 4, 2, color);
     } else {
         // Generic Sat (Tiny cube + single solar wing)
         _canvas->fillRect(x - 1, y - 1, 3, 3, darkGrayCol);

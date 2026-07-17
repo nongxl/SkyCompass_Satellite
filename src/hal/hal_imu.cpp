@@ -133,6 +133,14 @@ public:
         // 动态阈值防抖：只有在总加速度接近 1G 时（0.8G ~ 1.2G），说明此时没有剧烈的线性加减速（例如挥动手臂或急停）
         // 这时才用加速计去纠正角度。完美解决“急停时地球往回转一点”的问题！
         float accelMag = sqrt(_data.accelX*_data.accelX + _data.accelY*_data.accelY + _data.accelZ*_data.accelZ);
+        
+        // I²C 总线干扰检测：正常重力读数应在 [0.3, 4.0] G 之间
+        // 超出此范围说明数据被 UART/I²C 总线噪声污染（如 Grove 口 UART 干扰），丢弃本帧
+        // 避免脏数据进入陀螺仪积分导致地球仪乱跳
+        if (accelMag < 0.3f || accelMag > 4.0f) {
+            return false;
+        }
+        
         if (accelMag > 0.8f && accelMag < 1.2f) {
             float diffPitch = currentPitch - _pitch;
             while (diffPitch > PI_F) diffPitch -= TWO_PI_F;

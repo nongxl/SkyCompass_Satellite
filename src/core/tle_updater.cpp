@@ -74,7 +74,12 @@ bool TLEUpdater::getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds, Wi
                 LOG_I("APP", "Successfully fetched TLE for %d from network!", noradId);
                 return true;
             } else if (hasCache) {
-                LOG_I("APP", "Network fetch failed, falling back to old cache.");
+                LOG_I("APP", "Network fetch failed, falling back to old cache. Refreshing timestamp to suppress retry.");
+                // Refresh the cached timestamp to now so that this satellite is not
+                // considered stale again on the very next boot.  Without this, a TLS
+                // memory-allocation failure (SSL -32512) causes the device to hammer
+                // CelesTrak on every boot, triggering connection refusals.
+                saveToCache(noradId, outTle, now);
                 return true;
             } else {
                 return false;

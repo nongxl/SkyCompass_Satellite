@@ -78,8 +78,10 @@ public:
         _config.txPin = 13;
         _config.baudRate = 115200;
         Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+        // GPIO 15/13 不与 I²C 共享，但 UART 初始化可能短暂干扰内部总线状态，显式重新锁定 I²C
+        Wire.begin();
         
-        if (probeUart(400)) {
+        if (probeUart(600)) {
             found = true;
             _config.enableGroveProbe = false; // 内置找到了，不要再占用 Grove 了，Grove 留给 Mono
             LOG_I("GNSS", "Detected GNSS on internal pins (15/13) @ 115200");
@@ -89,7 +91,9 @@ public:
             Serial1.end();
             _config.baudRate = 9600;
             Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
-            if (probeUart(400)) {
+            Wire.begin(); // 恢复 I²C 以防 UART 初始化影响总线状态
+            // GPS 冷启动首帧 NMEA 最长需要约 1~2s，延长超时至 1500ms 以避免漏检
+            if (probeUart(1500)) {
                 found = true;
                 _config.enableGroveProbe = false; // 内置找到了，不要再占用 Grove 了，Grove 留给 Mono
                 LOG_I("GNSS", "Detected GNSS on internal pins (15/13) @ 9600");

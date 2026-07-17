@@ -18,7 +18,11 @@ enum SatIconType {
     ICON_WEATHER,
     ICON_NAVIGATION,
     ICON_COMMUNICATION,
-    ICON_DEBRIS
+    ICON_DEBRIS,
+    ICON_SPACEPLANE,   // X-37B 航天飞机形状
+    ICON_SOLAR_PROBE,  // Parker Solar Probe 等太阳探测器
+    ICON_CHAIN_MONO,   // M5Stack Chain Mono 外设模块
+    ICON_LANDER        // 月球/行星着陆器
 };
 
 enum TrainState {

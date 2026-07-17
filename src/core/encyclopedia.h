@@ -44,6 +44,7 @@ struct EncyclopediaEntry {
     const char* radioMode;
     const char* uplinkFreq;
     const char* tone;
+    bool defaultSelected; // 是否在首次启动时默认勾选该卫星
 };
 
 class Encyclopedia {
