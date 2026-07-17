@@ -1276,6 +1276,7 @@ std::vector<String> g_descWrappedLines;
 int g_descLastSatIndex = -1;
 int g_descLastLang = -1;
 uint32_t g_lastSatSelectTime = 0;
+int g_descLabelAreaHeight = 20;
 
 void wrapTextIntoLines(LGFX_Sprite* canvas, const String& text, int w, std::vector<String>& outLines) {
     int start = 0;
@@ -3023,14 +3024,50 @@ void drawSatSelectPage() {
                     g_descLastLang = currLang;
                     g_descWrappedLines.clear();
                     wrapTextIntoLines(canvas, finalDesc, width - rightX - 5, g_descWrappedLines);
+                    
+                    // Simulate bottom badges layout to compute labelAreaHeight dynamically
+                    g_descLabelAreaHeight = 20;
+                    const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(selSat.noradId);
+                    if (entry) {
+                        int simX = rightX;
+                        int simY = 0;
+                        String catName = Encyclopedia::getCategoryName(entry->category);
+                        int catW = canvas->textWidth(catName.c_str()) + 6;
+                        simX += catW + 4;
+                        
+                        uint32_t flags = entry->flags;
+                        uint32_t allFlags[] = {
+                            FLAG_VISIBLE, FLAG_CREWED, FLAG_HISTORIC, FLAG_ROCKET_BODY,
+                            FLAG_DEBRIS, FLAG_WEATHER, FLAG_RADIO, FLAG_NAVIGATION,
+                            FLAG_SCIENCE, FLAG_EARTH_OBS
+                        };
+                        for (uint32_t f : allFlags) {
+                            if (flags & f) {
+                                String fName = Encyclopedia::getFlagName(f);
+                                if (fName.length() > 0) {
+                                    // Remove repetition
+                                    if (catName.indexOf(fName) != -1 || fName.indexOf(catName) != -1) {
+                                        continue;
+                                    }
+                                    int fW = canvas->textWidth(fName.c_str()) + 6;
+                                    if (simX + fW > width - 4) {
+                                        simY += 15;
+                                        simX = rightX;
+                                    }
+                                    simX += fW + 4;
+                                }
+                            }
+                        }
+                        g_descLabelAreaHeight = simY + 20;
+                    }
+                    
                     g_lastSatSelectTime = millis(); // Reset the scroll timer to start from top
                 }
 
                 if (!g_descWrappedLines.empty()) {
                     int descAreaHeight = radioY - descY - 2;
                     int totalLines = g_descWrappedLines.size();
-                    // Add 20px space at the bottom for the category/flag badges
-                    int totalHeight = totalLines * 13 + 20;
+                    int totalHeight = totalLines * 13 + g_descLabelAreaHeight;
                     
                     int yOffset = 0;
                     if (totalHeight > descAreaHeight && descAreaHeight > 13) {
@@ -3050,25 +3087,48 @@ void drawSatSelectPage() {
                     for (int idx = 0; idx < totalLines; idx++) {
                         int lineY = descY + idx * 13 - yOffset;
                         if (lineY >= descY - 13 && lineY <= descY + descAreaHeight) {
-                            canvas->drawString(g_descWrappedLines[idx].c_str(), rightX, lineY);
+                            String line = g_descWrappedLines[idx];
+                            int colonIdx = line.indexOf(':');
+                            if (colonIdx == -1) {
+                                colonIdx = line.indexOf("：");
+                            }
+                            
+                            if (colonIdx != -1) {
+                                String namePart = line.substring(0, colonIdx + 1);
+                                String valuePart = line.substring(colonIdx + 1);
+                                
+                                canvas->setTextColor(TFT_GREEN);
+                                canvas->drawString(namePart.c_str(), rightX, lineY);
+                                
+                                int nameW = canvas->textWidth(namePart.c_str());
+                                canvas->setTextColor(TFT_LIGHTGRAY);
+                                canvas->drawString(valuePart.c_str(), rightX + nameW, lineY);
+                            } else {
+                                canvas->setTextColor(TFT_LIGHTGRAY);
+                                canvas->drawString(line.c_str(), rightX, lineY);
+                            }
                         }
                     }
                     
-                    // 2. Draw Category and Flag Badges below text (fully synchronized with scrolling)
+                    // 2. Draw Category and Flag Badges below text (fully synchronized with scrolling & wrap support)
                     int badgeY = descY + totalLines * 13 + 6 - yOffset;
                     const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(selSat.noradId);
-                    if (entry && badgeY >= descY - 13 && badgeY <= descY + descAreaHeight) {
-                        int badgeX = rightX;
+                    if (entry) {
+                        int currBadgeX = rightX;
+                        int currBadgeY = badgeY;
                         
-                        // 2.1) Category Badge
                         String catName = Encyclopedia::getCategoryName(entry->category);
-                        int badgeW = canvas->textWidth(catName.c_str()) + 6;
-                        canvas->fillRoundRect(badgeX, badgeY, badgeW, 13, 2, canvas->color565(60, 80, 110));
-                        canvas->setTextColor(TFT_WHITE);
-                        canvas->drawString(catName.c_str(), badgeX + 3, badgeY + 1);
-                        badgeX += badgeW + 4;
+                        int catW = canvas->textWidth(catName.c_str()) + 6;
                         
-                        // 2.2) Flag Badges
+                        // Draw Category Badge
+                        if (currBadgeY >= descY - 13 && currBadgeY <= descY + descAreaHeight) {
+                            canvas->fillRoundRect(currBadgeX, currBadgeY, catW, 13, 2, canvas->color565(60, 80, 110));
+                            canvas->setTextColor(TFT_WHITE);
+                            canvas->drawString(catName.c_str(), currBadgeX + 3, currBadgeY + 1);
+                        }
+                        currBadgeX += catW + 4;
+                        
+                        // Draw Flag Badges
                         uint32_t flags = entry->flags;
                         uint32_t allFlags[] = {
                             FLAG_VISIBLE, FLAG_CREWED, FLAG_HISTORIC, FLAG_ROCKET_BODY,
@@ -3076,25 +3136,36 @@ void drawSatSelectPage() {
                             FLAG_SCIENCE, FLAG_EARTH_OBS
                         };
                         for (uint32_t f : allFlags) {
-                            if ((flags & f) && badgeX < width - 15) {
+                            if (flags & f) {
                                 String fName = Encyclopedia::getFlagName(f);
                                 if (fName.length() > 0) {
+                                    // Remove repetition
+                                    if (catName.indexOf(fName) != -1 || fName.indexOf(catName) != -1) {
+                                        continue;
+                                    }
                                     int fW = canvas->textWidth(fName.c_str()) + 6;
-                                    uint16_t bgColor = canvas->color565(40, 50, 60);
-                                    uint16_t textColor = TFT_LIGHTGRAY;
-                                    if (f == FLAG_VISIBLE) { bgColor = canvas->color565(90, 80, 20); textColor = TFT_YELLOW; }
-                                    else if (f == FLAG_CREWED) { bgColor = canvas->color565(20, 90, 50); textColor = TFT_GREEN; }
-                                    else if (f == FLAG_HISTORIC) { bgColor = canvas->color565(90, 50, 20); textColor = TFT_ORANGE; }
-                                    else if (f == FLAG_RADIO) { bgColor = canvas->color565(80, 30, 80); textColor = TFT_MAGENTA; }
-                                    else if (f == FLAG_SCIENCE) { bgColor = canvas->color565(50, 30, 90); textColor = TFT_GOLD; }
-                                    else if (f == FLAG_WEATHER) { bgColor = canvas->color565(20, 60, 90); textColor = TFT_CYAN; }
-                                    else if (f == FLAG_EARTH_OBS) { bgColor = canvas->color565(30, 80, 80); textColor = TFT_GREEN; }
-                                    else if (f == FLAG_NAVIGATION) { bgColor = canvas->color565(80, 20, 20); textColor = TFT_RED; }
+                                    if (currBadgeX + fW > width - 4) {
+                                        currBadgeY += 15;
+                                        currBadgeX = rightX;
+                                    }
                                     
-                                    canvas->fillRoundRect(badgeX, badgeY, fW, 13, 2, bgColor);
-                                    canvas->setTextColor(textColor);
-                                    canvas->drawString(fName.c_str(), badgeX + 3, badgeY + 1);
-                                    badgeX += fW + 4;
+                                    if (currBadgeY >= descY - 13 && currBadgeY <= descY + descAreaHeight) {
+                                        uint16_t bgColor = canvas->color565(40, 50, 60);
+                                        uint16_t textColor = TFT_LIGHTGRAY;
+                                        if (f == FLAG_VISIBLE) { bgColor = canvas->color565(90, 80, 20); textColor = TFT_YELLOW; }
+                                        else if (f == FLAG_CREWED) { bgColor = canvas->color565(20, 90, 50); textColor = TFT_GREEN; }
+                                        else if (f == FLAG_HISTORIC) { bgColor = canvas->color565(90, 50, 20); textColor = TFT_ORANGE; }
+                                        else if (f == FLAG_RADIO) { bgColor = canvas->color565(80, 30, 80); textColor = TFT_MAGENTA; }
+                                        else if (f == FLAG_SCIENCE) { bgColor = canvas->color565(50, 30, 90); textColor = TFT_GOLD; }
+                                        else if (f == FLAG_WEATHER) { bgColor = canvas->color565(20, 60, 90); textColor = TFT_CYAN; }
+                                        else if (f == FLAG_EARTH_OBS) { bgColor = canvas->color565(30, 80, 80); textColor = TFT_GREEN; }
+                                        else if (f == FLAG_NAVIGATION) { bgColor = canvas->color565(80, 20, 20); textColor = TFT_RED; }
+                                        
+                                        canvas->fillRoundRect(currBadgeX, currBadgeY, fW, 13, 2, bgColor);
+                                        canvas->setTextColor(textColor);
+                                        canvas->drawString(fName.c_str(), currBadgeX + 3, currBadgeY + 1);
+                                    }
+                                    currBadgeX += fW + 4;
                                 }
                             }
                         }
@@ -4256,7 +4327,7 @@ void loop() {
                 } else if (justH) {
                     showHelp = !showHelp;
                 } else if (justG) {
-                    if (gnss) {
+                    if (gnss && gnss->isModuleInitialized()) {
                         if (gnss->isInStandbyMode()) {
                             gnss->exitStandbyMode();
                             gnssManualMode = true;
@@ -4826,7 +4897,7 @@ void loop() {
         
         // GNSS Power Management
         if (gnssStartTime == 0) gnssStartTime = millis();
-        if (gnss && !gnss->isInStandbyMode()) {
+        if (gnss && gnss->isModuleInitialized() && !gnss->isInStandbyMode()) {
             if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
                 GnssData gData = gnss->getData();
                 if (gData.isValid && (abs(gData.latitude) > 0.0001 || abs(gData.longitude) > 0.0001)) {
@@ -5910,7 +5981,7 @@ void loop() {
             }
             
             // Draw GNSS Status
-            if (gnss) {
+            if (gnss && gnss->isModuleInitialized()) {
                 if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
                     earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
                     earth_renderer->getCanvas()->drawString("GP:FIX", 52, 111);
@@ -5926,6 +5997,9 @@ void loop() {
                     earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
                     earth_renderer->getCanvas()->drawString("GP:SCH", 52, 111);
                 }
+            } else {
+                earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
+                earth_renderer->getCanvas()->drawString("GP:N/A", 52, 111);
             }
             
             // Draw M5Chain Mono Status
