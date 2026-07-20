@@ -59,7 +59,7 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        true  // defaultSelected
     },
     // 33591 NOAA 19
     {
@@ -116,7 +116,7 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        true  // defaultSelected
     },
     // 118 Ablestar R/B
     {
@@ -287,7 +287,7 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "Beacon",
         "",
         "",
-        false  // defaultSelected
+        true  // defaultSelected
     },
     // 25994 Terra
     {
