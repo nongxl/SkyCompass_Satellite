@@ -3891,70 +3891,60 @@ void drawSatSelectPage() {
     
     // Draw List Selection Page Help Overlay
     if (showListHelp) {
-        uint16_t w = 200, h = 108;
+        uint16_t w = 216, h = 114;
         int x = (width - w) / 2;
         int y = (height - h) / 2;
         
         canvas->fillRect(x, y, w, h, canvas->color565(20, 30, 40));
         canvas->drawRect(x, y, w, h, TFT_LIGHTGRAY);
         
+        bool isZh = (I18N::getLanguage() == LANG_ZH);
         canvas->setTextColor(TFT_WHITE);
         canvas->setTextSize(1);
-        canvas->drawString("--- Setup Shortcuts ---", x + 25, y + 5);
-        
-        auto drawHotKey = [&](const char* word, char keyChar, int dx, int dy) {
-            int cx = dx;
-            bool highlighted = false;
-            for (int i = 0; word[i] != '\0'; i++) {
-                if (!highlighted && tolower(word[i]) == tolower(keyChar) && keyChar != '\0') {
-                    canvas->setTextColor(TFT_YELLOW);
-                    highlighted = true;
-                } else {
-                    canvas->setTextColor(TFT_LIGHTGRAY);
-                }
-                char cstr[2] = {word[i], '\0'};
-                canvas->drawString(cstr, cx, dy);
-                cx += canvas->textWidth(cstr);
-            }
+        canvas->drawString(isZh ? "--- 列表快捷键指南 ---" : "--- Setup Shortcuts ---", x + 35, y + 5);
+
+        auto drawStringHelper = [&](const String& str, int dx, int dy) {
+            canvas->setTextColor(TFT_LIGHTGRAY);
+            canvas->drawString(str, dx, dy);
         };
         
-        int ty = y + 20;
+        int ty = y + 22;
         if (currentSatTab == TAB_ENCYCLOPEDIA) {
-            drawHotKey("Move( ; / . )", ';', x + 5, ty);
-            drawHotKey("Tab( / )", '/', x + 105, ty); ty += 12;
+            drawStringHelper(isZh ? "移动: ; / ." : "Move: ; / .", x + 8, ty);
+            drawStringHelper(isZh ? "切分类: /" : "Tab: /", x + 112, ty); ty += 14;
             
-            drawHotKey("Select(Ent)", 'e', x + 5, ty);
-            drawHotKey("Del(Back)", 'd', x + 105, ty); ty += 12;
+            drawStringHelper(isZh ? "勾选: Enter" : "Select: Enter", x + 8, ty);
+            drawStringHelper(isZh ? "删除自定: d" : "Del Custom: d", x + 112, ty); ty += 14;
             
-            drawHotKey("WiFi(w)", 'w', x + 5, ty);
-            drawHotKey("Exit(Esc)", 'x', x + 105, ty); ty += 12;
+            drawStringHelper(isZh ? "刷新星历: c" : "Refresh GP: c", x + 8, ty);
+            drawStringHelper(isZh ? "开关WiFi: w" : "WiFi: w", x + 112, ty); ty += 14;
             
-            drawHotKey("Tab(Visual)", 't', x + 5, ty); ty += 12;
+            drawStringHelper(isZh ? "主题模式: Tab" : "Theme: Tab", x + 8, ty);
+            drawStringHelper(isZh ? "返回地图: Esc" : "Exit: Esc", x + 112, ty); ty += 14;
         } else {
             if (recentLaunchInObjectsView) {
-                drawHotKey("Page[ [ / ] ]", '[', x + 5, ty); ty += 12;
-                drawHotKey("Back(Esc)", 'b', x + 5, ty); ty += 12;
-                
-                drawHotKey("Tab(Visual)", 't', x + 5, ty); ty += 12;
+                drawStringHelper(isZh ? "清单翻页: [ / ]" : "Page: [ / ]", x + 8, ty);
+                drawStringHelper(isZh ? "主题模式: Tab" : "Theme: Tab", x + 112, ty); ty += 14;
+
+                drawStringHelper(isZh ? "退出清单: Esc / o" : "Back List: Esc / o", x + 8, ty); ty += 14;
             } else {
-                drawHotKey("Move( ; / . )", ';', x + 5, ty);
-                drawHotKey("Tab( / )", '/', x + 105, ty); ty += 12;
+                drawStringHelper(isZh ? "移动: ; / ." : "Move: ; / .", x + 8, ty);
+                drawStringHelper(isZh ? "切分类: /" : "Tab: /", x + 112, ty); ty += 14;
                 
-                drawHotKey("Select(Ent)", 'e', x + 5, ty);
-                drawHotKey("Objects(o)", 'o', x + 105, ty); ty += 12;
+                drawStringHelper(isZh ? "勾选: Enter" : "Select: Enter", x + 8, ty);
+                drawStringHelper(isZh ? "展开子清单: o" : "Sub-List: o", x + 112, ty); ty += 14;
                 
-                drawHotKey("WiFi(w)", 'w', x + 5, ty);
-                drawHotKey("Exit(Esc)", 'x', x + 105, ty); ty += 12;
+                drawStringHelper(isZh ? "云端更新: w / c" : "Update: w / c", x + 8, ty);
+                drawStringHelper(isZh ? "开关WiFi: w" : "WiFi: w", x + 112, ty); ty += 14;
                 
-                drawHotKey("Tab(Visual)", 't', x + 5, ty); ty += 12;
+                drawStringHelper(isZh ? "主题模式: Tab" : "Theme: Tab", x + 8, ty);
+                drawStringHelper(isZh ? "返回地图: Esc" : "Exit: Esc", x + 112, ty); ty += 14;
             }
         }
         
         canvas->setTextColor(TFT_YELLOW);
-        canvas->drawString("Press any key to Close", x + 35, y + h - 14);
+        canvas->drawString(isZh ? "按任意键关闭" : "Press any key to Close", x + 35, y + h - 14);
     }
-
-
 }
 
 void loop() {
