@@ -195,6 +195,7 @@ struct NetworkActiveGuard {
 extern TaskHandle_t predictorTaskHandle;
 
 struct PredictorTaskSuspendGuard {
+    NetworkActiveGuard netActiveGuard;
     PredictorTaskSuspendGuard() {
         LOG_I("APP", "Predictor task cooperative yield for network ops");
     }
@@ -1056,7 +1057,7 @@ void predictorTask(void* parameter) {
             predictionProgress = 100;
         } else {
             for (int i = 0; i < NUM_SATELLITES; i++) {
-                if (triggerPrediction || cancelPrediction) break;
+                if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
                 bool isSelected = false;
                 TLEData tle;
@@ -2661,6 +2662,37 @@ void drawWiFiSetupPage() {
 }
 
 void drawSatSelectPage() {
+    auto getBannerTextColor = [](const String& msg) -> uint16_t {
+        String lower = msg;
+        lower.toLowerCase();
+        
+        if (lower.indexOf("success") != -1 || msg.indexOf(u8"成功") != -1 ||
+            lower.indexOf("updated") != -1 || msg.indexOf(u8"已更新") != -1 ||
+            lower.indexOf("fresh") != -1 || lower.indexOf("ready") != -1) {
+            return TFT_GREEN;
+        }
+        
+        if (lower.indexOf("connecting") != -1 || msg.indexOf(u8"连接") != -1 ||
+            lower.indexOf("refreshing") != -1 || msg.indexOf(u8"刷新") != -1 ||
+            lower.indexOf("downloading") != -1 || msg.indexOf(u8"下载") != -1 ||
+            lower.indexOf("syncing") != -1 || msg.indexOf(u8"同步") != -1 ||
+            lower.indexOf("checking") != -1 || msg.indexOf(u8"检查") != -1 ||
+            lower.indexOf("busy") != -1 || msg.indexOf(u8"繁忙") != -1 ||
+            lower.indexOf("loading") != -1 || msg.indexOf(u8"加载") != -1 ||
+            lower.indexOf("%") != -1) {
+            return TFT_YELLOW;
+        }
+        
+        if (lower.indexOf("failed") != -1 || msg.indexOf(u8"失败") != -1 ||
+            lower.indexOf("error") != -1 || msg.indexOf(u8"错误") != -1 ||
+            lower.indexOf("no wifi") != -1 || msg.indexOf(u8"未连接") != -1 ||
+            lower.indexOf("refused") != -1) {
+            return TFT_RED;
+        }
+        
+        return TFT_LIGHTGRAY;
+    };
+
     if (!g_networkActive) {
         if (downloadErrorMsg == I18N::get(TXT_SYS_BUSY)) {
             downloadErrorMsg = "";
@@ -3461,7 +3493,7 @@ void drawSatSelectPage() {
             }
         } else {
             if (downloadErrorMsg.length() > 0) {
-                canvas->setTextColor(TFT_RED);
+                canvas->setTextColor(getBannerTextColor(downloadErrorMsg));
                 drawWrappedText(canvas, downloadErrorMsg.c_str(), rightX, descY, width - rightX - 5, 13);
             } else {
                 canvas->setTextColor(TFT_LIGHTGRAY);
@@ -3717,46 +3749,33 @@ void drawSatSelectPage() {
         }
     }
     
-    // Draw Bottom Guide Banner (Only when updating or showing feedback)
+    // Draw Bottom Guide Banner (Unified design & color logic)
     if (showBanner) {
         canvas->fillRect(0, height - 13, width, 13, canvas->color565(15, 20, 25));
         canvas->drawFastHLine(0, height - 13, width, TFT_DARKGREY);
         
+        String msg = "";
+        uint16_t textColor = TFT_LIGHTGRAY;
+        
         if (currentSatTab == TAB_RECENT_LAUNCH) {
             if (recentLaunchDownloading) {
-                canvas->setTextColor(TFT_YELLOW);
-                String msg = String(I18N::get(TXT_TAB_RECENT_LAUNCH)) + " " + I18N::get(TXT_DOWNLOADING) + " " + recentLaunchErrorMsg;
-                if (canvas->textWidth(msg.c_str()) > width - 8) {
-                    msg = msg.substring(0, 35) + "...";
-                }
-                canvas->drawString(msg.c_str(), 4, height - 12);
+                textColor = TFT_YELLOW;
+                msg = String(I18N::get(TXT_TAB_RECENT_LAUNCH)) + " " + I18N::get(TXT_DOWNLOADING) + " " + recentLaunchErrorMsg;
+            } else if (recentLaunchDownloadSuccess) {
+                textColor = TFT_GREEN;
+                msg = I18N::get(TXT_UPDATE_SUCCESS_CACHE);
             } else {
-                if (recentLaunchDownloadSuccess) {
-                    canvas->setTextColor(TFT_GREEN);
-                    canvas->drawString(I18N::get(TXT_UPDATE_SUCCESS_CACHE), 4, height - 12);
-                } else {
-                    canvas->setTextColor(TFT_RED);
-                    String failMsg = (recentLaunchErrorMsg.indexOf("Busy") != -1 || recentLaunchErrorMsg.indexOf(u8"繁忙") != -1) ? 
-                                     recentLaunchErrorMsg : (String(I18N::get(TXT_UPDATE_FAILED)) + recentLaunchErrorMsg);
-                    if (canvas->textWidth(failMsg.c_str()) > width - 8) {
-                        failMsg = failMsg.substring(0, 35) + "...";
-                    }
-                    canvas->drawString(failMsg.c_str(), 4, height - 12);
-                }
+                textColor = getBannerTextColor(recentLaunchErrorMsg);
+                msg = (recentLaunchErrorMsg.indexOf("Busy") != -1 || recentLaunchErrorMsg.indexOf(u8"繁忙") != -1) ? 
+                      recentLaunchErrorMsg : (String(I18N::get(TXT_UPDATE_FAILED)) + recentLaunchErrorMsg);
             }
         } else if (currentSatTab == TAB_ENCYCLOPEDIA) {
-            if (downloadErrorMsg.indexOf("Success") != -1 || downloadErrorMsg.indexOf(u8"成功") != -1 || 
-                downloadErrorMsg.indexOf("Updated") != -1 || downloadErrorMsg.indexOf(u8"更新") != -1 || 
-                downloadErrorMsg.indexOf("fresh") != -1) {
-                canvas->setTextColor(TFT_GREEN);
-            } else if (downloadErrorMsg.indexOf("Busy") != -1 || downloadErrorMsg.indexOf(u8"繁忙") != -1 || 
-                       downloadErrorMsg.indexOf("Connecting") != -1 || downloadErrorMsg.indexOf(u8"连接") != -1 || 
-                       downloadErrorMsg.indexOf("Refreshing") != -1 || downloadErrorMsg.indexOf(u8"刷新") != -1) {
-                canvas->setTextColor(TFT_YELLOW);
-            } else {
-                canvas->setTextColor(TFT_RED);
-            }
-            String msg = downloadErrorMsg;
+            msg = downloadErrorMsg;
+            textColor = getBannerTextColor(downloadErrorMsg);
+        }
+        
+        if (msg.length() > 0) {
+            canvas->setTextColor(textColor);
             if (canvas->textWidth(msg.c_str()) > width - 8) {
                 msg = msg.substring(0, 35) + "...";
             }
@@ -6099,47 +6118,47 @@ void loop() {
             }
             
             // Draw GNSS and WiFi Status at the bottom of the panel
-            // Divider moved down 5px (104→109) to give the content area more vertical space.
-            earth_renderer->getCanvas()->drawFastHLine(0, 109, 140, TFT_DARKGREY);
+            // Divider line shifted up to y=100
+            earth_renderer->getCanvas()->drawFastHLine(0, 100, 140, TFT_DARKGREY);
             
             // Draw WiFi Status
             if (HalWifi::isConnected()) {
                 earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                earth_renderer->getCanvas()->drawString("WF:ON", 5, 116);
+                earth_renderer->getCanvas()->drawString("WF:ON", 5, 105);
             } else {
                 earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                earth_renderer->getCanvas()->drawString("WF:OFF", 5, 116);
+                earth_renderer->getCanvas()->drawString("WF:OFF", 5, 105);
             }
             
             // Draw GNSS Status
             if (gnss && gnss->isModuleInitialized()) {
                 if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
                     earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                    earth_renderer->getCanvas()->drawString("GP:FIX", 52, 116);
+                    earth_renderer->getCanvas()->drawString("GP:FIX", 52, 105);
                 } else if (gnss->isInStandbyMode()) {
                     if (gnssTimedOut) {
                         earth_renderer->getCanvas()->setTextColor(TFT_RED);
-                        earth_renderer->getCanvas()->drawString("GP:TMO", 52, 116);
+                        earth_renderer->getCanvas()->drawString("GP:TMO", 52, 105);
                     } else {
                         earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                        earth_renderer->getCanvas()->drawString("GP:OFF", 52, 116);
+                        earth_renderer->getCanvas()->drawString("GP:OFF", 52, 105);
                     }
                 } else {
                     earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
-                    earth_renderer->getCanvas()->drawString("GP:SCH", 52, 116);
+                    earth_renderer->getCanvas()->drawString("GP:SCH", 52, 105);
                 }
             } else {
                 earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
-                earth_renderer->getCanvas()->drawString("GP:N/A", 52, 116);
+                earth_renderer->getCanvas()->drawString("GP:N/A", 52, 105);
             }
             
             // Draw M5Chain Mono Status
             if (isMonoInitialized) {
                 earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                earth_renderer->getCanvas()->drawString("MN:OK", 100, 116);
+                earth_renderer->getCanvas()->drawString("MN:OK", 100, 105);
             } else {
                 earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
-                earth_renderer->getCanvas()->drawString("MN:ND", 100, 116); // Not Detected
+                earth_renderer->getCanvas()->drawString("MN:ND", 100, 105); // Not Detected
             }
             
             // Draw GP Epoch Version
@@ -6160,7 +6179,7 @@ void loop() {
                 tleEpoch += I18N::get(TXT_VIS_NA);
             }
             earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-            earth_renderer->getCanvas()->drawString(tleEpoch.c_str(), 5, 126);
+            earth_renderer->getCanvas()->drawString(tleEpoch.c_str(), 5, 117);
         }
         
         // Draw Time Machine at bottom right

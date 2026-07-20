@@ -52,58 +52,132 @@ public:
         _config.enableGroveProbe = true;
     }
 
+    void enableCapLoRa1262Power() {
+        // 1. 显式开启 M5 设备 5V 外设总线电源
+        M5Cardputer.Power.setExtOutput(true);
+        delay(30);
+        
+        // 2. 使用 M5Unified 安全线程化 I2C 接口探查并激活 PI4IOE5V6408 IO 扩展芯片 (I2C 0x43/0x44)
+        uint8_t addrs[] = {0x43, 0x44};
+        for (uint8_t addr : addrs) {
+            // 通过 M5.In_I2C (Cardputer 板载/Cap I2C 总线) 开启
+            if (M5.In_I2C.writeRegister8(addr, 0x07, 0x00, 100000)) { // High-Z 禁用
+                LOG_I("GNSS", "Found Cap LoRa-1262 IO Expander via M5.In_I2C at 0x%02X, enabling power...", addr);
+                M5.In_I2C.writeRegister8(addr, 0x01, 0xFF, 100000); // Direction (全设为 Output)
+                M5.In_I2C.writeRegister8(addr, 0x03, 0xFF, 100000); // Output High (GPS Power ON & 解除 RST 状态)
+            }
+            
+            // 通过 M5.Ex_I2C (外设 I2C 总线) 开启
+            if (M5.Ex_I2C.writeRegister8(addr, 0x07, 0x00, 100000)) {
+                LOG_I("GNSS", "Found Cap LoRa-1262 IO Expander via M5.Ex_I2C at 0x%02X, enabling power...", addr);
+                M5.Ex_I2C.writeRegister8(addr, 0x01, 0xFF, 100000);
+                M5.Ex_I2C.writeRegister8(addr, 0x03, 0xFF, 100000);
+            }
+
+            // 备用 Wire 通道检测 (安全防护)
+            Wire.begin();
+            Wire.beginTransmission(addr);
+            Wire.write(0x07);
+            Wire.write(0x00);
+            if (Wire.endTransmission() == 0) {
+                LOG_I("GNSS", "Found Cap LoRa-1262 IO Expander via Wire at 0x%02X, enabling power...", addr);
+                Wire.beginTransmission(addr);
+                Wire.write(0x01);
+                Wire.write(0xFF);
+                Wire.endTransmission();
+                
+                Wire.beginTransmission(addr);
+                Wire.write(0x03);
+                Wire.write(0xFF);
+                Wire.endTransmission();
+            }
+        }
+        delay(200); // 给予 GNSS 芯片上电解冻并启动 UART 输出的缓冲时间
+    }
+
     bool begin() override {
-        LOG_I("GNSS", "Creating MultipleSatellite instance...");
+        LOG_I("GNSS", "Creating MultipleSatellite instance for Cap LoRa-1262...");
         Serial.flush();
+
+        // 使能 Cap LoRa-1262 扩展槽电源与 IO 扩展芯片
+        enableCapLoRa1262Power();
         
         bool found = false;
+        _config.rxPin = 15;
+        _config.txPin = 13;
         
-        auto probeUart = [](unsigned long timeout) -> bool {
+        auto probeUart = [](uint32_t baud, unsigned long timeout) -> bool {
+            pinMode(15, INPUT_PULLUP);
+            
+            // 清空串口缓冲区
+            while (Serial1.available() > 0) {
+                Serial1.read();
+            }
+
+            // 发送换行与唤醒指令
+            Serial1.print("\r\n$PCAS00*01\r\n");
+            Serial1.flush();
+
+            uint32_t totalBytes = 0;
+            char sampleBuf[16] = {0};
+            int sampleLen = 0;
+            bool foundDollar = false;
+
             unsigned long start = millis();
             while (millis() - start < timeout) {
                 while (Serial1.available() > 0) {
                     char c = Serial1.read();
-                    if (c == '$') { // Valid NMEA sentence always starts with $
-                        return true;
+                    totalBytes++;
+                    if (sampleLen < 15) {
+                        sampleBuf[sampleLen++] = c;
+                    }
+                    if (c == '$' || c == 'G' || c == 'N') { // 有效 NMEA 帧头字符
+                        foundDollar = true;
                     }
                 }
                 delay(10);
             }
-            return false;
+
+            LOG_I("GNSS", "[PROBE] RX=15 TX=13 @ %u baud -> read %u bytes, matched=%d, hex=[%02X %02X %02X %02X]",
+                  baud, totalBytes, foundDollar,
+                  (uint8_t)sampleBuf[0], (uint8_t)sampleBuf[1], (uint8_t)sampleBuf[2], (uint8_t)sampleBuf[3]);
+
+            return (totalBytes > 0 && foundDollar);
         };
 
-        // 1. 优先尝试探测内置 15/13 上的 cap-lora 1262
-        LOG_I("GNSS", "Probing internal pins (15/13) for cap-lora 1262...");
-        _config.rxPin = 15;
-        _config.txPin = 13;
+        // 1. 优先尝试 Cap LoRa-1262 官方默认的 115200 波特率 (RX=15, TX=13)
+        LOG_I("GNSS", "Probing Cap LoRa-1262 GNSS on RX=15, TX=13 @ 115200...");
         _config.baudRate = 115200;
         Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
-        // GPIO 15/13 不与 I²C 共享，但 UART 初始化可能短暂干扰内部总线状态，显式重新锁定 I²C
         Wire.begin();
+        delay(50);
         
-        if (probeUart(600)) {
+        // 超时设为 2000ms 保证完整覆盖 1Hz NMEA 周期
+        if (probeUart(115200, 2000)) {
             found = true;
-            _config.enableGroveProbe = false; // 内置找到了，不要再占用 Grove 了，Grove 留给 Mono
-            LOG_I("GNSS", "Detected GNSS on internal pins (15/13) @ 115200");
+            _config.enableGroveProbe = false;
+            LOG_I("GNSS", "Detected Cap LoRa-1262 GNSS on RX=15, TX=13 @ 115200");
         }
-        
+
+        // 2. 备用尝试 9600 波特率
         if (!found) {
             Serial1.end();
             _config.baudRate = 9600;
+            LOG_I("GNSS", "115200 probe timed out, fallback probing on RX=15, TX=13 @ 9600...");
             Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
-            Wire.begin(); // 恢复 I²C 以防 UART 初始化影响总线状态
-            // GPS 冷启动首帧 NMEA 最长需要约 1~2s，延长超时至 1500ms 以避免漏检
-            if (probeUart(1500)) {
+            Wire.begin();
+            delay(50);
+
+            if (probeUart(9600, 2000)) {
                 found = true;
-                _config.enableGroveProbe = false; // 内置找到了，不要再占用 Grove 了，Grove 留给 Mono
-                LOG_I("GNSS", "Detected GNSS on internal pins (15/13) @ 9600");
+                _config.enableGroveProbe = false;
+                LOG_I("GNSS", "Detected Cap LoRa-1262 GNSS on RX=15, TX=13 @ 9600");
             }
         }
         
-        // 2. 如果内置没找到（说明卡槽为空，没有 cap-lora 1262 模块）
+        // 3. 未找到 Cap LoRa-1262 模块
         if (!found) {
-            // 在 Cardputer 平台上，Grove 引脚 (2/1) 与内部 I2C 物理上是相同的引脚，绝对不允许将其重映射为串口，否则会由于信号冲突彻底破坏 I2C 设备的读取，导致 IMU 乱跳和 GPS 串口数据乱码。
-            LOG_I("GNSS", "No internal GNSS on 15/13. Cardputer Grove pins (2/1) are shared with internal I2C. Skipping Grove UART mapping to protect IMU.");
+            LOG_I("GNSS", "No Cap LoRa-1262 GNSS detected on RX=15, TX=13.");
             _enabled = false;
             _isInitialized = false;
             return false;
@@ -121,8 +195,6 @@ public:
         
         _gps->begin();
         LOG_I("GNSS", "Initialization complete");
-        Serial.flush();
-        
         _enabled = true;
         _isInitialized = true;
         _data.status = GNSS_STATUS_SEARCHING;

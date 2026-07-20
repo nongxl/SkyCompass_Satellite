@@ -17,15 +17,14 @@ static String readNextJsonObject(WiFiClient* stream, int& totalReadBytes) {
     bool foundStart = false;
     
     uint32_t waitMs = 0;
-    while (waitMs < 5000) { 
+    const uint32_t maxWaitMs = 30000; // 30 seconds timeout for stream gaps
+    
+    while (waitMs < maxWaitMs) { 
         if (!stream->available()) {
             delay(10);
             waitMs += 10;
             if (!stream->connected() && !stream->available()) {
                 break;
-            }
-            if (totalReadBytes > 0 && waitMs >= 5000) {
-                break; // Stream idle timeout (likely completed but Keep-Alive is active)
             }
             continue;
         }
