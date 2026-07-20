@@ -9,6 +9,10 @@ public:
     // 从缓存或网络加载指定 Catalog Number 卫星
     static bool loadByCatalogNumber(uint32_t catNum, OrbitRecord& record, bool forceRefresh = false, int* outHttpCode = nullptr);
     
+    // 批量从网络加载多颗卫星 GP 数据（单次 HTTP 请求），结果按卫星分别缓存。
+    // 返回成功获取的卫星数量（0 = 全部失败）。
+    static int loadByCatalogNumbers(const std::vector<uint32_t>& catNums, std::vector<OrbitRecord>& records, int* outHttpCode = nullptr);
+    
     // 下载 Recent Launches 并以 JSONL 形式流式保存，并在内存中流式建构 RecentLaunchItem 列表
     static bool downloadRecentLaunches(std::vector<RecentLaunchItem>& tempLaunches, int* outHttpCode = nullptr);
     

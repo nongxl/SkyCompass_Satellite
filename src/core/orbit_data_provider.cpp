@@ -4,7 +4,7 @@
 #include "tle_parser.h"
 #include <HTTPClient.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
+#include <WiFiClient.h>  // Plain HTTP — no TLS heap cost
 #include <LittleFS.h>
 #include <esp_task_wdt.h>
 
@@ -91,22 +91,20 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
             f.close();
             JSONParser parser;
             if (parser.parse(content, record)) {
-                if (outHttpCode) *outHttpCode = 200; // Simulated cache hit status
+                if (outHttpCode) *outHttpCode = 200;
                 return true;
             }
         }
     }
     
-    delay(100); // Wait for LwIP TCP stack to reclaim memory
-    WiFiClientSecure* client = new WiFiClientSecure();
-    if (!client) return false;
-    client->setInsecure();
+    // Use plain HTTP — CelesTrak supports HTTP and this saves ~40KB TLS heap
+    WiFiClient client;
     HTTPClient http;
     http.setTimeout(15000);
     char url[128];
-    sprintf(url, "https://celestrak.org/NORAD/elements/gp.php?CATNR=%u&FORMAT=json", (unsigned int)catNum);
+    sprintf(url, "http://celestrak.org/NORAD/elements/gp.php?CATNR=%u&FORMAT=json", (unsigned int)catNum);
     
-    http.begin(*client, url);
+    http.begin(client, url);
     int httpCode = http.GET();
     if (outHttpCode) *outHttpCode = httpCode;
     bool success = false;
@@ -129,8 +127,67 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
         }
     }
     http.end();
-    delete client;
     return success;
+}
+
+// Batch-fetch GP data for multiple satellites in a single HTTP request.
+// Results are parsed individually and cached per-satellite.
+// Returns number of satellites successfully fetched (0 = total failure).
+int OrbitDataProvider::loadByCatalogNumbers(const std::vector<uint32_t>& catNums, std::vector<OrbitRecord>& records, int* outHttpCode) {
+    if (catNums.empty()) return 0;
+    if (outHttpCode) *outHttpCode = 0;
+    
+    // Build comma-separated CATNR list
+    String catnrList = "";
+    for (size_t i = 0; i < catNums.size(); i++) {
+        if (i > 0) catnrList += ",";
+        catnrList += String(catNums[i]);
+    }
+    
+    String url = "http://celestrak.org/NORAD/elements/gp.php?CATNR=" + catnrList + "&FORMAT=json";
+    LOG_I("APP", "[Batch] Loading %d satellites", (int)catNums.size());
+    
+    WiFiClient client;
+    HTTPClient http;
+    http.setTimeout(30000);
+    http.setConnectTimeout(15000);
+    http.begin(client, url);
+    int httpCode = http.GET();
+    if (outHttpCode) *outHttpCode = httpCode;
+    
+    if (httpCode != HTTP_CODE_OK) {
+        http.end();
+        LOG_I("APP", "[Batch] HTTP Error: %d", httpCode);
+        return 0;
+    }
+    
+    // Stream parse the JSON array of GP objects
+    WiFiClient* stream = http.getStreamPtr();
+    int totalRead = 0;
+    int fetched = 0;
+    
+    while (stream->connected() || stream->available()) {
+        String obj = readNextJsonObject(stream, totalRead);
+        if (obj.length() == 0) {
+            if (!stream->connected() && !stream->available()) break;
+            continue;
+        }
+        JSONParser parser;
+        OrbitRecord rec;
+        if (parser.parse(obj, rec)) {
+            // Cache individual result
+            char path[32];
+            sprintf(path, "/cat_%u.json", (unsigned int)rec.catalogNumber);
+            File f = LittleFS.open(path, "w");
+            if (f) { f.print(obj); f.close(); }
+            records.push_back(rec);
+            fetched++;
+        }
+    }
+    
+    http.end();
+    LOG_I("APP", "[Batch] Fetched %d/%d satellites", fetched, (int)catNums.size());
+    return fetched;
 }
 
 static void processRecentLaunchItem(std::vector<RecentLaunchItem>& tempLaunches, const OrbitRecord& record) {
@@ -196,24 +253,19 @@ static void processRecentLaunchItem(std::vector<RecentLaunchItem>& tempLaunches,
 // Download Recent Launches and save to JSONL
 bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& tempLaunches, int* outHttpCode) {
     if (outHttpCode) *outHttpCode = 0;
-    delay(100); // Wait for LwIP TCP stack to reclaim memory
-    WiFiClientSecure* client = new WiFiClientSecure();
-    if (!client) return false;
-    client->setInsecure();
-    client->setTimeout(30000);
-    
+    // Use plain HTTP to save TLS heap. CelesTrak supports HTTP.
+    WiFiClient client;
     HTTPClient http;
     http.setTimeout(60000);
     http.setConnectTimeout(30000);
     
-    String url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=json";
-    http.begin(*client, url);
+    String url = "http://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=json";
+    http.begin(client, url);
     int httpCode = http.GET();
     if (outHttpCode) *outHttpCode = httpCode;
     
     if (httpCode != HTTP_CODE_OK) {
         http.end();
-        delete client;
         return false;
     }
     
@@ -254,8 +306,7 @@ bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& te
     if (f) {
         f.close();
     }
-    http.end(); // Disconnect SSL socket to release TLS heap memory
-    delete client;
+    http.end();
     
     bool completed = true;
     if (expectedSize > 0 && totalReadBytes < expectedSize) {

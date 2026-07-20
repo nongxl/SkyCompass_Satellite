@@ -15,8 +15,12 @@ public:
     // returns true if successfully populated outTle.
     static bool getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds = 2 * 24 * 3600, WiFiClient* sharedClient = nullptr, String* outError = nullptr);
     
+    // Cache operations — exposed as public for batch fetch logic in main.cpp
+    static bool     loadFromCachePublic(int noradId, TLEData& outTle, uint32_t& outTimestamp);
+    static uint32_t parseTleEpochPublic(const String& line1);
+    static bool     saveToCache(int noradId, const TLEData& tle, uint32_t timestamp);
+
 private:
     static bool loadFromCache(int noradId, TLEData& outTle, uint32_t& outTimestamp);
-    static bool saveToCache(int noradId, const TLEData& tle, uint32_t timestamp);
     static bool fetchFromNetwork(int noradId, TLEData& outTle, WiFiClient* sharedClient = nullptr, String* outError = nullptr);
 };

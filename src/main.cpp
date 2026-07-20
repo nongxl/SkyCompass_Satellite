@@ -7,6 +7,7 @@
 #include "core/earth_renderer.h"
 #include "core/observation_predictor.h"
 #include "core/tle_updater.h"
+#include "core/orbit_data_provider.h"
 #include "core/i18n.h"
 #include "core/encyclopedia.h"
 
@@ -1792,56 +1793,135 @@ void networkTaskImpl(void* parameter) {
             downloadErrorMsg = "WiFi Connected! Syncing GP JSONs...";
         }
 
-        // 4. Fetch TLEs
+        // 4. Fetch TLEs — Two-phase approach:
+        //    Phase A: Read all fresh caches (no network needed)
+        //    Phase B: Batch-fetch stale/missing ones in a SINGLE HTTP request
         bool updated = false;
-        WiFiClient* sharedClient = new WiFiClient;
         bool anyFetchFailed = false;
         String firstFetchError = "";
-        
+        uint32_t maxAge = manualWifiToggle ? 0 : (2 * 24 * 3600);
+        uint32_t now = HalWifi::getUnixTime();
+
+        if (appState == STATE_SAT_SELECT) {
+            downloadErrorMsg = "Checking GP cache...";
+        }
+
+        // Phase A: determine which satellites need a network fetch
+        std::vector<int>      staleIdx;   // indices into g_satellites
+        std::vector<uint32_t> staleIds;   // NORAD IDs to batch-fetch
+
         for (int i = 0; i < NUM_SATELLITES; i++) {
+            uint32_t noradId = g_satellites[i].noradId;
+            if (noradId == 50463) {
+                // JWST uses hardcoded TLE — no network needed
+                TLEData wTle = TLEManager::getJWST_TLE();
+                wTle.baseScore = g_satellites[i].baseScore;
+                SGP4Calc tempCalc; tempCalc.init(wTle);
+                portENTER_CRITICAL(&satMutex);
+                g_satellites[i].tle  = wTle;
+                g_satellites[i].calc = tempCalc;
+                portEXIT_CRITICAL(&satMutex);
+                updated = true;
+                continue;
+            }
+
+            TLEData cached;
+            uint32_t cacheTime = 0;
+            bool hasCache = TLEUpdater::loadFromCachePublic(noradId, cached, cacheTime);
+
+            if (hasCache && now > 0) {
+                uint32_t age = now - cacheTime;
+                if (cacheTime == 0) {
+                    // Offline-saved cache: use TLE epoch as reference
+                    uint32_t ep = TLEUpdater::parseTleEpochPublic(cached.line1);
+                    age = (ep > 0) ? (now - ep) : 0;
+                }
+                bool stale = (age > maxAge) ||
+                             (now - TLEUpdater::parseTleEpochPublic(cached.line1) > 3*24*3600 && age > 3600);
+                if (!stale) {
+                    // Cache is fresh — use it immediately
+                    cached.baseScore = g_satellites[i].baseScore;
+                    SGP4Calc tempCalc; tempCalc.init(cached);
+                    portENTER_CRITICAL(&satMutex);
+                    g_satellites[i].tle  = cached;
+                    g_satellites[i].calc = tempCalc;
+                    portEXIT_CRITICAL(&satMutex);
+                    continue;
+                }
+            }
+
+            staleIdx.push_back(i);
+            staleIds.push_back(noradId);
+        }
+
+        // Phase B: single batch HTTP request for all stale satellites
+        if (!staleIdx.empty()) {
             if (appState == STATE_SAT_SELECT) {
-                char progBuf[48];
-                sprintf(progBuf, "Syncing GP JSONs (%d/%d)...", i + 1, NUM_SATELLITES);
+                char progBuf[64];
+                sprintf(progBuf, "Fetching %d GP records...", (int)staleIdx.size());
                 downloadErrorMsg = progBuf;
             }
-            TLEData new_tle;
-            uint32_t maxAge = manualWifiToggle ? 0 : (2 * 24 * 3600);
-            String fetchError = "";
-            if (TLEUpdater::getTLE(g_satellites[i].noradId, new_tle, maxAge, sharedClient, &fetchError)) {
-                if (fetchError.length() == 0) {
-                    new_tle.baseScore = g_satellites[i].baseScore;
-                    SGP4Calc tempCalc;
-                    tempCalc.init(new_tle);
-                    
-                    portENTER_CRITICAL(&satMutex);
-                    g_satellites[i].tle = new_tle;
-                    g_satellites[i].calc = tempCalc;
-                    if (i >= NUM_BUILTIN_SATELLITES) {
-                        if (new_tle.name.length() > 0) {
-                            g_satellites[i].name = new_tle.name;
+            LOG_I("APP", "[Batch] Fetching %d (cached:%d)", (int)staleIdx.size(), NUM_SATELLITES - (int)staleIdx.size());
+
+            std::vector<OrbitRecord> batchRecords;
+            int httpCode = 0;
+            int fetched = OrbitDataProvider::loadByCatalogNumbers(staleIds, batchRecords, &httpCode);
+
+            if (fetched > 0) {
+                // Map fetched records back to satellite slots by NORAD ID
+                for (auto& rec : batchRecords) {
+                    for (int i : staleIdx) {
+                        if ((uint32_t)g_satellites[i].noradId == rec.catalogNumber) {
+                            TLEData newTle;
+                            newTle.name      = rec.name;
+                            newTle.baseScore = g_satellites[i].baseScore;
+                            SGP4Calc::buildPseudoTle(rec, newTle.line1, newTle.line2);
+                            TLEUpdater::saveToCache(g_satellites[i].noradId, newTle, now);
+
+                            SGP4Calc tempCalc; tempCalc.init(newTle);
+                            portENTER_CRITICAL(&satMutex);
+                            g_satellites[i].tle  = newTle;
+                            g_satellites[i].calc = tempCalc;
+                            if (i >= NUM_BUILTIN_SATELLITES && newTle.name.length() > 0) {
+                                g_satellites[i].name = newTle.name;
+                                autoAssignIconAndColor(g_satellites[i].name, g_satellites[i].iconType, g_satellites[i].color);
+                            }
+                            portEXIT_CRITICAL(&satMutex);
+                            updated = true;
+                            break;
                         }
-                        autoAssignIconAndColor(g_satellites[i].name, g_satellites[i].iconType, g_satellites[i].color);
                     }
-                    portEXIT_CRITICAL(&satMutex);
-                    
-                    updated = true;
-                } else {
-                    anyFetchFailed = true;
-                    if (firstFetchError.length() == 0) {
-                        firstFetchError = fetchError;
+                }
+                // Satellites in staleIdx that were NOT in the response: keep old cache, refresh timestamp
+                for (int i : staleIdx) {
+                    bool found = false;
+                    for (auto& rec : batchRecords) {
+                        if ((uint32_t)g_satellites[i].noradId == rec.catalogNumber) { found = true; break; }
+                    }
+                    if (!found) {
+                        // Refresh timestamp so it won't retry next boot
+                        uint32_t cacheTime = 0;
+                        TLEData cached;
+                        if (TLEUpdater::loadFromCachePublic(g_satellites[i].noradId, cached, cacheTime)) {
+                            TLEUpdater::saveToCache(g_satellites[i].noradId, cached, now);
+                        }
+                        anyFetchFailed = true;
+                        if (firstFetchError.length() == 0) firstFetchError = "ID Not Found";
                     }
                 }
             } else {
                 anyFetchFailed = true;
-                if (firstFetchError.length() == 0) {
-                    firstFetchError = fetchError;
+                firstFetchError = (httpCode < 0) ? "Connection Refused" : ("HTTP " + String(httpCode));
+                LOG_I("APP", "Batch fetch failed (HTTP %d). Refreshing cache timestamps.", httpCode);
+                // Refresh timestamps to suppress retry on next boot
+                for (int i : staleIdx) {
+                    uint32_t cacheTime = 0;
+                    TLEData cached;
+                    if (TLEUpdater::loadFromCachePublic(g_satellites[i].noradId, cached, cacheTime)) {
+                        TLEUpdater::saveToCache(g_satellites[i].noradId, cached, now);
+                    }
                 }
             }
-            vTaskDelay(pdMS_TO_TICKS(10)); // Yield CPU to prevent Task Watchdog starvation
-        }
-        
-        if (sharedClient) {
-            delete sharedClient;
         }
 
         if (appState == STATE_SAT_SELECT) {
@@ -2869,6 +2949,44 @@ void drawSatSelectPage() {
                 canvas->fillRect(iconX + 18, iconY - 9, 3, 3, satColor);
                 canvas->fillRect(iconX + 15, iconY + 12, 4, 3, satColor);
                 canvas->fillRect(iconX + 22, iconY + 2, 3, 4, satColor);
+            } else if (t == ICON_SPACEPLANE) {
+                // Spaceplane (X-37B) 3x — top-down delta wing, blunt nose, vertical tail
+                // Nose
+                canvas->fillRect(iconX - 3, iconY - 12, 9, 6, TFT_WHITE);
+                // Fuselage
+                canvas->fillRect(iconX - 6, iconY - 6, 15, 15, TFT_WHITE);
+                // Delta wings (left & right triangles at widest point)
+                canvas->fillTriangle(iconX - 12, iconY + 3, iconX - 3, iconY - 3, iconX - 3, iconY + 9, satColor);
+                canvas->fillTriangle(iconX + 15, iconY + 3, iconX + 6, iconY - 3, iconX + 6, iconY + 9, satColor);
+                // Vertical tail fin
+                canvas->drawFastVLine(iconX + 3, iconY + 9, 9, satColor);
+                canvas->drawFastHLine(iconX, iconY + 15, 9, satColor);
+            } else if (t == ICON_SOLAR_PROBE) {
+                // Solar Probe (Parker) 3x — wide heat shield disc + instrument boom + tiny solar wings
+                // Heat shield (flat ellipse)
+                canvas->fillEllipse(iconX, iconY - 3, 12, 9, TFT_LIGHTGRAY);
+                canvas->drawEllipse(iconX, iconY - 3, 12, 9, satColor);
+                // Instrument boom
+                canvas->drawFastVLine(iconX, iconY + 6, 9, TFT_WHITE);
+                // Tiny solar panels
+                canvas->fillRect(iconX - 9, iconY + 9, 6, 3, satColor);
+                canvas->fillRect(iconX + 4, iconY + 9, 6, 3, satColor);
+            } else if (t == ICON_LANDER) {
+                // Lander 3x — hexagonal body + top antenna + three landing legs with foot pads
+                // Antenna
+                canvas->drawFastVLine(iconX, iconY - 12, 6, satColor);
+                canvas->drawPixel(iconX - 1, iconY - 12, satColor);
+                canvas->drawPixel(iconX + 1, iconY - 12, satColor);
+                // Main body
+                canvas->fillRect(iconX - 6, iconY - 6, 15, 12, TFT_WHITE);
+                // Three legs
+                canvas->drawLine(iconX - 6, iconY + 6, iconX - 12, iconY + 12, satColor);
+                canvas->drawLine(iconX + 1, iconY + 6, iconX + 1,  iconY + 12, satColor);
+                canvas->drawLine(iconX + 8, iconY + 6, iconX + 14, iconY + 12, satColor);
+                // Foot pads
+                canvas->drawFastHLine(iconX - 15, iconY + 12, 6, satColor);
+                canvas->drawFastHLine(iconX - 1, iconY + 13, 4, satColor);
+                canvas->drawFastHLine(iconX + 12, iconY + 12, 6, satColor);
             } else {
                 canvas->fillRect(iconX - 3, iconY - 3, 9, 9, TFT_WHITE);
                 canvas->fillRect(iconX - 15, iconY - 3, 9, 9, satColor);

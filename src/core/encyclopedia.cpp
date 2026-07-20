@@ -560,7 +560,7 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         39479,
         "Gaia",
         Category::ASTRONOMY,
-        ICON_DEEPSPACE,
+        ICON_TELESCOPE,
         "欧洲精密天体测量卫星。正在为银河系超过10亿颗恒星建立精确三维坐标图，其数据将彻底刷新人类对银河系结构的认知。",
         "ESA's stellar cartography mission. Mapping the precise 3D positions of over one billion stars in the Milky Way, transforming our understanding of galactic structure.",
         FLAG_SCIENCE | FLAG_HISTORIC,

@@ -33,6 +33,15 @@ static uint32_t parseTleEpoch(const String& line1) {
     return seconds;
 }
 
+// Public wrappers — allow main.cpp batch logic to call internal helpers
+bool TLEUpdater::loadFromCachePublic(int noradId, TLEData& outTle, uint32_t& outTimestamp) {
+    return loadFromCache(noradId, outTle, outTimestamp);
+}
+
+uint32_t TLEUpdater::parseTleEpochPublic(const String& line1) {
+    return parseTleEpoch(line1);
+}
+
 bool TLEUpdater::getTLE(int noradId, TLEData& outTle, uint32_t maxAgeSeconds, WiFiClient* sharedClient, String* outError) {
     if (outError) *outError = "";
     uint32_t cacheTime = 0;
