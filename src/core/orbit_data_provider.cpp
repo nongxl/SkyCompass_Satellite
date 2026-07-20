@@ -78,8 +78,8 @@ static String readNextJsonObject(WiFiClient* stream, int& totalReadBytes) {
     return json;
 }
 
-// Load single satellite from cache or network
-bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record, bool forceRefresh, int* outHttpCode) {
+// Load single satellite from cache or network (plain HTTP — no TLS memory cost)
+bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record, bool forceRefresh, WiFiClient* sharedClient, int* outHttpCode) {
     if (outHttpCode) *outHttpCode = 0;
     char path[32];
     sprintf(path, "/cat_%u.json", (unsigned int)catNum);
@@ -98,13 +98,19 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
     }
     
     // Use plain HTTP — CelesTrak supports HTTP and this saves ~40KB TLS heap
-    WiFiClient client;
     HTTPClient http;
-    http.setTimeout(15000);
+    http.setTimeout(10000);
+    http.setConnectTimeout(5000);
     char url[128];
     sprintf(url, "http://celestrak.org/NORAD/elements/gp.php?CATNR=%u&FORMAT=json", (unsigned int)catNum);
     
-    http.begin(client, url);
+    if (sharedClient) {
+        http.begin(*sharedClient, url);
+    } else {
+        WiFiClient client;
+        http.begin(client, url);
+    }
+    
     int httpCode = http.GET();
     if (outHttpCode) *outHttpCode = httpCode;
     bool success = false;
@@ -118,7 +124,7 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
         
         JSONParser parser;
         if (parser.parse(payload, record)) {
-            File f = LittleFS.open(path, "w");
+            File f = LittleFS.open(path, "w", true);
             if (f) {
                 f.print(payload);
                 f.close();
@@ -128,66 +134,6 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
     }
     http.end();
     return success;
-}
-
-// Batch-fetch GP data for multiple satellites in a single HTTP request.
-// Results are parsed individually and cached per-satellite.
-// Returns number of satellites successfully fetched (0 = total failure).
-int OrbitDataProvider::loadByCatalogNumbers(const std::vector<uint32_t>& catNums, std::vector<OrbitRecord>& records, int* outHttpCode) {
-    if (catNums.empty()) return 0;
-    if (outHttpCode) *outHttpCode = 0;
-    
-    // Build comma-separated CATNR list
-    String catnrList = "";
-    for (size_t i = 0; i < catNums.size(); i++) {
-        if (i > 0) catnrList += ",";
-        catnrList += String(catNums[i]);
-    }
-    
-    String url = "http://celestrak.org/NORAD/elements/gp.php?CATNR=" + catnrList + "&FORMAT=json";
-    LOG_I("APP", "[Batch] Loading %d satellites", (int)catNums.size());
-    
-    WiFiClient client;
-    HTTPClient http;
-    http.setTimeout(30000);
-    http.setConnectTimeout(15000);
-    http.begin(client, url);
-    int httpCode = http.GET();
-    if (outHttpCode) *outHttpCode = httpCode;
-    
-    if (httpCode != HTTP_CODE_OK) {
-        http.end();
-        LOG_I("APP", "[Batch] HTTP Error: %d", httpCode);
-        return 0;
-    }
-    
-    // Stream parse the JSON array of GP objects
-    WiFiClient* stream = http.getStreamPtr();
-    int totalRead = 0;
-    int fetched = 0;
-    
-    while (stream->connected() || stream->available()) {
-        String obj = readNextJsonObject(stream, totalRead);
-        if (obj.length() == 0) {
-            if (!stream->connected() && !stream->available()) break;
-            continue;
-        }
-        JSONParser parser;
-        OrbitRecord rec;
-        if (parser.parse(obj, rec)) {
-            // Cache individual result
-            char path[32];
-            sprintf(path, "/cat_%u.json", (unsigned int)rec.catalogNumber);
-            File f = LittleFS.open(path, "w");
-            if (f) { f.print(obj); f.close(); }
-            records.push_back(rec);
-            fetched++;
-        }
-    }
-    
-    http.end();
-    LOG_I("APP", "[Batch] Fetched %d/%d satellites", fetched, (int)catNums.size());
-    return fetched;
 }
 
 static void processRecentLaunchItem(std::vector<RecentLaunchItem>& tempLaunches, const OrbitRecord& record) {

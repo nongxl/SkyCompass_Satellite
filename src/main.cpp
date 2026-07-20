@@ -1157,11 +1157,11 @@ void fetchFrequencies() {
     WiFiClientSecure *client = new WiFiClientSecure;
     if (!client) return;
     client->setInsecure();
-    client->setTimeout(30000);
+    client->setTimeout(5000);
     
     HTTPClient http;
-    http.setTimeout(15000);
-    http.setConnectTimeout(15000);
+    http.setTimeout(5000);
+    http.setConnectTimeout(5000);
     http.begin(*client, "https://raw.githubusercontent.com/nongxl/SkyCompass_Satellite/main/data/frequencies.json");
     int httpCode = http.GET();
     if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
@@ -1854,73 +1854,54 @@ void networkTaskImpl(void* parameter) {
             staleIds.push_back(noradId);
         }
 
-        // Phase B: single batch HTTP request for all stale satellites
+        // Phase B: fetch stale/missing satellites via plain HTTP with 300ms throttle interval
         if (!staleIdx.empty()) {
-            if (appState == STATE_SAT_SELECT) {
-                char progBuf[64];
-                sprintf(progBuf, "Fetching %d GP records...", (int)staleIdx.size());
-                downloadErrorMsg = progBuf;
-            }
-            LOG_I("APP", "[Batch] Fetching %d (cached:%d)", (int)staleIdx.size(), NUM_SATELLITES - (int)staleIdx.size());
-
-            std::vector<OrbitRecord> batchRecords;
-            int httpCode = 0;
-            int fetched = OrbitDataProvider::loadByCatalogNumbers(staleIds, batchRecords, &httpCode);
-
-            if (fetched > 0) {
-                // Map fetched records back to satellite slots by NORAD ID
-                for (auto& rec : batchRecords) {
-                    for (int i : staleIdx) {
-                        if ((uint32_t)g_satellites[i].noradId == rec.catalogNumber) {
-                            TLEData newTle;
-                            newTle.name      = rec.name;
-                            newTle.baseScore = g_satellites[i].baseScore;
-                            SGP4Calc::buildPseudoTle(rec, newTle.line1, newTle.line2);
-                            TLEUpdater::saveToCache(g_satellites[i].noradId, newTle, now);
-
-                            SGP4Calc tempCalc; tempCalc.init(newTle);
-                            portENTER_CRITICAL(&satMutex);
-                            g_satellites[i].tle  = newTle;
-                            g_satellites[i].calc = tempCalc;
-                            if (i >= NUM_BUILTIN_SATELLITES && newTle.name.length() > 0) {
-                                g_satellites[i].name = newTle.name;
-                                autoAssignIconAndColor(g_satellites[i].name, g_satellites[i].iconType, g_satellites[i].color);
-                            }
-                            portEXIT_CRITICAL(&satMutex);
-                            updated = true;
-                            break;
-                        }
-                    }
+            int totalStale = (int)staleIdx.size();
+            LOG_I("APP", "Fetching %d stale satellites via HTTP (300ms throttled)...", totalStale);
+            
+            for (int k = 0; k < totalStale; k++) {
+                int i = staleIdx[k];
+                uint32_t noradId = g_satellites[i].noradId;
+                
+                if (appState == STATE_SAT_SELECT) {
+                    char progBuf[64];
+                    sprintf(progBuf, "Syncing GP JSONs (%d/%d)...", k + 1, totalStale);
+                    downloadErrorMsg = progBuf;
                 }
-                // Satellites in staleIdx that were NOT in the response: keep old cache, refresh timestamp
-                for (int i : staleIdx) {
-                    bool found = false;
-                    for (auto& rec : batchRecords) {
-                        if ((uint32_t)g_satellites[i].noradId == rec.catalogNumber) { found = true; break; }
+                
+                OrbitRecord rec;
+                int httpCode = 0;
+                if (OrbitDataProvider::loadByCatalogNumber(noradId, rec, true, nullptr, &httpCode)) {
+                    TLEData newTle;
+                    newTle.name = rec.name;
+                    newTle.baseScore = g_satellites[i].baseScore;
+                    SGP4Calc::buildPseudoTle(rec, newTle.line1, newTle.line2);
+                    TLEUpdater::saveToCache(noradId, newTle, now);
+
+                    SGP4Calc tempCalc;
+                    tempCalc.init(newTle);
+                    portENTER_CRITICAL(&satMutex);
+                    g_satellites[i].tle = newTle;
+                    g_satellites[i].calc = tempCalc;
+                    if (i >= NUM_BUILTIN_SATELLITES && newTle.name.length() > 0) {
+                        g_satellites[i].name = newTle.name;
+                        autoAssignIconAndColor(g_satellites[i].name, g_satellites[i].iconType, g_satellites[i].color);
                     }
-                    if (!found) {
-                        // Refresh timestamp so it won't retry next boot
-                        uint32_t cacheTime = 0;
-                        TLEData cached;
-                        if (TLEUpdater::loadFromCachePublic(g_satellites[i].noradId, cached, cacheTime)) {
-                            TLEUpdater::saveToCache(g_satellites[i].noradId, cached, now);
-                        }
-                        anyFetchFailed = true;
-                        if (firstFetchError.length() == 0) firstFetchError = "ID Not Found";
+                    portEXIT_CRITICAL(&satMutex);
+                    updated = true;
+                } else {
+                    anyFetchFailed = true;
+                    if (firstFetchError.length() == 0) {
+                        firstFetchError = (httpCode < 0) ? "Connection Refused" : ("HTTP " + String(httpCode));
                     }
-                }
-            } else {
-                anyFetchFailed = true;
-                firstFetchError = (httpCode < 0) ? "Connection Refused" : ("HTTP " + String(httpCode));
-                LOG_I("APP", "Batch fetch failed (HTTP %d). Refreshing cache timestamps.", httpCode);
-                // Refresh timestamps to suppress retry on next boot
-                for (int i : staleIdx) {
-                    uint32_t cacheTime = 0;
+                    // Refresh timestamp of existing cache (if any) to prevent infinite retry on next boot
                     TLEData cached;
-                    if (TLEUpdater::loadFromCachePublic(g_satellites[i].noradId, cached, cacheTime)) {
-                        TLEUpdater::saveToCache(g_satellites[i].noradId, cached, now);
+                    uint32_t cacheTime = 0;
+                    if (TLEUpdater::loadFromCachePublic(noradId, cached, cacheTime)) {
+                        TLEUpdater::saveToCache(noradId, cached, now);
                     }
                 }
+                vTaskDelay(pdMS_TO_TICKS(300)); // 300ms delay to prevent CelesTrak WAF/rate-limiting
             }
         }
 

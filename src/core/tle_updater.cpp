@@ -127,7 +127,7 @@ bool TLEUpdater::loadFromCache(int noradId, TLEData& outTle, uint32_t& outTimest
 
 bool TLEUpdater::saveToCache(int noradId, const TLEData& tle, uint32_t timestamp) {
     String path = "/tle_" + String(noradId) + ".txt";
-    File file = LittleFS.open(path, "w");
+    File file = LittleFS.open(path, "w", true);
     if (!file) return false;
     
     // If timestamp is 0 (offline boot), fall back to the TLE's own epoch so that
@@ -155,7 +155,7 @@ bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle, WiFiClient* shar
     
     OrbitRecord record;
     int httpCode = 0;
-    if (OrbitDataProvider::loadByCatalogNumber(noradId, record, true, &httpCode)) {
+    if (OrbitDataProvider::loadByCatalogNumber(noradId, record, true, sharedClient, &httpCode)) {
         outTle.name = record.name;
         outTle.baseScore = 0;
         SGP4Calc::buildPseudoTle(record, outTle.line1, outTle.line2);
