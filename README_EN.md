@@ -132,6 +132,17 @@ For satellites supporting Amateur Radio (HAM) payloads (such as FM transponder s
   * In standard amateur satellite operations, **U (Uplink)** refers to the transmission frequency, and **D (Downlink)** refers to the reception frequency.
   * For complex platforms like the ISS, multiple downlink channels can be active simultaneously (e.g., APRS packet radio at 145.825 MHz, and SSTV image downlink at 145.800 MHz). To optimize screen real estate and deliver maximum situational awareness, the system designates these dual channels as **RX1** and **RX2** side-by-side. This allows operators to track Doppler shifts for both downlinks simultaneously, rather than showing a generic single uplink/downlink (U/D) layout.
 
+### 8. Magnetometer-Free Solar Shadow Alignment System & 3D Sight Line
+To overcome the physical limitation of standard Cardputer hardware (which lacks an onboard magnetometer/electronic compass, making traditional magnetic compass readings prone to local interference), an innovative **"Solar Shadow Alignment System"** was engineered:
+
+* **Physical Mechanics**:
+  * The system combines high-precision UTC time with observer geodetic coordinates to calculate the real-time Subsolar Point and derive the local Solar Azimuth $Az_{\text{sun}}$.
+  * In the physical world, any shadow cast by sunlight points strictly in the opposite direction of the Sun ($Az_{\text{shadow}} = (Az_{\text{sun}} + 180^\circ) \bmod 360^\circ$).
+  * The renderer projects a dark-gray shadow line extending along the 3D spherical surface of the Earth globe at the observer's location. The shadow length $d_{\text{dist}} \propto 1 / \tan(SunEl)$ dynamically expands/contracts based on solar elevation angle (short at noon, long at dawn/dusk, automatically hidden at night).
+* **Tactical Alignment Operation for HAM Satellite Trackers**:
+  1. **Shadow Orientation Calibration**: When outdoors without a compass, the operator rotates the Cardputer until the rendered ground shadow line on the screen aligns parallel with their own physical shadow cast on the ground. The 3D orientation of the device is now **100% physically aligned with the real world**.
+  2. **3D Sight Line & Elevation Arc**: In Sat View tracking mode, when the target satellite is above the horizon ($El > 0^\circ$), a neon-cyan 3D laser sight line connects the ground pin to the satellite, accompanied by a HUD elevation badge (e.g., `El: 42deg`). With the shadow aligned, the operator can directly point their handheld Yagi antenna into the sky along the 3D sight vector and elevation angle!
+
 ## Helper Utilities & Build Scripts
 
 To minimize runtime overhead on the ESP32 and facilitate data preparation, several offline pre-processing and PC-side utility scripts are included in the repository:

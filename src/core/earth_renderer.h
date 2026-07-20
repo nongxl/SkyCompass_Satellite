@@ -153,6 +153,7 @@ private:
     void drawEarth(double centerLat, double centerLon, double userLat, double userLon);
     void drawContinents(double centerLat, double centerLon);
     void drawLightPollution(double centerLat, double centerLon);
+    void drawFocusSightLineAndShadow(double centerLat, double centerLon, double userLat, double userLon, const std::vector<SatRenderData>& satellites);
     void drawAirglow(double centerLat, double centerLon);
     void drawAuroras(double centerLat, double centerLon);
     void drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon);

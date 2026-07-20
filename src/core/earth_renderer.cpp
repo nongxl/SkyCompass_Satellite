@@ -878,6 +878,145 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
     }
 }
 
+void EarthRenderer::drawFocusSightLineAndShadow(double centerLat, double centerLon, double userLat, double userLon, const std::vector<SatRenderData>& satellites) {
+    if (!_drawDecorations || userLat > 90.0) return;
+
+    // 获取观察者地面坐标点屏幕投影 (ux, uy)
+    int ux = -1, uy = -1;
+    bool userVisible = projectOrthographic(userLat, userLon, 0, centerLat, centerLon, ux, uy);
+
+    // 1. 绘制太阳日影方位对齐线 (Solar Shadow) —— 纯粹水滴形灰色阴影大头针，尖端直连定位点并随太阳方向围绕旋转
+    if (_hasSunData && userVisible) {
+        float uLatR = (float)userLat * DEG_TO_RAD;
+        float uLonR = (float)userLon * DEG_TO_RAD;
+        float subLatR = (float)_subsolarLat * DEG_TO_RAD;
+        float subLonR = (float)_subsolarLon * DEG_TO_RAD;
+
+        // 计算观察者处的太阳仰角 (Solar Elevation Angle)
+        float sin_sunEl = sinf(uLatR) * sinf(subLatR) + cosf(uLatR) * cosf(subLatR) * cosf(subLonR - uLonR);
+        if (sin_sunEl > 1.0f) sin_sunEl = 1.0f;
+        if (sin_sunEl < -1.0f) sin_sunEl = -1.0f;
+        float sunElDeg = asinf(sin_sunEl) * RAD_TO_DEG;
+
+        // 仅在白天 (太阳仰角 > 0°) 显示日影
+        if (sunElDeg > 0.0f) {
+            float dLon = subLonR - uLonR;
+            float y = sinf(dLon) * cosf(subLatR);
+            float x = cosf(uLatR) * sinf(subLatR) - sinf(uLatR) * cosf(subLatR) * cosf(dLon);
+            float sunAzRad = atan2f(y, x);
+
+            // 日影方向 = 太阳反方向 (Sun Azimuth + 180deg)
+            float shadowAzRad = sunAzRad + (float)M_PI;
+
+            // 动态调节水滴阴影大头针的伸展长度 (正午短，早晚长)
+            float clampEl = sunElDeg < 5.0f ? 5.0f : sunElDeg;
+            float d_dist = 0.12f / tanf(clampEl * DEG_TO_RAD);
+            if (d_dist < 0.06f) d_dist = 0.06f; // 正午短水滴 (~8-10px)
+            if (d_dist > 0.25f) d_dist = 0.25f; // 早晚长水滴 (~25-30px)
+
+            float shLatR = uLatR + d_dist * cosf(shadowAzRad);
+            float shLonR = uLonR + (d_dist * sinf(shadowAzRad)) / cosf(uLatR);
+
+            double shLat = shLatR * RAD_TO_DEG;
+            double shLon = shLonR * RAD_TO_DEG;
+
+            int sx = -1, sy = -1;
+            if (projectOrthographic(shLat, shLon, 0, centerLat, centerLon, sx, sy)) {
+                if (abs(sx - ux) < 120 && abs(sy - uy) < 120) {
+                    float dx = (float)(sx - ux);
+                    float dy = (float)(sy - uy);
+                    float len = sqrtf(dx * dx + dy * dy);
+
+                    if (len < 5.0f) {
+                        if (len > 0.01f) {
+                            dx = (dx / len) * 5.0f;
+                            dy = (dy / len) * 5.0f;
+                            len = 5.0f;
+                        } else {
+                            dx = 5.0f;
+                            dy = 0.0f;
+                            len = 5.0f;
+                        }
+                    }
+
+                    // 水滴形阴影大头针的法线向量
+                    float nx = -dy / len;
+                    float ny = dx / len;
+
+                    // 计算水滴头两侧张角顶点
+                    int pLeftX = (int)(ux + dx + nx * 3.0f);
+                    int pLeftY = (int)(uy + dy + ny * 3.0f);
+                    int pRightX = (int)(ux + dx - nx * 3.0f);
+                    int pRightY = (int)(uy + dy - ny * 3.0f);
+                    int headX = (int)(ux + dx);
+                    int headY = (int)(uy + dy);
+
+                    uint16_t shadowCol = _display->color565(60, 65, 80);   // 暗灰色水滴影
+                    uint16_t shadowDot = _display->color565(130, 135, 150); // 水滴头中心微亮点
+
+                    // 绘制纯粹水滴形阴影：尖端直连定位点 (ux, uy)，头部延伸至 (headX, headY)，无需中间连线
+                    _canvas->fillTriangle(ux, uy, pLeftX, pLeftY, pRightX, pRightY, shadowCol);
+                    _canvas->fillCircle(headX, headY, 3, shadowCol);
+                    _canvas->drawPixel(headX, headY, shadowDot);
+                }
+            }
+        }
+    }
+
+    // 2. 查找是否有处于选中焦点状态的卫星 (isSelected == true)
+    const SatRenderData* focusSat = nullptr;
+    for (const auto& sat : satellites) {
+        if (sat.isSelected) {
+            focusSat = &sat;
+            break;
+        }
+    }
+    if (!focusSat) return;
+
+    // 3. 绘制 3D 星地视线连线与仰角角标 (3D Sight Line & Ground Angle Badge)
+    int sx = -1, sy = -1;
+    bool satVisible = projectOrthographic(focusSat->currentPos.lat, focusSat->currentPos.lon, focusSat->currentPos.alt, centerLat, centerLon, sx, sy);
+
+    if (focusSat->isVisible && (userVisible || satVisible)) {
+        // 计算观察者与焦点卫星在 Topocentric 坐标系下的实时仰角与方位角
+        TopocentricCoord topo = {0, 0, 0};
+        if (focusSat->calc) {
+            double tx, ty, tz;
+            if (focusSat->calc->getTEME(focusSat->simTime, tx, ty, tz)) {
+                double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(focusSat->simTime));
+                ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                GeodeticCoord obsGeo = {userLat, userLon, 0.0};
+                topo = CoordTransform::ecefToTopocentric(obsGeo, ecef);
+            }
+        }
+
+        // 仅当仰角 > 0° (地面以上可见过境) 时绘制 3D 视线连线
+        if (topo.el > 0.0) {
+            // 绘制脉冲光晕霓虹青色激光连线
+            float pulse = 0.7f + 0.3f * sinf((float)millis() * 0.006f);
+            uint16_t laserCol = scaleColor(TFT_CYAN, pulse);
+
+            // 绘制从地面定位点直达太空卫星的 3D 视线
+            _canvas->drawLine(ux, uy, sx, sy, laserCol);
+
+            // 在地面定位点旁绘制极简仰角角标气泡
+            if (userVisible) {
+                char angleBuf[32];
+                snprintf(angleBuf, sizeof(angleBuf), "El:%ddeg", (int)topo.el);
+                
+                int bgX = ux + 5;
+                int bgY = uy - 16;
+                int tw = _canvas->textWidth(angleBuf) + 6;
+                
+                _canvas->fillRect(bgX, bgY, tw, 12, _display->color565(15, 25, 35));
+                _canvas->drawRect(bgX, bgY, tw, 12, laserCol);
+                _canvas->setTextColor(TFT_WHITE);
+                _canvas->drawString(angleBuf, bgX + 3, bgY + 2);
+            }
+        }
+    }
+}
+
 void EarthRenderer::render(double centerLat, double centerLon, double userLat, double userLon, const std::vector<SatRenderData>& satellites) {
     static uint32_t lastTime = 0;
     static int frames = 0;
@@ -891,6 +1030,8 @@ void EarthRenderer::render(double centerLat, double centerLon, double userLat, d
     for (const auto& sat : satellites) {
         drawSatellite(sat, centerLat, centerLon, userLat, userLon);
     }
+
+    drawFocusSightLineAndShadow(centerLat, centerLon, userLat, userLon, satellites);
     
     frames++;
     uint32_t now = millis();
