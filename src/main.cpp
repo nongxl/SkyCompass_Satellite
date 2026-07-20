@@ -598,6 +598,78 @@ int focusSatIndex = -1;
 float currentZoom = 0.95f;
 uint8_t currentBrightness = 128;
 
+// 校验并自动修复 Sat View 模式下的焦点卫星与最近发射选中状态
+void validateSatViewFocusState() {
+    if (!isSatViewMode) return;
+
+    // 1. 若当前聚焦的是常规百科卫星，校验该卫星是否仍然有效且处于勾选状态
+    if (focusSatIndex >= 0) {
+        if (focusSatIndex >= NUM_SATELLITES || !g_satellites[focusSatIndex].selected) {
+            focusSatIndex = -1;
+        } else {
+            g_recentLaunchFocusMode = false;
+            return;
+        }
+    }
+
+    // 2. 若当前处于最近发射编队聚焦模式，校验当前活跃的 Batch 是否有效且仍被勾选
+    if (g_recentLaunchFocusMode) {
+        bool activeValid = false;
+        for (const auto& item : g_recentLaunches) {
+            if (item.selected && item.batchId == recentLaunchActiveBatchId) {
+                activeValid = true;
+                break;
+            }
+        }
+        if (activeValid) {
+            return;
+        }
+        
+        bool foundOther = false;
+        for (auto& item : g_recentLaunches) {
+            if (item.selected) {
+                recentLaunchActiveBatchId = item.batchId;
+                initRecentLaunchCalcs(item);
+                foundOther = true;
+                break;
+            }
+        }
+        if (!foundOther) {
+            g_recentLaunchFocusMode = false;
+            recentLaunchActiveBatchId = "";
+            g_repSatInitialized = false;
+        }
+    }
+
+    // 3. 兜底搜索：若当前无有效焦点，优先寻找首个被勾选的常规百科卫星
+    if (focusSatIndex == -1 && !g_recentLaunchFocusMode) {
+        for (int i = 0; i < NUM_SATELLITES; i++) {
+            if (g_satellites[i].selected) {
+                focusSatIndex = i;
+                g_recentLaunchFocusMode = false;
+                return;
+            }
+        }
+    }
+
+    // 4. 兜底搜索：若仍无焦点，寻找首个被勾选的最近发射编队
+    if (focusSatIndex == -1 && !g_recentLaunchFocusMode) {
+        for (auto& item : g_recentLaunches) {
+            if (item.selected) {
+                g_recentLaunchFocusMode = true;
+                recentLaunchActiveBatchId = item.batchId;
+                initRecentLaunchCalcs(item);
+                return;
+            }
+        }
+    }
+
+    // 5. 若全系统无任何卫星/编队被勾选，自动退出 Sat View 模式
+    if (focusSatIndex == -1 && !g_recentLaunchFocusMode) {
+        isSatViewMode = false;
+    }
+}
+
 // Default GNSS location (Beijing for public release)
 // double baseUserLat = 22.85; // Nanning (test location)
 // double baseUserLon = 108.33;
@@ -4444,8 +4516,6 @@ void loop() {
                             triggerPrediction = true;
                         }
                         
-
-                        
                         rebuildTree(current_unix + timeMachineOffset);
                     } else if (showRecommendations) {
                         if (selectedPassIndex != -1) {
@@ -4465,11 +4535,11 @@ void loop() {
                             portEXIT_CRITICAL(&passMutex);
                         } else {
                             // Toggle category or open detail
-                            if (passScrollIndex >= 0 && passScrollIndex < displayTree.size()) {
+                            if (passScrollIndex >= 0 && passScrollIndex < (int)displayTree.size()) {
                                 auto& item = displayTree[passScrollIndex];
                                 if (item.isCategory) {
                                     catExpanded[item.categoryIndex] = !catExpanded[item.categoryIndex];
-                                    rebuildTree(current_unix);
+                                    rebuildTree(current_unix + timeMachineOffset);
                                 } else {
                                     selectedPassIndex = item.passIndex;
                                 }
@@ -4515,78 +4585,65 @@ void loop() {
                 } else if (justV) {
                     isSatViewMode = !isSatViewMode;
                     if (isSatViewMode) {
-                        bool found = false;
-                        if (g_recentLaunchFocusMode) {
-                            found = true;
-                        } else if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
-                            found = true;
-                        } else {
-                            for (int i = 0; i < NUM_SATELLITES; i++) {
-                                if (g_satellites[i].selected) {
-                                    focusSatIndex = i;
-                                    found = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (!found) {
-                            isSatViewMode = false;
-                        } else {
+                        validateSatViewFocusState();
+                        if (isSatViewMode) {
                             isCameraTransitioning = true;
-                            
                             if (attitude && imu) {
                                 AttitudeData att = attitude->getAttitude();
                                 basePitch = att.pitch;
                                 baseRoll = att.roll;
                             }
                         }
-                    } else {
-                        // Keep current targetZoom
                     }
-
-                }
-                else if (justSemi) {
+                } else if (justSemi) {
                     if (isSatViewMode && !showRecommendations) {
-                        struct FocusTarget {
-                            int type; // 0 = Regular Sat, 1 = Recent Launch
-                            int index;
-                        };
-                        std::vector<FocusTarget> targets;
-                        
-                        for (int i = 0; i < NUM_SATELLITES; i++) {
-                            if (g_satellites[i].selected) {
-                                targets.push_back({0, i});
-                            }
-                        }
-                        for (size_t i = 0; i < g_recentLaunches.size(); i++) {
-                            if (g_recentLaunches[i].selected) {
-                                targets.push_back({1, (int)i});
-                            }
-                        }
-                        
-                        if (!targets.empty()) {
-                            int currentIdx = -1;
-                            if (focusSatIndex >= 0) {
-                                for (size_t i = 0; i < targets.size(); i++) {
-                                    if (targets[i].type == 0 && targets[i].index == focusSatIndex) {
-                                        currentIdx = i;
-                                        break;
-                                    }
+                        validateSatViewFocusState();
+                        if (isSatViewMode) {
+                            struct FocusTarget {
+                                int type; // 0 = Regular Sat, 1 = Recent Launch
+                                int index;
+                            };
+                            std::vector<FocusTarget> targets;
+                            
+                            for (int i = 0; i < NUM_SATELLITES; i++) {
+                                if (g_satellites[i].selected) {
+                                    targets.push_back({0, i});
                                 }
-                            } else if (g_recentLaunchFocusMode) {
-                                for (size_t i = 0; i < targets.size(); i++) {
-                                    if (targets[i].type == 1 && g_recentLaunches[targets[i].index].batchId == recentLaunchActiveBatchId) {
-                                        currentIdx = i;
-                                        break;
-                                    }
+                            }
+                            for (size_t i = 0; i < g_recentLaunches.size(); i++) {
+                                if (g_recentLaunches[i].selected) {
+                                    targets.push_back({1, (int)i});
                                 }
                             }
                             
-                            if (currentIdx != -1) {
+                            if (!targets.empty()) {
+                                int currentIdx = -1;
+                                if (g_recentLaunchFocusMode) {
+                                    for (size_t i = 0; i < targets.size(); i++) {
+                                        if (targets[i].type == 1 && g_recentLaunches[targets[i].index].batchId == recentLaunchActiveBatchId) {
+                                            currentIdx = i;
+                                            break;
+                                        }
+                                    }
+                                } else if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+                                    for (size_t i = 0; i < targets.size(); i++) {
+                                        if (targets[i].type == 0 && targets[i].index == focusSatIndex) {
+                                            currentIdx = i;
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                // 兜底：若之前选中的目标被取消勾选，默认从 0 号目标开始切换
+                                if (currentIdx == -1) {
+                                    currentIdx = 0;
+                                }
+
                                 int prevIdx = (currentIdx - 1 + targets.size()) % targets.size();
                                 const auto& prevTarget = targets[prevIdx];
                                 if (prevTarget.type == 0) {
                                     focusSatIndex = prevTarget.index;
+                                    g_recentLaunchFocusMode = false;
                                     isCameraTransitioning = true;
                                 } else {
                                     focusSatIndex = -1;
@@ -4601,46 +4658,53 @@ void loop() {
                     }
                 } else if (justDot) {
                     if (isSatViewMode && !showRecommendations) {
-                        struct FocusTarget {
-                            int type; // 0 = Regular Sat, 1 = Recent Launch
-                            int index;
-                        };
-                        std::vector<FocusTarget> targets;
-                        
-                        for (int i = 0; i < NUM_SATELLITES; i++) {
-                            if (g_satellites[i].selected) {
-                                targets.push_back({0, i});
-                            }
-                        }
-                        for (size_t i = 0; i < g_recentLaunches.size(); i++) {
-                            if (g_recentLaunches[i].selected) {
-                                targets.push_back({1, (int)i});
-                            }
-                        }
-                        
-                        if (!targets.empty()) {
-                            int currentIdx = -1;
-                            if (focusSatIndex >= 0) {
-                                for (size_t i = 0; i < targets.size(); i++) {
-                                    if (targets[i].type == 0 && targets[i].index == focusSatIndex) {
-                                        currentIdx = i;
-                                        break;
-                                    }
+                        validateSatViewFocusState();
+                        if (isSatViewMode) {
+                            struct FocusTarget {
+                                int type; // 0 = Regular Sat, 1 = Recent Launch
+                                int index;
+                            };
+                            std::vector<FocusTarget> targets;
+                            
+                            for (int i = 0; i < NUM_SATELLITES; i++) {
+                                if (g_satellites[i].selected) {
+                                    targets.push_back({0, i});
                                 }
-                            } else if (g_recentLaunchFocusMode) {
-                                for (size_t i = 0; i < targets.size(); i++) {
-                                    if (targets[i].type == 1 && g_recentLaunches[targets[i].index].batchId == recentLaunchActiveBatchId) {
-                                        currentIdx = i;
-                                        break;
-                                    }
+                            }
+                            for (size_t i = 0; i < g_recentLaunches.size(); i++) {
+                                if (g_recentLaunches[i].selected) {
+                                    targets.push_back({1, (int)i});
                                 }
                             }
                             
-                            if (currentIdx != -1) {
+                            if (!targets.empty()) {
+                                int currentIdx = -1;
+                                if (g_recentLaunchFocusMode) {
+                                    for (size_t i = 0; i < targets.size(); i++) {
+                                        if (targets[i].type == 1 && g_recentLaunches[targets[i].index].batchId == recentLaunchActiveBatchId) {
+                                            currentIdx = i;
+                                            break;
+                                        }
+                                    }
+                                } else if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+                                    for (size_t i = 0; i < targets.size(); i++) {
+                                        if (targets[i].type == 0 && targets[i].index == focusSatIndex) {
+                                            currentIdx = i;
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                // 兜底：若之前选中的目标被取消勾选，默认从 0 号目标开始切换
+                                if (currentIdx == -1) {
+                                    currentIdx = 0;
+                                }
+
                                 int nextIdx = (currentIdx + 1) % targets.size();
                                 const auto& nextTarget = targets[nextIdx];
                                 if (nextTarget.type == 0) {
                                     focusSatIndex = nextTarget.index;
+                                    g_recentLaunchFocusMode = false;
                                     isCameraTransitioning = true;
                                 } else {
                                     focusSatIndex = -1;
@@ -4846,6 +4910,7 @@ void loop() {
                             g_level3Objects.shrink_to_fit();
                         } else {
                             appState = STATE_MAIN;
+                            validateSatViewFocusState();
                         }
                     } else if (justO) {
                         if (recentLaunchInObjectsView) {
@@ -4940,6 +5005,7 @@ void loop() {
                             downloadErrorMsg = "";
                         } else if (justEsc || justTick) {
                             appState = STATE_MAIN;
+                            validateSatViewFocusState();
                         } else if (justSemi) {
                             if (satSelectedIndex > 0) satSelectedIndex--;
                         } else if (justDot) {
@@ -4969,6 +5035,7 @@ void loop() {
                     } else {
                         if (justBack || justEsc || justTick) {
                             appState = STATE_MAIN;
+                            validateSatViewFocusState();
                             bool selectionChanged = false;
                             std::vector<int> currentSelected;
                             for (int i = 0; i < NUM_SATELLITES; i++) {
