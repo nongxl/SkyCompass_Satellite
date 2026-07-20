@@ -2749,8 +2749,33 @@ void drawSatSelectPage() {
     canvas->fillRect(width/2, 0, width/2, 20, tab2Bg);
     canvas->drawString(I18N::get(TXT_TAB_RECENT_LAUNCH), 166 - canvas->textWidth(I18N::get(TXT_TAB_RECENT_LAUNCH))/2, 6);
     
-    // Bottom border for Top Bar
-    canvas->drawFastHLine(0, 20, width, TFT_DARKGREY);
+    // Draw Memory Usage Progress Bar on Top Bar Divider Line (y = 19..20)
+    {
+        uint32_t freeHeap = ESP.getFreeHeap();
+        uint32_t totalHeap = ESP.getHeapSize();
+        float memRatio = 0.0f;
+        if (totalHeap > 0) {
+            memRatio = (float)(totalHeap - freeHeap) / (float)totalHeap;
+        }
+        int fillWidth = (int)(width * memRatio);
+        if (fillWidth > width) fillWidth = width;
+        if (fillWidth < 0) fillWidth = 0;
+
+        uint16_t memColor;
+        if (memRatio < 0.65f) {
+            memColor = canvas->color565(0, 220, 255); // 青色 (正常 <65%)
+        } else if (memRatio < 0.82f) {
+            memColor = TFT_YELLOW;                   // 黄色 (预警 65%-82%)
+        } else {
+            memColor = TFT_RED;                      // 红色 (高占用 >82%)
+        }
+
+        // 绘制 2px 内存进度条充当分割线
+        canvas->fillRect(0, 19, width, 2, canvas->color565(35, 45, 55)); // 轨道背景
+        if (fillWidth > 0) {
+            canvas->fillRect(0, 19, fillWidth, 2, memColor);             // 填充内存使用率
+        }
+    }
     
     // Draw Top Bar Status Icons
     {
