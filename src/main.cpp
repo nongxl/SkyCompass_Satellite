@@ -176,8 +176,16 @@ volatile bool recentLaunchDownloading = false;
 volatile bool recentLaunchDownloadSuccess = false;
 volatile bool g_timeSynced = false;
 
-// Global spinlock to protect g_satellites data structure from concurrent read/write race conditions
-portMUX_TYPE satMutex = portMUX_INITIALIZER_UNLOCKED;
+// FreeRTOS Mutex to protect g_satellites data structure from concurrent read/write race conditions
+SemaphoreHandle_t g_satMutex = NULL;
+
+void lockSatMutex() {
+    if (g_satMutex) xSemaphoreTake(g_satMutex, portMAX_DELAY);
+}
+
+void unlockSatMutex() {
+    if (g_satMutex) xSemaphoreGive(g_satMutex);
+}
 
 volatile bool g_networkActive = false;
 struct NetworkActiveGuard {
@@ -1054,13 +1062,13 @@ void predictorTask(void* parameter) {
                 TLEData tle;
                 float stdMag = 3.0;
                 
-                portENTER_CRITICAL(&satMutex);
+                lockSatMutex();
                 isSelected = g_satellites[i].selected;
                 if (isSelected) {
                     tle = g_satellites[i].tle;
                     stdMag = g_satellites[i].stdMag;
                 }
-                portEXIT_CRITICAL(&satMutex);
+                unlockSatMutex();
                 
                 if (isSelected) {
                     if (tle.line1.length() < 14 || tle.line2.length() < 14) {
@@ -1197,7 +1205,7 @@ void fetchFrequencies() {
                             tn = doc[idStr]["tone"].as<String>();
                         }
                         
-                        portENTER_CRITICAL(&satMutex);
+                        lockSatMutex();
                         g_satellites[i].downlinkFreq = dl;
                         g_satellites[i].radioMode = rm;
                         g_satellites[i].uplinkFreq = ul;
@@ -1205,7 +1213,7 @@ void fetchFrequencies() {
                         if (g_satellites[i].type == SAT_TYPE_VISUAL) {
                             g_satellites[i].type = SAT_TYPE_HAM;
                         }
-                        portEXIT_CRITICAL(&satMutex);
+                        unlockSatMutex();
                     }
                 }
             }
@@ -1502,7 +1510,7 @@ void recentLaunchNetworkTaskImpl() {
         int httpCode = 0;
         success = OrbitDataProvider::downloadRecentLaunches(dummy, &httpCode);
         if (success) {
-            File timeFile = LittleFS.open("/recent_last_update.txt", "w");
+            File timeFile = LittleFS.open("/recent_last_update.txt", "w", true);
             if (timeFile) {
                 timeFile.print(current_unix);
                 timeFile.close();
@@ -1585,7 +1593,7 @@ void forceRefreshSingleSatTask(void* parameter) {
                 SGP4Calc tempCalc;
                 tempCalc.init(new_tle);
                 
-                portENTER_CRITICAL(&satMutex);
+                lockSatMutex();
                 g_satellites[targetIdx].tle = new_tle;
                 g_satellites[targetIdx].calc = tempCalc;
                 if (targetIdx >= NUM_BUILTIN_SATELLITES) {
@@ -1594,7 +1602,7 @@ void forceRefreshSingleSatTask(void* parameter) {
                     }
                     autoAssignIconAndColor(g_satellites[targetIdx].name, g_satellites[targetIdx].iconType, g_satellites[targetIdx].color);
                 }
-                portEXIT_CRITICAL(&satMutex);
+                unlockSatMutex();
                 
                 downloadErrorMsg = "Refresh Success!";
                 
@@ -1663,7 +1671,7 @@ void downloadCustomSatTask(void* parameter) {
                 autoAssignIconAndColor(p.name, p.iconType, p.color);
                 
                 bool exists = false;
-                portENTER_CRITICAL(&satMutex);
+                lockSatMutex();
                 if (NUM_SATELLITES < MAX_SATELLITES) {
                     for (int i = 0; i < NUM_SATELLITES; i++) {
                         if (g_satellites[i].noradId == id) {
@@ -1681,7 +1689,7 @@ void downloadCustomSatTask(void* parameter) {
                         g_satellites[NUM_SATELLITES++] = p;
                     }
                 }
-                portEXIT_CRITICAL(&satMutex);
+                unlockSatMutex();
                 
                 if (!exists) {
                     saveCustomSatellites();
@@ -1817,10 +1825,10 @@ void networkTaskImpl(void* parameter) {
                 TLEData wTle = TLEManager::getJWST_TLE();
                 wTle.baseScore = g_satellites[i].baseScore;
                 SGP4Calc tempCalc; tempCalc.init(wTle);
-                portENTER_CRITICAL(&satMutex);
+                lockSatMutex();
                 g_satellites[i].tle  = wTle;
                 g_satellites[i].calc = tempCalc;
-                portEXIT_CRITICAL(&satMutex);
+                unlockSatMutex();
                 updated = true;
                 continue;
             }
@@ -1829,23 +1837,19 @@ void networkTaskImpl(void* parameter) {
             uint32_t cacheTime = 0;
             bool hasCache = TLEUpdater::loadFromCachePublic(noradId, cached, cacheTime);
 
-            if (hasCache && now > 0) {
-                uint32_t age = now - cacheTime;
-                if (cacheTime == 0) {
-                    // Offline-saved cache: use TLE epoch as reference
-                    uint32_t ep = TLEUpdater::parseTleEpochPublic(cached.line1);
-                    age = (ep > 0) ? (now - ep) : 0;
-                }
-                bool stale = (age > maxAge) ||
-                             (now - TLEUpdater::parseTleEpochPublic(cached.line1) > 3*24*3600 && age > 3600);
-                if (!stale) {
-                    // Cache is fresh — use it immediately
+            if (hasCache && now > 0 && !manualWifiToggle) {
+                uint32_t tleEpoch = TLEUpdater::parseTleEpochPublic(cached.line1);
+                uint32_t tleAge = (tleEpoch > 0 && now >= tleEpoch) ? (now - tleEpoch) : 0;
+                uint32_t cacheAge = (cacheTime > 0 && now >= cacheTime) ? (now - cacheTime) : tleAge;
+
+                if (cacheAge < maxAge && tleAge < (2 * 24 * 3600)) {
+                    // Cache and TLE epoch are both fresh — use cache directly
                     cached.baseScore = g_satellites[i].baseScore;
                     SGP4Calc tempCalc; tempCalc.init(cached);
-                    portENTER_CRITICAL(&satMutex);
+                    lockSatMutex();
                     g_satellites[i].tle  = cached;
                     g_satellites[i].calc = tempCalc;
-                    portEXIT_CRITICAL(&satMutex);
+                    unlockSatMutex();
                     continue;
                 }
             }
@@ -1880,14 +1884,14 @@ void networkTaskImpl(void* parameter) {
 
                     SGP4Calc tempCalc;
                     tempCalc.init(newTle);
-                    portENTER_CRITICAL(&satMutex);
+                    lockSatMutex();
                     g_satellites[i].tle = newTle;
                     g_satellites[i].calc = tempCalc;
                     if (i >= NUM_BUILTIN_SATELLITES && newTle.name.length() > 0) {
                         g_satellites[i].name = newTle.name;
                         autoAssignIconAndColor(g_satellites[i].name, g_satellites[i].iconType, g_satellites[i].color);
                     }
-                    portEXIT_CRITICAL(&satMutex);
+                    unlockSatMutex();
                     updated = true;
                 } else {
                     anyFetchFailed = true;
@@ -2137,6 +2141,9 @@ void drawLangSelectDialog(LGFX_Sprite* canvas) {
 }
 
 void setup() {
+    if (!g_satMutex) {
+        g_satMutex = xSemaphoreCreateMutex();
+    }
     
     Serial.begin(115200);
     // Remove the 4 second delay to boot instantly
@@ -2382,7 +2389,7 @@ void setup() {
                     if (LittleFS.exists(tlePath)) LittleFS.remove(tlePath);
                     if (LittleFS.exists(catPath)) LittleFS.remove(catPath);
                 }
-                File f = LittleFS.open("/cache_cleared_v2.txt", "w");
+                File f = LittleFS.open("/cache_cleared_v2.txt", "w", true);
                 if (f) {
                     f.println("cleared");
                     f.close();
@@ -2511,7 +2518,7 @@ void setup() {
             
             // Start network task on Core 0 to handle WiFi and TLE fetching in background
             manualWifiToggle = false;
-            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
 
             tryLoadRecentLaunchCache();
             
@@ -2843,9 +2850,9 @@ void drawSatSelectPage() {
         int descY = 25;
         if (satSelectedIndex < NUM_SATELLITES) {
             SatProfile selSat;
-            portENTER_CRITICAL(&satMutex);
+            lockSatMutex();
             selSat = g_satellites[satSelectedIndex];
-            portEXIT_CRITICAL(&satMutex);
+            unlockSatMutex();
             
             // Draw 3x Scaled Icon
             int iconX = rightX + 21;
@@ -4429,7 +4436,7 @@ void loop() {
                     if (!g_networkActive) {
                         if (!HalWifi::isConnected()) {
                             manualWifiToggle = true;
-                            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+                            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
                         } else {
                             WiFi.disconnect(true);
                             WiFi.mode(WIFI_OFF);
@@ -4625,7 +4632,7 @@ void loop() {
                         
                         manualWifiToggle = true; // Stay connected since user explicitly set it up
                         xTaskCreatePinnedToCore(
-                            networkTask, "NetworkTask", 8192, params, 1, NULL, 0
+                            networkTask, "NetworkTask", 16384, params, 1, NULL, 0
                         );
                     } else if (justBack) {
                         if (wifiPasswordLen > 0) {
@@ -4739,7 +4746,7 @@ void loop() {
                             recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
                             drawSatSelectPage();
                             pushCanvasWithFilter();
-                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 8192, NULL, 1, NULL, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 16384, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 recentLaunchDownloading = false;
                                 recentLaunchErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
@@ -4757,7 +4764,7 @@ void loop() {
                                 downloadErrorMsg = I18N::get(TXT_REFRESHING_GP);
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
-                                BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 8192, (void*)(intptr_t)satSelectedIndex, 1, NULL, 0);
+                                BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 16384, (void*)(intptr_t)satSelectedIndex, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
                                     drawSatSelectPage();
@@ -4774,7 +4781,7 @@ void loop() {
                                 downloadErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
-                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
                                     drawSatSelectPage();
@@ -4901,7 +4908,7 @@ void loop() {
                                 pushCanvasWithFilter();
                                 
                                 int id = noradInput.toInt();
-                                BaseType_t res = xTaskCreatePinnedToCore(downloadCustomSatTask, "DownloadCustomSatTask", 8192, (void*)(intptr_t)id, 1, NULL, 0);
+                                BaseType_t res = xTaskCreatePinnedToCore(downloadCustomSatTask, "DownloadCustomSatTask", 16384, (void*)(intptr_t)id, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     isDownloadingCustom = false;
                                     downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);

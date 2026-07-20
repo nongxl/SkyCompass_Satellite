@@ -104,10 +104,10 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
     char url[128];
     sprintf(url, "http://celestrak.org/NORAD/elements/gp.php?CATNR=%u&FORMAT=json", (unsigned int)catNum);
     
+    WiFiClient client;
     if (sharedClient) {
         http.begin(*sharedClient, url);
     } else {
-        WiFiClient client;
         http.begin(client, url);
     }
     
@@ -217,7 +217,7 @@ bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& te
     
     int expectedSize = http.getSize();
     WiFiClient* stream = http.getStreamPtr();
-    File f = LittleFS.open("/json_recent_raw.jsonl", "w");
+    File f = LittleFS.open("/json_recent_raw.jsonl", "w", true);
     
     int rawCount = 0;
     int totalReadBytes = 0;

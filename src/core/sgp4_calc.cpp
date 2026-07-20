@@ -1,5 +1,7 @@
 #include "sgp4_calc.h"
 
+portMUX_TYPE satMutex = portMUX_INITIALIZER_UNLOCKED;
+
 SGP4Calc::SGP4Calc() {
 }
 

@@ -312,7 +312,7 @@ public:
     static bool saveDecayInfo(uint32_t catNum, const DecayInfo& info) {
         char path[32];
         sprintf(path, "/dec_%u.txt", (unsigned int)catNum);
-        File f = LittleFS.open(path, "w");
+        File f = LittleFS.open(path, "w", true);
         if (!f) return false;
         
         f.println(info.isDecaying ? 1 : 0);
