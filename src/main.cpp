@@ -1181,8 +1181,10 @@ void predictorTask(void* parameter) {
             predictionProgress = 100;
         } else {
             for (int i = 0; i < NUM_SATELLITES; i++) {
+                vTaskDelay(pdMS_TO_TICKS(5)); // Yield CPU 0 to IDLE0 task to feed Task Watchdog Timer
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
+                SatelliteType type = SAT_TYPE_VISUAL;
                 bool isSelected = false;
                 TLEData tle;
                 float stdMag = 3.0;
@@ -1190,10 +1192,18 @@ void predictorTask(void* parameter) {
                 lockSatMutex();
                 isSelected = g_satellites[i].selected;
                 if (isSelected) {
+                    type = g_satellites[i].type;
                     tle = g_satellites[i].tle;
                     stdMag = g_satellites[i].stdMag;
                 }
                 unlockSatMutex();
+                
+                // GEO broadcast satellites are stationary (no pass events) — skip prediction
+                if (type == SAT_TYPE_GEO_TV) {
+                    completedCount++;
+                    predictionProgress = (completedCount * 100) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
+                    continue;
+                }
                 
                 if (isSelected) {
                     if (tle.line1.length() < 14 || tle.line2.length() < 14) {
@@ -1203,7 +1213,6 @@ void predictorTask(void* parameter) {
                     }
                     
                     auto passes = predictor->predictPasses(tle, stdMag, startTime, 7);
-                    // Serial.printf("[Debug] Predictor: Sat '%s' (NORAD %u) got %d passes.\n", tle.name.c_str(), g_satellites[i].noradId, (int)passes.size());
                     
                     // Cap passes to prevent OOM
                     if (passes.size() > 8) {
@@ -1218,7 +1227,6 @@ void predictorTask(void* parameter) {
                         p.satIndex = i;
                     }
                     allPasses.insert(allPasses.end(), passes.begin(), passes.end());
-                    vTaskDelay(pdMS_TO_TICKS(1));
                     completedCount++;
                 }
                 predictionProgress = (completedCount * 100) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
