@@ -19,7 +19,8 @@ enum SatelliteType {
     SAT_TYPE_HAM,
     SAT_TYPE_WEATHER,
     SAT_TYPE_SPACE_STATION,
-    SAT_TYPE_HISTORICAL
+    SAT_TYPE_HISTORICAL,
+    SAT_TYPE_GEO_TV
 };
 
 struct SatProfile {

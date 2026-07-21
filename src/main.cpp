@@ -275,6 +275,39 @@ void autoAssignIconAndColor(const String& name, SatIconType& icon, uint16_t& col
     else {
         icon = ICON_SATELLITE;
         color = TFT_WHITE;
+static double getGeoSlotLongitude(uint32_t noradId, const String& slotStr) {
+    if (noradId == 49125) return 101.4;
+    if (noradId == 52235) return 125.0;
+    if (noradId == 45863) return 134.0;
+    if (noradId == 29037) return 19.2;
+    if (noradId == 33403) return -97.0; // 97.0°W
+    
+    if (slotStr.length() > 0) {
+        double val = slotStr.toDouble();
+        if (slotStr.indexOf("W") != -1 || slotStr.indexOf("w") != -1) {
+            val = -val;
+        }
+        return val;
+    }
+    return 0.0;
+}
+
+static void calculateGeoSatPosition(double satLonDeg, double userLatDeg, double userLonDeg, double userAltMeters, GeodeticCoord& outGeo, ECEFCoord& outEcef, TopocentricCoord& outTopo, double& outSkewDeg) {
+    outGeo.lat = 0.0;
+    outGeo.lon = satLonDeg;
+    outGeo.alt = 35785.863; // Standard GEO orbital height above Earth surface (km)
+    
+    outEcef = CoordTransform::geodeticToECEF(outGeo);
+    
+    GeodeticCoord obsGeo = {userLatDeg, userLonDeg, userAltMeters / 1000.0};
+    outTopo = CoordTransform::ecefToTopocentric(obsGeo, outEcef);
+    
+    double dLonRad = (userLonDeg - satLonDeg) * DEG_TO_RAD;
+    double uLatRad = userLatDeg * DEG_TO_RAD;
+    if (fabs(uLatRad) < 1e-5) {
+        outSkewDeg = 0.0;
+    } else {
+        outSkewDeg = atan2(sin(dLonRad), tan(uLatRad)) * RAD_TO_DEG;
     }
 }
 
@@ -1998,6 +2031,10 @@ void networkTaskImpl(void* parameter) {
 
         for (int i = 0; i < NUM_SATELLITES; i++) {
             uint32_t noradId = g_satellites[i].noradId;
+            if (g_satellites[i].type == SAT_TYPE_GEO_TV) {
+                // GEO broadcast satellites use static geometry calculation — no network fetch needed
+                continue;
+            }
             if (noradId == 50463) {
                 // JWST uses hardcoded TLE — no network needed
                 TLEData wTle = TLEManager::getJWST_TLE();
@@ -5827,10 +5864,13 @@ void loop() {
                 bool runCalculation = (timeChanged || !g_satCaches[i].lastGeoValid);
                 
                 if (runCalculation) {
-                    double tx, ty, tz;
-                    if (calcCopy.getTEME(simTime, tx, ty, tz)) {
-                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
-                        GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                    if (g_satellites[i].type == SAT_TYPE_GEO_TV) {
+                        double slotLon = getGeoSlotLongitude(g_satellites[i].noradId, g_satellites[i].uplinkFreq);
+                        GeodeticCoord geo;
+                        ECEFCoord ecef;
+                        TopocentricCoord topo;
+                        double skew = 0.0;
+                        calculateGeoSatPosition(slotLon, baseUserLat, baseUserLon, baseUserAlt, geo, ecef, topo, skew);
                         
                         bool inShadow = false;
                         if (sun_calc) {
@@ -5851,7 +5891,32 @@ void loop() {
                         g_satCaches[i].lastInShadow = inShadow;
                         g_satCaches[i].lastGeoValid = true;
                     } else {
-                        g_satCaches[i].lastGeoValid = false;
+                        double tx, ty, tz;
+                        if (calcCopy.getTEME(simTime, tx, ty, tz)) {
+                            ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
+                            GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                            
+                            bool inShadow = false;
+                            if (sun_calc) {
+                                SunPositionData& sPos = view_sun_pos;
+                                float latR = geo.lat * DEG_TO_RAD;
+                                float lonR = geo.lon * DEG_TO_RAD;
+                                float subLatR = sPos.subsolarLat * DEG_TO_RAD;
+                                float subLonR = sPos.subsolarLon * DEG_TO_RAD;
+                                float cos_theta = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
+                                if (cos_theta < 0) {
+                                    float r = 6371.0f + (float)geo.alt;
+                                    float dist_sq = r * r * (1.0f - cos_theta * cos_theta);
+                                    inShadow = (dist_sq < 6371.0f * 6371.0f);
+                                }
+                            }
+                            
+                            g_satCaches[i].lastGeo = geo;
+                            g_satCaches[i].lastInShadow = inShadow;
+                            g_satCaches[i].lastGeoValid = true;
+                        } else {
+                            g_satCaches[i].lastGeoValid = false;
+                        }
                     }
                 }
                 
@@ -6450,28 +6515,41 @@ void loop() {
                     earth_renderer->getCanvas()->setTextColor(satColor);
                     earth_renderer->getCanvas()->drawString(isZh ? "视角锁定" : "Sat View", isZh ? 180 : 180, 5);
                     
-                    double tx, ty, tz;
-                    if (currentCalc->getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
-                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
-                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
-                        GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
-                        GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                        TopocentricCoord topo = CoordTransform::ecefToTopocentric(obsGeo, ecef);
-                        double az = topo.az;
-                        double el = topo.el;
-                        double dist = topo.range;
-                        
-                        double tx_prev, ty_prev, tz_prev;
-                        double dist_prev = dist;
-                        if (currentCalc->getTEME(current_unix + timeMachineOffset - 1, tx_prev, ty_prev, tz_prev)) {
-                            double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset - 1));
-                            ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
-                            TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
-                            dist_prev = topo_prev.range;
+                    double az = 0, el = 0, dist = 0, range_rate = 0, skew = 0;
+                    bool hasValidPos = false;
+                    
+                    if (currentType == SAT_TYPE_GEO_TV) {
+                        String slotStr = (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES) ? g_satellites[focusSatIndex].uplinkFreq : "";
+                        double slotLon = getGeoSlotLongitude(currentNoradId, slotStr);
+                        GeodeticCoord geo;
+                        ECEFCoord ecef;
+                        TopocentricCoord topo;
+                        calculateGeoSatPosition(slotLon, baseUserLat, baseUserLon, baseUserAlt, geo, ecef, topo, skew);
+                        az = topo.az; el = topo.el; dist = topo.range; range_rate = 0.0;
+                        hasValidPos = true;
+                    } else if (currentCalc != nullptr) {
+                        double tx, ty, tz;
+                        if (currentCalc->getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
+                            double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
+                            ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                            GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                            TopocentricCoord topo = CoordTransform::ecefToTopocentric(obsGeo, ecef);
+                            az = topo.az; el = topo.el; dist = topo.range;
+                            
+                            double tx_prev, ty_prev, tz_prev;
+                            double dist_prev = dist;
+                            if (currentCalc->getTEME(current_unix + timeMachineOffset - 1, tx_prev, ty_prev, tz_prev)) {
+                                double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset - 1));
+                                ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
+                                TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
+                                dist_prev = topo_prev.range;
+                            }
+                            range_rate = dist - dist_prev;
+                            hasValidPos = true;
                         }
-                        
-                        double range_rate = dist - dist_prev;
-                        
+                    }
+                    
+                    if (hasValidPos) {
                         earth_renderer->getCanvas()->setTextColor(satColor);
                         
                         char azBuf[32];
@@ -6484,7 +6562,22 @@ void loop() {
                             sprintf(elBuf, "El : %02d°", (int)el);
                         }
                         
-                        if (currentType == SAT_TYPE_SPACE_STATION && currentNoradId == 25544) {
+                        if (currentType == SAT_TYPE_GEO_TV) {
+                            earth_renderer->getCanvas()->drawString(azBuf, 5, 84);
+                            earth_renderer->getCanvas()->drawString(elBuf, 5, 96);
+                            
+                            char skewBuf[32];
+                            char bandBuf[32];
+                            if (isZh) {
+                                sprintf(skewBuf, "极化角: %+.1f°", skew);
+                                sprintf(bandBuf, "下行: %s", downlinkFreq.length() > 0 ? downlinkFreq.c_str() : "广播");
+                            } else {
+                                sprintf(skewBuf, "Skew: %+.1f°", skew);
+                                sprintf(bandBuf, "Rx  : %s", downlinkFreq.length() > 0 ? downlinkFreq.c_str() : "Bcast");
+                            }
+                            earth_renderer->getCanvas()->drawString(skewBuf, 5, 108);
+                            earth_renderer->getCanvas()->drawString(bandBuf, 5, 120);
+                        } else if (currentType == SAT_TYPE_SPACE_STATION && currentNoradId == 25544) {
                             double freq_aprs = 145.825;
                             double freq_sstv = 145.800;
                             double shift_aprs = (freq_aprs * -range_rate / 299792.458) * 1000.0;
