@@ -2694,24 +2694,33 @@ void setup() {
             
             // Offline TLE Cache Loading
             for (int i = 0; i < NUM_SATELLITES; i++) {
+                if (g_satellites[i].type == SAT_TYPE_GEO_TV || g_satellites[i].type == SAT_TYPE_DEEP_SPACE) {
+                    continue;
+                }
                 g_loadingStatusText = isZh ? ("解析轨道: " + g_satellites[i].name) : ("Parsing Orbit: " + g_satellites[i].name);
                 TLEData loaded_tle;
                 if (TLEUpdater::getTLE(g_satellites[i].noradId, loaded_tle)) {
                     loaded_tle.baseScore = g_satellites[i].baseScore;
+                    lockSatMutex();
                     g_satellites[i].tle = loaded_tle;
+                    unlockSatMutex();
                 } else {
                     // Fallback using noradId instead of hardcoded index
                     uint32_t norad = g_satellites[i].noradId;
+                    lockSatMutex();
                     if (norad == 25544) g_satellites[i].tle = TLEManager::getISS_TLE();
                     else if (norad == 48274) g_satellites[i].tle = TLEManager::getTiangong_TLE();
                     else if (norad == 20580) g_satellites[i].tle = TLEManager::getHubble_TLE();
                     else if (norad == 50463) g_satellites[i].tle = TLEManager::getJWST_TLE();
                     else if (norad == 27607) g_satellites[i].tle = TLEManager::getSO50_TLE();
                     else if (norad == 43017) g_satellites[i].tle = TLEManager::getAO91_TLE();
+                    unlockSatMutex();
                 }
                 
                 if (g_satellites[i].tle.line1.length() > 0) {
+                    lockSatMutex();
                     g_satellites[i].calc.init(g_satellites[i].tle);
+                    unlockSatMutex();
                 }
                 
                 // Slowly progress progress to 65%
@@ -2793,7 +2802,9 @@ void setup() {
                             }
                             autoAssignIconAndColor(p.name, p.iconType, p.color);
                             if (NUM_SATELLITES < MAX_SATELLITES) {
+                                lockSatMutex();
                                 g_satellites[NUM_SATELLITES++] = p;
+                                unlockSatMutex();
                             }
                         }
                     }
