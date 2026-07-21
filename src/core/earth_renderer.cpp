@@ -990,35 +990,6 @@ void EarthRenderer::drawFocusSightLineAndShadow(double centerLat, double centerL
                 topo = CoordTransform::ecefToTopocentric(obsGeo, ecef);
             }
         }
-
-        // 仅当仰角 > 0° (地面以上可见过境) 时绘制 3D 视线连线
-        if (topo.el > 0.0) {
-            // 绘制脉冲光晕霓虹青色激光连线
-            float pulse = 0.7f + 0.3f * sinf((float)millis() * 0.006f);
-            uint16_t laserCol = scaleColor(TFT_CYAN, pulse);
-
-            // 绘制从地面定位点直达太空卫星的 3D 视线
-            _canvas->drawLine(ux, uy, sx, sy, laserCol);
-
-            // 在地面定位点旁绘制极简仰角角标气泡
-            if (userVisible) {
-                char angleBuf[32];
-                if (I18N::getLanguage() == LANG_ZH) {
-                    snprintf(angleBuf, sizeof(angleBuf), "仰角:%d°", (int)topo.el);
-                } else {
-                    snprintf(angleBuf, sizeof(angleBuf), "El:%d°", (int)topo.el);
-                }
-                
-                int bgX = ux + 5;
-                int bgY = uy - 16;
-                int tw = _canvas->textWidth(angleBuf) + 6;
-                
-                _canvas->fillRect(bgX, bgY, tw, 12, _display->color565(15, 25, 35));
-                _canvas->drawRect(bgX, bgY, tw, 12, laserCol);
-                _canvas->setTextColor(TFT_WHITE);
-                _canvas->drawString(angleBuf, bgX + 3, bgY + 2);
-            }
-        }
     }
 }
 

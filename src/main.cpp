@@ -6483,8 +6483,8 @@ void loop() {
                             double shift_aprs = (freq_aprs * -range_rate / 299792.458) * 1000.0;
                             double shift_sstv = (freq_sstv * -range_rate / 299792.458) * 1000.0;
                             
-                            earth_renderer->getCanvas()->drawString(azBuf, 5, 95);
-                            earth_renderer->getCanvas()->drawString(elBuf, 5, 105);
+                            earth_renderer->getCanvas()->drawString(azBuf, 5, 84);
+                            earth_renderer->getCanvas()->drawString(elBuf, 5, 96);
                             
                             char rx1Buf[32];
                             char rx2Buf[32];
@@ -6495,24 +6495,24 @@ void loop() {
                                 sprintf(rx1Buf, "Rx1: %07.3f", freq_aprs + shift_aprs/1000.0);
                                 sprintf(rx2Buf, "Rx2: %07.3f", freq_sstv + shift_sstv/1000.0);
                             }
-                            earth_renderer->getCanvas()->drawString(rx1Buf, 5, 115);
-                            earth_renderer->getCanvas()->drawString(rx2Buf, 5, 125);
+                            earth_renderer->getCanvas()->drawString(rx1Buf, 5, 108);
+                            earth_renderer->getCanvas()->drawString(rx2Buf, 5, 120);
                         } else {
-                            earth_renderer->getCanvas()->drawString(azBuf, 5, 105);
-                            earth_renderer->getCanvas()->drawString(elBuf, 5, 115);
+                            bool hasFreq = ((currentType == SAT_TYPE_HAM || currentType == SAT_TYPE_WEATHER) && downlinkFreq.length() > 0);
+                            int startY = hasFreq ? 91 : 104;
+                            earth_renderer->getCanvas()->drawString(azBuf, 5, startY);
+                            earth_renderer->getCanvas()->drawString(elBuf, 5, startY + 13);
                             
-                            if (currentType == SAT_TYPE_HAM || currentType == SAT_TYPE_WEATHER) {
-                                if (downlinkFreq.length() > 0) {
-                                    double freq_mhz = downlinkFreq.toDouble();
-                                    double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
-                                    char freqBuf[32];
-                                    if (isZh) {
-                                        sprintf(freqBuf, "下行: %s (%+.1f)", downlinkFreq.c_str(), shift_khz);
-                                    } else {
-                                        sprintf(freqBuf, "Rx : %s (%+.1f)", downlinkFreq.c_str(), shift_khz);
-                                    }
-                                    earth_renderer->getCanvas()->drawString(freqBuf, 5, 125);
+                            if (hasFreq) {
+                                double freq_mhz = downlinkFreq.toDouble();
+                                double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
+                                char freqBuf[32];
+                                if (isZh) {
+                                    sprintf(freqBuf, "下行: %s (%+.1f)", downlinkFreq.c_str(), shift_khz);
+                                } else {
+                                    sprintf(freqBuf, "Rx : %s (%+.1f)", downlinkFreq.c_str(), shift_khz);
                                 }
+                                earth_renderer->getCanvas()->drawString(freqBuf, 5, startY + 26);
                             }
                         }
                     }
