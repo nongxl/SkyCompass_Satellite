@@ -1207,39 +1207,43 @@ void predictorTask(void* parameter) {
                 }
                 unlockSatMutex();
                 
+                if (!isSelected) continue;
+                
                 // GEO broadcast satellites are stationary (no pass events) — skip prediction
                 if (type == SAT_TYPE_GEO_TV) {
                     completedCount++;
                     predictionProgress = (completedCount * 100) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
+                    if (predictionProgress > 100) predictionProgress = 100;
                     continue;
                 }
                 
-                if (isSelected) {
-                    if (tle.line1.length() < 14 || tle.line2.length() < 14) {
-                        completedCount++;
-                        predictionProgress = (completedCount * 100) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
-                        continue;
-                    }
-                    
-                    auto passes = predictor->predictPasses(tle, stdMag, startTime, 7);
-                    
-                    // Cap passes to prevent OOM
-                    if (passes.size() > 8) {
-                        std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
-                            return a.score > b.score;
-                        });
-                        passes.resize(8);
-                    }
-                    
-                    for (auto& p : passes) {
-                        p.satSelected = true;
-                        p.satIndex = i;
-                    }
-                    allPasses.insert(allPasses.end(), passes.begin(), passes.end());
+                if (tle.line1.length() < 14 || tle.line2.length() < 14) {
                     completedCount++;
+                    predictionProgress = (completedCount * 100) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
+                    if (predictionProgress > 100) predictionProgress = 100;
+                    continue;
                 }
+                
+                auto passes = predictor->predictPasses(tle, stdMag, startTime, 7);
+                
+                // Cap passes to prevent OOM
+                if (passes.size() > 8) {
+                    std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
+                        return a.score > b.score;
+                    });
+                    passes.resize(8);
+                }
+                
+                for (auto& p : passes) {
+                    p.satSelected = true;
+                    p.satIndex = i;
+                }
+                allPasses.insert(allPasses.end(), passes.begin(), passes.end());
+                completedCount++;
                 predictionProgress = (completedCount * 100) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
+                if (predictionProgress > 100) predictionProgress = 100;
             }
+            predictionProgress = 100;
         }
         
         if (triggerPrediction || cancelPrediction) {
