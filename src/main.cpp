@@ -275,6 +275,9 @@ void autoAssignIconAndColor(const String& name, SatIconType& icon, uint16_t& col
     else {
         icon = ICON_SATELLITE;
         color = TFT_WHITE;
+    }
+}
+
 static double getGeoSlotLongitude(uint32_t noradId, const String& slotStr) {
     if (noradId == 49125) return 101.4;
     if (noradId == 52235) return 125.0;
