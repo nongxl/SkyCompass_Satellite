@@ -164,8 +164,8 @@ static const char* const t_en[TXT_MAX] = {
     "WiFi Disconnected.",
     "Refreshing GP JSON...",
     "Parse Cache Failed!",
-    "Update Success: Cache overwritten!",
-    "Cached (<2h old). Press C to force.",
+    "Update Success: Data updated!",
+    "Data is fresh (<2h old). Press C to force.",
     "Update Failed: ",
     
     // Tree categories in passes panel
@@ -333,8 +333,8 @@ static const char* const t_zh[TXT_MAX] = {
     "无线网络已断开。",
     "正在刷新轨道数据...",
     "解析本地缓存失败！",
-    "更新成功：缓存已被覆写！",
-    "检测到2小时内缓存，按 C 键强制更新。",
+    "更新成功：数据已最新！",
+    "数据已最新（2小时内已同步），按 C 键强刷。",
     "更新失败：",
     
     // Tree categories in passes panel

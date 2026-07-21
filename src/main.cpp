@@ -5179,9 +5179,11 @@ void loop() {
                             drawSatSelectPage();
                             pushCanvasWithFilter();
                         } else if (!recentLaunchDownloading) {
-                            if (LittleFS.exists("/recent_last_update.txt")) {
-                                LittleFS.remove("/recent_last_update.txt");
-                                LOG_I("APP", "Bypassed rate limiting via physical W/C key");
+                            if (justC) {
+                                if (LittleFS.exists("/recent_last_update.txt")) {
+                                    LittleFS.remove("/recent_last_update.txt");
+                                    LOG_I("APP", "Bypassed rate limiting via physical C key");
+                                }
                             }
                             manualWifiToggle = true;
                             recentLaunchDownloading = true;
