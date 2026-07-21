@@ -1790,22 +1790,19 @@ void recentLaunchNetworkTaskImpl() {
         String pass = "";
         HalWifi::loadCredentials(ssid, pass);
         
-        if (ssid.length() == 0) {
-            recentLaunchErrorMsg = "No WiFi Configured!";
+        if (ssid.length() > 0) {
+            recentLaunchErrorMsg = "Connecting WiFi...";
+            HalWifi::begin(ssid.c_str(), pass.c_str());
+        }
+        
+        // If auto-connect with saved credentials failed or no credentials saved -> pop up WiFi setup screen
+        if (!HalWifi::isConnected()) {
+            recentLaunchErrorMsg = "WiFi Connect Failed!";
             recentLaunchDownloading = false;
             g_wifiSetupReturnState = STATE_SAT_SELECT;
             appState = STATE_WIFI_SETUP;
             wifiIsScanning = true;
             wifiIsInputtingPassword = false;
-            return;
-        }
-        
-        recentLaunchErrorMsg = "Connecting WiFi...";
-        HalWifi::begin(ssid.c_str(), pass.c_str());
-        
-        if (!HalWifi::isConnected()) {
-            recentLaunchErrorMsg = "WiFi Connect Failed!";
-            recentLaunchDownloading = false;
             return;
         }
     }
@@ -2140,10 +2137,14 @@ void networkTaskImpl(void* parameter) {
     HalWifi::begin(ssid.c_str(), pass.c_str());
     
     if (!HalWifi::isConnected()) {
-        LOG_I("APP", "WiFi connection failed. Entering offline mode.");
+        LOG_I("APP", "WiFi connection failed. Opening setup screen.");
         if (appState == STATE_SAT_SELECT) {
             downloadErrorMsg = "WiFi Connection Failed!";
         }
+        g_wifiSetupReturnState = appState;
+        appState = STATE_WIFI_SETUP;
+        wifiIsScanning = true;
+        wifiIsInputtingPassword = false;
         g_wifiConnecting = false;
         g_dataUpdating = false;
         g_timeSynced = true;
