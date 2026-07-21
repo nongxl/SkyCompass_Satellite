@@ -122,6 +122,11 @@ bool TLEUpdater::loadFromCache(int noradId, TLEData& outTle, uint32_t& outTimest
     outTle.line2.trim();
     
     file.close();
+    if (outTle.line1 == "404 NOT FOUND") {
+        outTle.line1 = "";
+        outTle.line2 = "";
+        return true; // Cache hit, suppresses CelesTrak retries for 7 days
+    }
     return (outTle.line1.length() > 0 && outTle.line2.length() > 0);
 }
 

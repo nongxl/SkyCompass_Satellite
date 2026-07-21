@@ -1209,8 +1209,8 @@ void predictorTask(void* parameter) {
                 
                 if (!isSelected) continue;
                 
-                // GEO broadcast satellites are stationary (no pass events) — skip prediction
-                if (type == SAT_TYPE_GEO_TV) {
+                // GEO broadcast satellites & Deep space probes (no TLE on CelesTrak) — skip prediction
+                if (type == SAT_TYPE_GEO_TV || type == SAT_TYPE_DEEP_SPACE) {
                     completedCount++;
                     predictionProgress = (completedCount * 100) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
                     if (predictionProgress > 100) predictionProgress = 100;
@@ -2066,8 +2066,8 @@ void networkTaskImpl(void* parameter) {
 
         for (int i = 0; i < NUM_SATELLITES; i++) {
             uint32_t noradId = g_satellites[i].noradId;
-            if (g_satellites[i].type == SAT_TYPE_GEO_TV) {
-                // GEO broadcast satellites use static geometry calculation — no network fetch needed
+            if (g_satellites[i].type == SAT_TYPE_GEO_TV || g_satellites[i].type == SAT_TYPE_DEEP_SPACE) {
+                // GEO broadcast satellites and Deep Space / Interplanetary / Classified probes skip CelesTrak GP queries
                 continue;
             }
             if (noradId == 50463) {
@@ -2148,11 +2148,19 @@ void networkTaskImpl(void* parameter) {
                     if (firstFetchError.length() == 0) {
                         firstFetchError = (httpCode < 0) ? "Connection Refused" : ("HTTP " + String(httpCode));
                     }
-                    // Refresh timestamp of existing cache (if any) to prevent infinite retry on next boot
+                    // Refresh timestamp of existing cache (if any) to prevent infinite retry on next boot.
+                    // If no cache exists, save a 404 failure record so we don't query CelesTrak again for 7 days!
                     TLEData cached;
                     uint32_t cacheTime = 0;
                     if (TLEUpdater::loadFromCachePublic(noradId, cached, cacheTime)) {
                         TLEUpdater::saveToCache(noradId, cached, now);
+                    } else if (httpCode == 404) {
+                        TLEData failTle;
+                        failTle.name = g_satellites[i].name;
+                        failTle.line1 = "404 NOT FOUND";
+                        failTle.line2 = "404 NOT FOUND";
+                        TLEUpdater::saveToCache(noradId, failTle, now);
+                        LOG_I("APP", "Saved 404 failure cache for NORAD %u to suppress redundant queries on future boots.", noradId);
                     }
                 }
                 vTaskDelay(pdMS_TO_TICKS(300)); // 300ms delay to prevent CelesTrak WAF/rate-limiting

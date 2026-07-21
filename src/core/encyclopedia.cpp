@@ -567,7 +567,7 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         TFT_GOLD,
         0,
         10.0,
-        SAT_TYPE_VISUAL,
+        SAT_TYPE_DEEP_SPACE,
         "",
         "",
         "",
@@ -589,7 +589,7 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         TFT_ORANGE,
         0,
         10.0,
-        SAT_TYPE_VISUAL,
+        SAT_TYPE_DEEP_SPACE,
         "",
         "",
         "",
@@ -611,7 +611,7 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         TFT_PINK,
         0,
         10.0,
-        SAT_TYPE_VISUAL,
+        SAT_TYPE_DEEP_SPACE,
         "",
         "",
         "",
@@ -633,7 +633,7 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         TFT_LIGHTGRAY,
         0,
         4.0,
-        SAT_TYPE_VISUAL,
+        SAT_TYPE_DEEP_SPACE,
         "",
         "",
         "",
@@ -694,7 +694,7 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LHCP / RHCP",
         "101.4°E",
         "LNB: 10750 MHz",
-        true  // defaultSelected
+        false  // defaultSelected
     },
     // 52235 Chinasat 6D
     {
@@ -713,7 +713,7 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "H / V Linear",
         "125.0°E",
         "LNB: 5150 MHz",
-        true  // defaultSelected
+        false  // defaultSelected
     },
     // 45863 APStar 6D
     {
