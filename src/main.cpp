@@ -3417,17 +3417,9 @@ void drawSatSelectPage() {
             if (isTracking) {
                 char radioBuf[128];
                 if (isZh) {
-                    if (el < 0) {
-                        snprintf(radioBuf, sizeof(radioBuf), "\n方位角: %03.0f°  仰角: 地平下%d°", az, (int)abs((int)el));
-                    } else {
-                        snprintf(radioBuf, sizeof(radioBuf), "\n方位角: %03.0f°  仰角: %02.0f°", az, el);
-                    }
+                    snprintf(radioBuf, sizeof(radioBuf), "\n方位角: %03.0f°  仰角: %02.0f°", az, el);
                 } else {
-                    if (el < 0) {
-                        snprintf(radioBuf, sizeof(radioBuf), "\nAz: %03.0f°  El: -%d° (Below)", az, (int)abs((int)el));
-                    } else {
-                        snprintf(radioBuf, sizeof(radioBuf), "\nAz: %03.0f°  El: %02.0f°", az, el);
-                    }
+                    snprintf(radioBuf, sizeof(radioBuf), "\nAz: %03.0f°  El: %02.0f°", az, el);
                 }
                 specBlock += String(radioBuf);
             }
@@ -6479,18 +6471,10 @@ void loop() {
                         char elBuf[32];
                         if (isZh) {
                             sprintf(azBuf, "方位: %03d°", (int)az);
-                            if (el < 0) {
-                                sprintf(elBuf, "仰角: 地平下%d°", (int)abs((int)el));
-                            } else {
-                                sprintf(elBuf, "仰角: %02d°", (int)el);
-                            }
+                            sprintf(elBuf, "仰角: %02d°", (int)el);
                         } else {
                             sprintf(azBuf, "Az : %03d°", (int)az);
-                            if (el < 0) {
-                                sprintf(elBuf, "El : -%d° (Below)", (int)abs((int)el));
-                            } else {
-                                sprintf(elBuf, "El : %02d°", (int)el);
-                            }
+                            sprintf(elBuf, "El : %02d°", (int)el);
                         }
                         
                         if (currentType == SAT_TYPE_SPACE_STATION && currentNoradId == 25544) {
