@@ -3914,7 +3914,7 @@ void drawSatSelectPage() {
     
     // Draw List Selection Page Help Overlay
     if (showListHelp) {
-        uint16_t w = 216, h = 114;
+        uint16_t w = 216, h = 126;
         int x = (width - w) / 2;
         int y = (height - h) / 2;
         
@@ -3955,19 +3955,21 @@ void drawSatSelectPage() {
             }
         };
         
-        int ty = y + 22;
+        int ty = y + 20;
         if (currentSatTab == TAB_ENCYCLOPEDIA) {
             drawHotKey(isZh ? "移动[ ; / . ]" : "Move[ ; / . ]", ';', x + 8, ty);
             drawHotKey(isZh ? "切分类[/]" : "Tab[/]", '/', x + 112, ty); ty += 14;
             
-            drawHotKey(isZh ? "勾选[Enter]" : "Select[Enter]", 'e', x + 8, ty);
-            drawHotKey(isZh ? "删除自定[d]" : "Del Custom[d]", 'd', x + 112, ty); ty += 14;
+            drawHotKey(isZh ? "详情翻页[ [/] ]" : "Page[ [/] ]", '[', x + 8, ty);
+            drawHotKey(isZh ? "勾选[Enter]" : "Select[Enter]", 'e', x + 112, ty); ty += 14;
             
-            drawHotKey(isZh ? "刷新星历[c]" : "Refresh GP[c]", 'c', x + 8, ty);
-            drawHotKey(isZh ? "开关WiFi[w]" : "WiFi[w]", 'w', x + 112, ty); ty += 14;
+            drawHotKey(isZh ? "删除自定[d]" : "Del Custom[d]", 'd', x + 8, ty);
+            drawHotKey(isZh ? "刷新星历[c]" : "Refresh GP[c]", 'c', x + 112, ty); ty += 14;
             
-            drawHotKey(isZh ? "主题模式[Tab]" : "Theme[Tab]", 't', x + 8, ty);
-            drawHotKey(isZh ? "返回地图[Esc]" : "Exit[Esc]", 'x', x + 112, ty); ty += 14;
+            drawHotKey(isZh ? "开关WiFi[w]" : "WiFi[w]", 'w', x + 8, ty);
+            drawHotKey(isZh ? "主题模式[Tab]" : "Theme[Tab]", 't', x + 112, ty); ty += 14;
+            
+            drawHotKey(isZh ? "返回地图[Esc]" : "Exit[Esc]", 'x', x + 8, ty); ty += 14;
         } else {
             if (recentLaunchInObjectsView) {
                 drawHotKey(isZh ? "清单翻页[ [/] ]" : "Page[ [/] ]", '[', x + 8, ty);
