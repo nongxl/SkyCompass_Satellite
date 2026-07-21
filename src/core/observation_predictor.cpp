@@ -129,14 +129,16 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
     uint32_t t = startTime - 20 * 60; // 往前退 20 分钟以捕获正在发生的过境
     bool isRewinding = false;
     uint32_t rewindAnchor = 0;
+    uint32_t lastRewindAnchor = 0;
     
     while (t <= endTime) {
         if (triggerPrediction || cancelPrediction) return passes;
         
         iterations++;
-        // Reset Watchdog Timer periodically and yield to Idle Task to prevent starvation
-        if ((iterations & 31) == 0) {
-            vTaskDelay(pdMS_TO_TICKS(2));
+        // Reset Watchdog Timer periodically and yield to Idle Task to prevent starvation.
+        // Note: pdMS_TO_TICKS(2) was 0 ticks (a no-op). Using 1 tick ensures IDLE0 runs and feeds the WDT.
+        if ((iterations & 63) == 0) {
+            vTaskDelay(1);
         }
         
         double tx, ty, tz;
@@ -165,11 +167,14 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                 }
                 
                 // Potential pass candidate: rewind and start fine calculation (10s intervals)
-                rewindAnchor = t;
-                t -= stepSeconds;
-                stepSeconds = 10;
-                isRewinding = true;
-                continue;
+                if (t > lastRewindAnchor) {
+                    rewindAnchor = t;
+                    lastRewindAnchor = t;
+                    t -= stepSeconds;
+                    stepSeconds = 10;
+                    isRewinding = true;
+                    continue;
+                }
             }
             
             // Fine-grained step calculation: compute real elevation
