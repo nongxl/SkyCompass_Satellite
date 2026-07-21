@@ -1753,6 +1753,9 @@ void recentLaunchNetworkTaskImpl() {
         if (ssid.length() == 0) {
             recentLaunchErrorMsg = "No WiFi Configured!";
             recentLaunchDownloading = false;
+            appState = STATE_WIFI_SETUP;
+            wifiIsScanning = true;
+            wifiIsInputtingPassword = false;
             return;
         }
         
@@ -1762,6 +1765,9 @@ void recentLaunchNetworkTaskImpl() {
         if (!HalWifi::isConnected()) {
             recentLaunchErrorMsg = "WiFi Connect Failed!";
             recentLaunchDownloading = false;
+            appState = STATE_WIFI_SETUP;
+            wifiIsScanning = true;
+            wifiIsInputtingPassword = false;
             return;
         }
     }

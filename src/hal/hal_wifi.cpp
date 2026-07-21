@@ -12,9 +12,10 @@ void HalWifi::begin(const char* ssid, const char* password) {
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, password);
     
-    // Wait up to 15 seconds for connection
+    // Wait up to 6 seconds for connection (12 retries x 500ms).
+    // Fast response when AP is unavailable or out of range in unfamiliar networks.
     int retries = 0;
-    while (WiFi.status() != WL_CONNECTED && retries < 30) {
+    while (WiFi.status() != WL_CONNECTED && retries < 12) {
         delay(500);
         log_i(".");
         retries++;
