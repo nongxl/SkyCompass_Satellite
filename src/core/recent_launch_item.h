@@ -47,6 +47,7 @@ struct SatRealtimeCache {
     bool lastGeoValid = false;
     bool lastInShadow = false;
     bool isVisible = false;
+    OrbitCache cache;
 };
 
 enum SatSelectTab {

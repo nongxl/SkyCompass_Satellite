@@ -5861,25 +5861,32 @@ void loop() {
         }
         
         // Always compute and load selected encyclopedia satellites
+        static String s_encSatNameCache[MAX_SATELLITES];
         for (int i = 0; i < NUM_SATELLITES; i++) {
-                if (!g_satellites[i].selected) {
-                    g_satCaches[i].lastGeoValid = false;
-                    g_satCaches[i].isVisible = false;
-                    continue;
-                }
-                
                 lockSatMutex();
+                bool selectedCopy = g_satellites[i].selected;
                 SGP4Calc calcCopy = g_satellites[i].calc;
                 String nameCopy = g_satellites[i].name;
                 SatIconType iconCopy = g_satellites[i].iconType;
                 uint16_t colorCopy = g_satellites[i].color;
+                SatelliteType typeCopy = g_satellites[i].type;
+                uint32_t noradIdCopy = g_satellites[i].noradId;
+                String uplinkFreqCopy = g_satellites[i].uplinkFreq;
                 unlockSatMutex();
+
+                if (!selectedCopy) {
+                    g_satCaches[i].lastGeoValid = false;
+                    g_satCaches[i].isVisible = false;
+                    continue;
+                }
+
+                s_encSatNameCache[i] = nameCopy;
 
                 bool runCalculation = (timeChanged || !g_satCaches[i].lastGeoValid);
                 
                 if (runCalculation) {
-                    if (g_satellites[i].type == SAT_TYPE_GEO_TV) {
-                        double slotLon = getGeoSlotLongitude(g_satellites[i].noradId, g_satellites[i].uplinkFreq);
+                    if (typeCopy == SAT_TYPE_GEO_TV) {
+                        double slotLon = getGeoSlotLongitude(noradIdCopy, uplinkFreqCopy);
                         GeodeticCoord geo;
                         ECEFCoord ecef;
                         TopocentricCoord topo;
@@ -5956,7 +5963,7 @@ void loop() {
                         float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
                         bool isNight = sun_alt < -6.0f;
                         
-                        if (g_satellites[i].type == SAT_TYPE_GEO_TV) {
+                        if (typeCopy == SAT_TYPE_GEO_TV) {
                             isVisible = true;
                         } else if (isSatViewMode) {
                             isVisible = !g_satCaches[i].lastInShadow;
@@ -5968,7 +5975,7 @@ void loop() {
                     
                     if (shouldLogNow && appState == STATE_MAIN) {
                         log_i("[%s] Lat: %.2f, Lon: %.2f, Alt: %.1f km, Shadow: %s, Visible: %s", 
-                              g_satellites[i].name.c_str(), 
+                              s_encSatNameCache[i].c_str(), 
                               g_satCaches[i].lastGeo.lat, 
                               g_satCaches[i].lastGeo.lon, 
                               g_satCaches[i].lastGeo.alt, 
@@ -5977,7 +5984,7 @@ void loop() {
                     }
                     
                     SatRenderData data;
-                    data.name = g_satellites[i].name.c_str();
+                    data.name = s_encSatNameCache[i].c_str();
                     data.iconType = iconCopy;
                     data.currentPos = g_satCaches[i].lastGeo;
                     data.color = colorCopy;
@@ -5985,22 +5992,22 @@ void loop() {
                     
                     // Visual effects fields
                     data.isSelected = (isSatViewMode && (focusSatIndex == i));
-                    data.calc = &(g_satellites[i].calc);
+                    data.calc = nullptr; // Do not pass direct SGP4Calc pointer across threads
                     data.simTime = simTime;
                     
                     if (appState == STATE_MAIN) {
-                        if (g_satellites[i].type == SAT_TYPE_GEO_TV) {
-                            double slotLon = getGeoSlotLongitude(g_satellites[i].noradId, g_satellites[i].uplinkFreq);
-                            g_satellites[i].cache.past.clear();
-                            g_satellites[i].cache.future.clear();
+                        if (typeCopy == SAT_TYPE_GEO_TV) {
+                            double slotLon = getGeoSlotLongitude(noradIdCopy, uplinkFreqCopy);
+                            g_satCaches[i].cache.past.clear();
+                            g_satCaches[i].cache.future.clear();
                             GeodeticCoord p = {0.0, slotLon, 35785.863};
-                            g_satellites[i].cache.past.push_back(p);
-                            g_satellites[i].cache.future.push_back(p);
+                            g_satCaches[i].cache.past.push_back(p);
+                            g_satCaches[i].cache.future.push_back(p);
                         } else {
-                            calculateOrbit(calcCopy, simTime, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding, (isSatViewMode && (focusSatIndex == i) && !g_recentLaunchFocusMode));
+                            calculateOrbit(calcCopy, simTime, g_satCaches[i].cache, orbitsCalculatedThisFrame, isFastForwarding, (isSatViewMode && (focusSatIndex == i) && !g_recentLaunchFocusMode));
                         }
-                        data.pastOrbit = &(g_satellites[i].cache.past);
-                        data.futureOrbit = &(g_satellites[i].cache.future);
+                        data.pastOrbit = &(g_satCaches[i].cache.past);
+                        data.futureOrbit = &(g_satCaches[i].cache.future);
                     } else {
                         data.pastOrbit = nullptr;
                         data.futureOrbit = nullptr;
