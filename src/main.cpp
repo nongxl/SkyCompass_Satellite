@@ -3389,7 +3389,7 @@ void drawSatSelectPage() {
                                  "\nCOSPAR: %s\n"
                                  "Period: %.2fh\n"
                                  "Speed: %.2f km/s\n"
-                                 "Incl: %.2f deg\n"
+                                 "Incl: %.2f°\n"
                                  "Alt: %.0f/%.0f km",
                                  cospar.length() > 0 ? cospar.c_str() : "N/A",
                                  periodMin / 60.0f,
@@ -3401,7 +3401,7 @@ void drawSatSelectPage() {
                                  "\nCOSPAR: %s\n"
                                  "Period: %.1f min\n"
                                  "Speed: %.2f km/s\n"
-                                 "Incl: %.2f deg\n"
+                                 "Incl: %.2f°\n"
                                  "Alt: %.0f/%.0f km",
                                  cospar.length() > 0 ? cospar.c_str() : "N/A",
                                  periodMin,
@@ -3419,7 +3419,7 @@ void drawSatSelectPage() {
                 if (isZh) {
                     snprintf(radioBuf, sizeof(radioBuf), "\n方位角: %03.0f°  仰角: %02.0f°", az, el);
                 } else {
-                    snprintf(radioBuf, sizeof(radioBuf), "\nAz: %03.0f deg  El: %02.0f deg", az, el);
+                    snprintf(radioBuf, sizeof(radioBuf), "\nAz: %03.0f°  El: %02.0f°", az, el);
                 }
                 specBlock += String(radioBuf);
             }
@@ -6143,7 +6143,7 @@ void loop() {
                     earth_renderer->getCanvas()->drawString(I18N::get(TXT_PASS_MAX_EL), 65, 70);
                     earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
                     int maxElX = (I18N::getLanguage() == LANG_ZH) ? 120 : 100;
-                    earth_renderer->getCanvas()->drawString((String((int)p.maxElevation) + "deg").c_str(), maxElX, 70);
+                    earth_renderer->getCanvas()->drawString((String((int)p.maxElevation) + "°").c_str(), maxElX, 70);
                     
                     // Reason: (y=82)
                     earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
