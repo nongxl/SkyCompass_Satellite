@@ -100,6 +100,8 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
     HTTPClient http;
     http.setTimeout(10000);
     http.setConnectTimeout(5000);
+    http.setUserAgent("Mozilla/5.0 (ESP32-Cardputer; SkyCompass Satellite Tracker)");
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     char url[128];
     sprintf(url, "http://celestrak.org/NORAD/elements/gp.php?CATNR=%u&FORMAT=json", (unsigned int)catNum);
     
@@ -111,6 +113,16 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
     }
     
     int httpCode = http.GET();
+    if (httpCode < 0) {
+        http.end();
+        delay(1000);
+        if (sharedClient) {
+            http.begin(*sharedClient, url);
+        } else {
+            http.begin(client, url);
+        }
+        httpCode = http.GET();
+    }
     if (outHttpCode) *outHttpCode = httpCode;
     bool success = false;
     if (httpCode == HTTP_CODE_OK) {
@@ -198,15 +210,35 @@ static void processRecentLaunchItem(std::vector<RecentLaunchItem>& tempLaunches,
 // Download Recent Launches and save to JSONL
 bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& tempLaunches, int* outHttpCode) {
     if (outHttpCode) *outHttpCode = 0;
-    // Use plain HTTP to save TLS heap. CelesTrak supports HTTP.
+
+    // 再次确认 Wi-Fi DNS 服务器是否分配完成
+    if (WiFi.status() == WL_CONNECTED && WiFi.dnsIP() == IPAddress(0, 0, 0, 0)) {
+        int waitDns = 0;
+        while (WiFi.dnsIP() == IPAddress(0, 0, 0, 0) && waitDns < 15) {
+            delay(200);
+            waitDns++;
+        }
+    }
+
     WiFiClient client;
     HTTPClient http;
     http.setTimeout(60000);
     http.setConnectTimeout(30000);
+    http.setUserAgent("Mozilla/5.0 (ESP32-Cardputer; SkyCompass Satellite Tracker)");
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     
     String url = "http://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=json";
     http.begin(client, url);
     int httpCode = http.GET();
+
+    // 如果网络波动导致初次 DNS 或连接失败，自动重试一次
+    if (httpCode < 0) {
+        http.end();
+        delay(1500);
+        http.begin(client, url);
+        httpCode = http.GET();
+    }
+
     if (outHttpCode) *outHttpCode = httpCode;
     
     if (httpCode != HTTP_CODE_OK) {

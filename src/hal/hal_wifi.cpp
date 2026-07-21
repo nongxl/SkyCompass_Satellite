@@ -21,8 +21,13 @@ void HalWifi::begin(const char* ssid, const char* password) {
     }
     
     if (WiFi.status() == WL_CONNECTED) {
-        LOG_I("APP", "\nWiFi Connected!");
-        log_i("IP Address: %s", WiFi.localIP().toString().c_str());
+        // 等待路由器 DHCP 分配有效 IP 地址与 DNS 服务器地址，防止后续 DNS 解析失败
+        int dhcpRetries = 0;
+        while ((WiFi.localIP() == IPAddress(0, 0, 0, 0) || WiFi.dnsIP() == IPAddress(0, 0, 0, 0)) && dhcpRetries < 20) {
+            delay(200);
+            dhcpRetries++;
+        }
+        LOG_I("APP", "\nWiFi Connected! IP: %s, DNS: %s", WiFi.localIP().toString().c_str(), WiFi.dnsIP().toString().c_str());
     } else {
         LOG_I("APP", "\nWiFi Connection Failed (Timeout).");
     }

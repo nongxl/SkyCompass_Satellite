@@ -3912,42 +3912,66 @@ void drawSatSelectPage() {
         canvas->setTextSize(1);
         canvas->drawString(isZh ? "--- 列表快捷键指南 ---" : "--- Setup Shortcuts ---", x + 35, y + 5);
 
-        auto drawStringHelper = [&](const String& str, int dx, int dy) {
-            canvas->setTextColor(TFT_LIGHTGRAY);
-            canvas->drawString(str, dx, dy);
+        auto drawHotKey = [&](const char* word, char keyChar, int dx, int dy) {
+            int cx = dx;
+            bool highlighted = false;
+            int i = 0;
+            while (word[i] != '\0') {
+                int charLen = 1;
+                unsigned char head = (unsigned char)word[i];
+                if (head >= 0xF0) charLen = 4;
+                else if (head >= 0xE0) charLen = 3;
+                else if (head >= 0xC0) charLen = 2;
+                
+                char cstr[5] = {0};
+                for (int j = 0; j < charLen && word[i + j] != '\0'; j++) {
+                    cstr[j] = word[i + j];
+                }
+                
+                if (charLen == 1 && !highlighted && tolower((unsigned char)cstr[0]) == tolower((unsigned char)keyChar) && keyChar != '\0') {
+                    canvas->setTextColor(TFT_YELLOW);
+                    highlighted = true;
+                } else {
+                    canvas->setTextColor(TFT_LIGHTGRAY);
+                }
+                
+                canvas->drawString(cstr, cx, dy);
+                cx += canvas->textWidth(cstr);
+                i += charLen;
+            }
         };
         
         int ty = y + 22;
         if (currentSatTab == TAB_ENCYCLOPEDIA) {
-            drawStringHelper(isZh ? "移动: ; / ." : "Move: ; / .", x + 8, ty);
-            drawStringHelper(isZh ? "切分类: /" : "Tab: /", x + 112, ty); ty += 14;
+            drawHotKey(isZh ? "移动[ ; / . ]" : "Move[ ; / . ]", ';', x + 8, ty);
+            drawHotKey(isZh ? "切分类[/]" : "Tab[/]", '/', x + 112, ty); ty += 14;
             
-            drawStringHelper(isZh ? "勾选: Enter" : "Select: Enter", x + 8, ty);
-            drawStringHelper(isZh ? "删除自定: d" : "Del Custom: d", x + 112, ty); ty += 14;
+            drawHotKey(isZh ? "勾选[Enter]" : "Select[Enter]", 'e', x + 8, ty);
+            drawHotKey(isZh ? "删除自定[d]" : "Del Custom[d]", 'd', x + 112, ty); ty += 14;
             
-            drawStringHelper(isZh ? "刷新星历: c" : "Refresh GP: c", x + 8, ty);
-            drawStringHelper(isZh ? "开关WiFi: w" : "WiFi: w", x + 112, ty); ty += 14;
+            drawHotKey(isZh ? "刷新星历[c]" : "Refresh GP[c]", 'c', x + 8, ty);
+            drawHotKey(isZh ? "开关WiFi[w]" : "WiFi[w]", 'w', x + 112, ty); ty += 14;
             
-            drawStringHelper(isZh ? "主题模式: Tab" : "Theme: Tab", x + 8, ty);
-            drawStringHelper(isZh ? "返回地图: Esc" : "Exit: Esc", x + 112, ty); ty += 14;
+            drawHotKey(isZh ? "主题模式[Tab]" : "Theme[Tab]", 't', x + 8, ty);
+            drawHotKey(isZh ? "返回地图[Esc]" : "Exit[Esc]", 'x', x + 112, ty); ty += 14;
         } else {
             if (recentLaunchInObjectsView) {
-                drawStringHelper(isZh ? "清单翻页: [ / ]" : "Page: [ / ]", x + 8, ty);
-                drawStringHelper(isZh ? "主题模式: Tab" : "Theme: Tab", x + 112, ty); ty += 14;
+                drawHotKey(isZh ? "清单翻页[ [/] ]" : "Page[ [/] ]", '[', x + 8, ty);
+                drawHotKey(isZh ? "主题模式[Tab]" : "Theme[Tab]", 't', x + 112, ty); ty += 14;
 
-                drawStringHelper(isZh ? "退出清单: Esc / o" : "Back List: Esc / o", x + 8, ty); ty += 14;
+                drawHotKey(isZh ? "退出清单[Esc/o]" : "Back List[Esc/o]", 'o', x + 8, ty); ty += 14;
             } else {
-                drawStringHelper(isZh ? "移动: ; / ." : "Move: ; / .", x + 8, ty);
-                drawStringHelper(isZh ? "切分类: /" : "Tab: /", x + 112, ty); ty += 14;
+                drawHotKey(isZh ? "移动[ ; / . ]" : "Move[ ; / . ]", ';', x + 8, ty);
+                drawHotKey(isZh ? "切分类[/]" : "Tab[/]", '/', x + 112, ty); ty += 14;
                 
-                drawStringHelper(isZh ? "勾选: Enter" : "Select: Enter", x + 8, ty);
-                drawStringHelper(isZh ? "展开子清单: o" : "Sub-List: o", x + 112, ty); ty += 14;
+                drawHotKey(isZh ? "勾选[Enter]" : "Select[Enter]", 'e', x + 8, ty);
+                drawHotKey(isZh ? "展开清单[o]" : "Sub-List[o]", 'o', x + 112, ty); ty += 14;
                 
-                drawStringHelper(isZh ? "云端更新: w / c" : "Update: w / c", x + 8, ty);
-                drawStringHelper(isZh ? "开关WiFi: w" : "WiFi: w", x + 112, ty); ty += 14;
+                drawHotKey(isZh ? "云端更新[w/c]" : "Update[w/c]", 'c', x + 8, ty);
+                drawHotKey(isZh ? "开关WiFi[w]" : "WiFi[w]", 'w', x + 112, ty); ty += 14;
                 
-                drawStringHelper(isZh ? "主题模式: Tab" : "Theme: Tab", x + 8, ty);
-                drawStringHelper(isZh ? "返回地图: Esc" : "Exit: Esc", x + 112, ty); ty += 14;
+                drawHotKey(isZh ? "主题模式[Tab]" : "Theme[Tab]", 't', x + 8, ty);
+                drawHotKey(isZh ? "返回地图[Esc]" : "Exit[Esc]", 'x', x + 112, ty); ty += 14;
             }
         }
         
@@ -4148,6 +4172,7 @@ void loop() {
         static bool lastD = false;
         static bool lastTab = false;
         static bool lastL = false;
+        static bool lastSpace = false;
 
         bool currSemi = M5Cardputer.Keyboard.isKeyPressed(';');
         bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
@@ -4172,6 +4197,7 @@ void loop() {
         bool currD = M5Cardputer.Keyboard.isKeyPressed('d') || M5Cardputer.Keyboard.isKeyPressed('D');
         bool currTab = M5Cardputer.Keyboard.isKeyPressed(KEY_TAB);
         bool currL = M5Cardputer.Keyboard.isKeyPressed('l') || M5Cardputer.Keyboard.isKeyPressed('L');
+        bool currSpace = M5Cardputer.Keyboard.isKeyPressed(' ');
 
         bool justSemi = currSemi && !lastSemi;
         bool justDot = currDot && !lastDot;
@@ -4196,14 +4222,15 @@ void loop() {
         bool justD = currD && !lastD;
         bool justTab = currTab && !lastTab;
         bool justL = currL && !lastL;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justTab || justL;
+        bool justSpace = currSpace && !lastSpace;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justTab || justL || justSpace;
 
         if (showHelp) {
             if (millis() < 3000) {
                 showHelp = false;
             } else if (hasAnyKeyJustPressed) {
                 showHelp = false;
-                currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = currTab = false;
+                currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = currTab = currL = currSpace = false;
                 justSemi = justDot = justComma = justSlash = justO = justV = justEnter = justBack = justEsc = justTick = justBracketL = justBracketR = justC = justR = justW = justS = justH = justG = justY = justN = justD = justTab = false;
                 hasAnyKeyJustPressed = false;
             }
@@ -4593,6 +4620,12 @@ void loop() {
                                 baseRoll = att.roll;
                             }
                         }
+                    }
+                } else if (justSpace) {
+                    if (attitude && imu) {
+                        AttitudeData att = attitude->getAttitude();
+                        basePitch = att.pitch;
+                        baseRoll = att.roll;
                     }
                 } else if (justSemi) {
                     if (isSatViewMode && !showRecommendations) {
@@ -5111,6 +5144,7 @@ void loop() {
         lastD = currD;
         lastTab = currTab;
         lastL = currL;
+        lastSpace = currSpace;
         
         if (appState == STATE_WIFI_SETUP) {
             drawWiFiSetupPage();
@@ -5869,16 +5903,17 @@ void loop() {
         
         if (showHelp && appState == STATE_MAIN) {
             auto canvas = earth_renderer->getCanvas();
-            uint16_t w = 200, h = 120;
+            uint16_t w = 216, h = 114;
             int x = (canvas->width() - w) / 2;
             int y = (canvas->height() - h) / 2;
             
             canvas->fillRect(x, y, w, h, canvas->color565(20, 30, 40));
             canvas->drawRect(x, y, w, h, TFT_LIGHTGRAY);
             
+            bool isZh = (I18N::getLanguage() == LANG_ZH);
             canvas->setTextColor(TFT_WHITE);
             canvas->setTextSize(1);
-            canvas->drawString(I18N::get(TXT_HELP_TITLE), x + 25, y + 5);
+            canvas->drawString(I18N::get(TXT_HELP_TITLE), x + 35, y + 5);
             
             auto drawHotKey = [&](const char* word, char keyChar, int dx, int dy) {
                 int cx = dx;
@@ -5896,7 +5931,8 @@ void loop() {
                         cstr[j] = word[i + j];
                     }
                     
-                    if (charLen == 1 && !highlighted && tolower(cstr[0]) == tolower(keyChar) && keyChar != '\0') {
+                    if ((charLen == 1 && !highlighted && tolower((unsigned char)cstr[0]) == tolower((unsigned char)keyChar) && keyChar != '\0') ||
+                        (keyChar == ' ' && !highlighted && (strcmp(cstr, "Spc") == 0 || strcmp(cstr, " ") == 0))) {
                         canvas->setTextColor(TFT_YELLOW);
                         highlighted = true;
                     } else {
@@ -5910,25 +5946,25 @@ void loop() {
             };
 
             int ty = y + 20;
-            drawHotKey(I18N::get(TXT_HELP_BRIGHT), '[', x + 5, ty);
-            drawHotKey(I18N::get(TXT_HELP_GNSS), 'g', x + 105, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_BRIGHT), '[', x + 8, ty);
+            drawHotKey(I18N::get(TXT_HELP_GNSS), 'g', x + 112, ty); ty += 13;
             
-            drawHotKey(I18N::get(TXT_HELP_HELP), 'h', x + 5, ty);
-            drawHotKey(I18N::get(TXT_HELP_HUD), 'd', x + 105, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_HELP), 'h', x + 8, ty);
+            drawHotKey(I18N::get(TXT_HELP_HUD), 'b', x + 112, ty); ty += 13;
             
-            drawHotKey(I18N::get(TXT_HELP_LOCK), 'l', x + 5, ty);
-            drawHotKey(I18N::get(TXT_HELP_PASSLIST), 'e', x + 105, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_LOCK), ' ', x + 8, ty);
+            drawHotKey(I18N::get(TXT_HELP_PASSLIST), 'e', x + 112, ty); ty += 13;
             
-            drawHotKey(I18N::get(TXT_HELP_SATS), 's', x + 5, ty);
-            drawHotKey(I18N::get(TXT_HELP_TIME), ',', x + 105, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_SATS), 's', x + 8, ty);
+            drawHotKey(I18N::get(TXT_HELP_TIME), ',', x + 112, ty); ty += 13;
             
-            drawHotKey(I18N::get(TXT_HELP_VIEW), 'v', x + 5, ty);
-            drawHotKey(I18N::get(TXT_HELP_WIFI), 'w', x + 105, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_VIEW), 'v', x + 8, ty);
+            drawHotKey(I18N::get(TXT_HELP_WIFI), 'w', x + 112, ty); ty += 13;
             
-            drawHotKey(I18N::get(TXT_HELP_CONFIG), 'c', x + 5, ty);
-            drawHotKey(I18N::get(TXT_HELP_REALTIME), 'r', x + 105, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_CONFIG), 'c', x + 8, ty);
+            drawHotKey(I18N::get(TXT_HELP_REALTIME), 'r', x + 112, ty); ty += 13;
             
-            drawHotKey(I18N::get(TXT_HELP_TAB), 't', x + 5, ty); ty += 12;
+            drawHotKey(I18N::get(TXT_HELP_TAB), 't', x + 8, ty); ty += 13;
         }
         
         if (showRecommendations) {
