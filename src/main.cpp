@@ -226,6 +226,7 @@ bool g_repSatInitialized = false;
 String g_repSatName = "";
 uint32_t recentLaunchDownloadFinishedMs = 0;
 uint32_t downloadFinishedMs = 0;
+AppState g_wifiSetupReturnState = STATE_SAT_SELECT;
 bool showListHelp = false;
 bool isCameraTransitioning = false;
 float targetZoom = 0.95f;
@@ -1777,6 +1778,7 @@ void recentLaunchNetworkTaskImpl() {
         if (ssid.length() == 0) {
             recentLaunchErrorMsg = "No WiFi Configured!";
             recentLaunchDownloading = false;
+            g_wifiSetupReturnState = STATE_SAT_SELECT;
             appState = STATE_WIFI_SETUP;
             wifiIsScanning = true;
             wifiIsInputtingPassword = false;
@@ -1789,6 +1791,7 @@ void recentLaunchNetworkTaskImpl() {
         if (!HalWifi::isConnected()) {
             recentLaunchErrorMsg = "WiFi Connect Failed!";
             recentLaunchDownloading = false;
+            g_wifiSetupReturnState = STATE_SAT_SELECT;
             appState = STATE_WIFI_SETUP;
             wifiIsScanning = true;
             wifiIsInputtingPassword = false;
@@ -2153,6 +2156,13 @@ void networkTaskImpl(void* parameter) {
             downloadErrorMsg = "WiFi Connected! Syncing time...";
         }
         
+        // Auto-trigger recent launches download if active tab is Recent Launch
+        if (currentSatTab == TAB_RECENT_LAUNCH || recentLaunchDownloading) {
+            recentLaunchDownloading = true;
+            recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
+            xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 16384, NULL, 1, NULL, 0);
+        }
+        
         // 2. Fetch NTP
         HalWifi::syncNTPTime();
         
@@ -2368,8 +2378,10 @@ void tryLoadRecentLaunchCache() {
             return valA.second > valB.second;
         });
         
+        lockSatMutex();
         g_recentLaunches = tempLaunches;
         calculateFormationsForItems(g_recentLaunches);
+        unlockSatMutex();
         recentLaunchDownloadSuccess = true;
         recentLaunchSelectedIndex = 0;
         recentLaunchErrorMsg = "Loaded from local cache.";
@@ -3869,7 +3881,11 @@ void drawSatSelectPage() {
         }
     } else {
         // TAB_RECENT_LAUNCH Tab
-        if (!recentLaunchDownloadSuccess && g_recentLaunches.empty()) {
+        lockSatMutex();
+        std::vector<RecentLaunchItem> localLaunches = g_recentLaunches;
+        unlockSatMutex();
+        
+        if (!recentLaunchDownloadSuccess && localLaunches.empty()) {
             if (recentLaunchDownloading) {
                 canvas->setTextColor(TFT_YELLOW);
                 canvas->drawString(I18N::get(TXT_DOWNLOADING_GP_JSONS), width/2 - canvas->textWidth(I18N::get(TXT_DOWNLOADING_GP_JSONS))/2, height/2 - 10);
@@ -3897,7 +3913,7 @@ void drawSatSelectPage() {
             int itemsPerPage = showBanner ? 6 : 8;
             int itemSpacing = 12;
             int startIndex = (recentLaunchSelectedIndex / itemsPerPage) * itemsPerPage;
-            int totalItems = g_recentLaunches.size();
+            int totalItems = localLaunches.size();
             
             for (int i = 0; i < itemsPerPage && (startIndex + i) < totalItems; i++) {
                 int index = startIndex + i;
@@ -3908,12 +3924,12 @@ void drawSatSelectPage() {
                     canvas->setTextColor(TFT_LIGHTGRAY);
                 }
                 
-                String checkBox = g_recentLaunches[index].selected ? "[x]" : "[ ]";
+                String checkBox = localLaunches[index].selected ? "[x]" : "[ ]";
                 canvas->drawString(checkBox.c_str(), 4, yPos);
                 
-                String nameStr = g_recentLaunches[index].displayName;
-                if (g_recentLaunches[index].isGroup) {
-                    nameStr = nameStr + " (" + String(g_recentLaunches[index].satelliteCount) + ")";
+                String nameStr = localLaunches[index].displayName;
+                if (localLaunches[index].isGroup) {
+                    nameStr = nameStr + " (" + String(localLaunches[index].satelliteCount) + ")";
                 }
                 if (index == recentLaunchSelectedIndex) {
                     drawScrollingText(canvas, nameStr.c_str(), 28, yPos, 56, TFT_WHITE);
@@ -3941,7 +3957,7 @@ void drawSatSelectPage() {
             
             int rightX = 89;
             if (recentLaunchSelectedIndex < totalItems) {
-                RecentLaunchItem& item = g_recentLaunches[recentLaunchSelectedIndex];
+                RecentLaunchItem& item = localLaunches[recentLaunchSelectedIndex];
                 
                 uint32_t epoch = item.epoch;
                 float inclination = item.inclination;
@@ -5025,15 +5041,15 @@ void loop() {
                     if (wifiIsInputtingPassword) {
                         wifiIsInputtingPassword = false;
                     } else {
-                        appState = STATE_MAIN;
+                        appState = g_wifiSetupReturnState;
                     }
                 } else if (!wifiIsInputtingPassword && justBack) {
-                    appState = STATE_MAIN;
+                    appState = g_wifiSetupReturnState;
                 } else if (wifiIsInputtingPassword) {
                     if (justEnter) {
                         if (!wifiNetworks.empty() && wifiSelectedIndex >= 0 && wifiSelectedIndex < (int)wifiNetworks.size()) {
                             // Connect
-                            appState = STATE_MAIN;
+                            appState = g_wifiSetupReturnState;
                             NetworkParams* params = new NetworkParams();
                             params->ssid = wifiNetworks[wifiSelectedIndex].ssid;
                             params->pass = String(wifiPasswordBuffer);
