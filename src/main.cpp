@@ -1264,7 +1264,7 @@ bool fetchSatNogsFrequency(int noradId, String& outDl, String& outUl, String& ou
                 JsonArray arr = doc.as<JsonArray>();
                 for (JsonObject item : arr) {
                     const char* status = item["status"];
-                    if (!status || strcmp(status, "active") == 0 || strcmp(status, "alive") == 0 || arr.size() == 1) {
+                    if (status && (strcmp(status, "active") == 0 || strcmp(status, "alive") == 0)) {
                         double dlHz = item["down_low"].as<double>();
                         double ulHz = item["up_low"].as<double>();
                         const char* modeStr = item["mode"];
@@ -3422,6 +3422,17 @@ void drawSatSelectPage() {
                     snprintf(radioBuf, sizeof(radioBuf), "\nAz: %03.0f deg  El: %02.0f deg", az, el);
                 }
                 specBlock += String(radioBuf);
+            }
+            
+            // 运行状态与无线电频段细节
+            if (selSat.type == SAT_TYPE_HISTORICAL || selSat.noradId == 4382 || selSat.noradId == 5 || selSat.noradId == 27386 || selSat.noradId == 25576) {
+                char statusBuf[64];
+                if (isZh) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\n运行状态: 已失效/默音在轨");
+                } else {
+                    snprintf(statusBuf, sizeof(statusBuf), "\nStatus: Inactive/Silent");
+                }
+                specBlock += String(statusBuf);
             }
             
             // 无线电频段细节 (Rx / Tx / Tone / Mode)
