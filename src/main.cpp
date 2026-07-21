@@ -5820,7 +5820,7 @@ void loop() {
                 lockSatMutex();
                 SGP4Calc calcCopy = g_satellites[i].calc;
                 String nameCopy = g_satellites[i].name;
-                SatelliteIconType iconCopy = g_satellites[i].iconType;
+                SatIconType iconCopy = g_satellites[i].iconType;
                 uint16_t colorCopy = g_satellites[i].color;
                 unlockSatMutex();
 
