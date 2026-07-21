@@ -590,14 +590,11 @@ static uint16_t scaleColor(uint16_t color, float factor) {
 }
 
 void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon) {
-    if (sat.pastOrbit && sat.futureOrbit) {
-        if (sat.pastOrbit->empty() && sat.futureOrbit->empty()) return;
-    } else {
-        return;
-    }
-    
     // Check observer visibility (reused from pre-calculated state)
     bool isVisibleToObserver = sat.isVisible;
+
+    // Draw Orbit if orbit data is available
+    if (sat.pastOrbit && sat.futureOrbit && (!sat.pastOrbit->empty() || !sat.futureOrbit->empty())) {
 
     // Draw Orbit
     auto drawOrbit = [&](const std::vector<GeodeticCoord>& orbit, uint16_t baseColor) {
@@ -628,6 +625,7 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
     
     if (sat.pastOrbit) drawOrbit(*(sat.pastOrbit), pastColor);
     if (sat.futureOrbit) drawOrbit(*(sat.futureOrbit), futureColor);
+    }
         
         // Draw Mission Visualization Layer
         if (sat.isRecentLaunchBatch && sat.pastOrbit && sat.futureOrbit && sat.proxyFormation && !sat.proxyFormation->empty()) {

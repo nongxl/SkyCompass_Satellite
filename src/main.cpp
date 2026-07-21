@@ -5956,7 +5956,9 @@ void loop() {
                         float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
                         bool isNight = sun_alt < -6.0f;
                         
-                        if (isSatViewMode) {
+                        if (g_satellites[i].type == SAT_TYPE_GEO_TV) {
+                            isVisible = true;
+                        } else if (isSatViewMode) {
                             isVisible = !g_satCaches[i].lastInShadow;
                         } else {
                             isVisible = (isNight && (el >= 10.0f) && !g_satCaches[i].lastInShadow);
@@ -5966,7 +5968,7 @@ void loop() {
                     
                     if (shouldLogNow && appState == STATE_MAIN) {
                         log_i("[%s] Lat: %.2f, Lon: %.2f, Alt: %.1f km, Shadow: %s, Visible: %s", 
-                              nameCopy.c_str(), 
+                              g_satellites[i].name.c_str(), 
                               g_satCaches[i].lastGeo.lat, 
                               g_satCaches[i].lastGeo.lon, 
                               g_satCaches[i].lastGeo.alt, 
@@ -5975,7 +5977,7 @@ void loop() {
                     }
                     
                     SatRenderData data;
-                    data.name = nameCopy.c_str();
+                    data.name = g_satellites[i].name.c_str();
                     data.iconType = iconCopy;
                     data.currentPos = g_satCaches[i].lastGeo;
                     data.color = colorCopy;
@@ -5987,7 +5989,16 @@ void loop() {
                     data.simTime = simTime;
                     
                     if (appState == STATE_MAIN) {
-                        calculateOrbit(calcCopy, simTime, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding, (isSatViewMode && (focusSatIndex == i) && !g_recentLaunchFocusMode));
+                        if (g_satellites[i].type == SAT_TYPE_GEO_TV) {
+                            double slotLon = getGeoSlotLongitude(g_satellites[i].noradId, g_satellites[i].uplinkFreq);
+                            g_satellites[i].cache.past.clear();
+                            g_satellites[i].cache.future.clear();
+                            GeodeticCoord p = {0.0, slotLon, 35785.863};
+                            g_satellites[i].cache.past.push_back(p);
+                            g_satellites[i].cache.future.push_back(p);
+                        } else {
+                            calculateOrbit(calcCopy, simTime, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding, (isSatViewMode && (focusSatIndex == i) && !g_recentLaunchFocusMode));
+                        }
                         data.pastOrbit = &(g_satellites[i].cache.past);
                         data.futureOrbit = &(g_satellites[i].cache.future);
                     } else {
