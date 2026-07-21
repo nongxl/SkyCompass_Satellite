@@ -1802,10 +1802,6 @@ void recentLaunchNetworkTaskImpl() {
         if (!HalWifi::isConnected()) {
             recentLaunchErrorMsg = "WiFi Connect Failed!";
             recentLaunchDownloading = false;
-            g_wifiSetupReturnState = STATE_SAT_SELECT;
-            appState = STATE_WIFI_SETUP;
-            wifiIsScanning = true;
-            wifiIsInputtingPassword = false;
             return;
         }
     }
@@ -2143,11 +2139,6 @@ void networkTaskImpl(void* parameter) {
         LOG_I("APP", "WiFi connection failed. Entering offline mode.");
         if (appState == STATE_SAT_SELECT) {
             downloadErrorMsg = "WiFi Connection Failed!";
-        }
-        if (manualWifiToggle) {
-            appState = STATE_WIFI_SETUP;
-            wifiIsScanning = true;
-            wifiIsInputtingPassword = false;
         }
         g_wifiConnecting = false;
         g_dataUpdating = false;

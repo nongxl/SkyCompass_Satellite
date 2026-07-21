@@ -9,16 +9,38 @@ void HalWifi::begin(const char* ssid, const char* password) {
     }
     
     LOG_I("APP", "Connecting to WiFi: %s", ssid);
-    WiFi.mode(WIFI_STA);
+    
+    if (WiFi.getMode() == WIFI_OFF) {
+        WiFi.mode(WIFI_STA);
+        delay(100);
+    } else {
+        WiFi.mode(WIFI_STA);
+    }
+    
     WiFi.begin(ssid, password);
     
-    // Wait up to 6 seconds for connection (12 retries x 500ms).
-    // Fast response when AP is unavailable or out of range in unfamiliar networks.
+    // Wait up to 6 seconds for connection (12 retries x 500ms)
     int retries = 0;
     while (WiFi.status() != WL_CONNECTED && retries < 12) {
         delay(500);
         log_i(".");
         retries++;
+    }
+    
+    // If first attempt failed due to transient driver deinit issue, do 1 fast retry
+    if (WiFi.status() != WL_CONNECTED) {
+        LOG_I("APP", "WiFi first attempt failed, retrying after driver reset...");
+        WiFi.disconnect(true);
+        delay(200);
+        WiFi.mode(WIFI_STA);
+        delay(100);
+        WiFi.begin(ssid, password);
+        retries = 0;
+        while (WiFi.status() != WL_CONNECTED && retries < 10) {
+            delay(500);
+            log_i(".");
+            retries++;
+        }
     }
     
     if (WiFi.status() == WL_CONNECTED) {
