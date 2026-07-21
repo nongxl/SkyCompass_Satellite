@@ -1633,6 +1633,8 @@ void wrapTextIntoLines(LGFX_Sprite* canvas, const String& text, int w, std::vect
             start += len;
         }
     }
+}
+
 String truncateUtf8Chars(const String& str, size_t maxChars) {
     size_t charCount = 0;
     size_t byteIdx = 0;
