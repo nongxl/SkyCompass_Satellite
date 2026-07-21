@@ -1161,8 +1161,29 @@ void predictorTask(void* parameter) {
             numSatsToPredict = 1;
         } else {
             for (int i = 0; i < NUM_SATELLITES; i++) {
-                if (g_satellites[i].selected) numSatsToPredict++;
+                if (g_satellites[i].selected && g_satellites[i].type != SAT_TYPE_GEO_TV && g_satellites[i].type != SAT_TYPE_DEEP_SPACE) {
+                    numSatsToPredict++;
+                }
             }
+        }
+        
+        if (!g_recentLaunchFocusMode && numSatsToPredict == 0) {
+            std::vector<PassEvent> emptyPasses;
+            std::vector<TreeItem> emptyTree;
+            rebuildTreeLocal(emptyTree, emptyPasses, current_unix + timeMachineOffset);
+            
+            lockPassMutex();
+            recommendedPasses.swap(emptyPasses);
+            displayTree.swap(emptyTree);
+            predictionsReady = true;
+            lastPredictionBaseTime = startTime;
+            g_currentPredictingBaseTime = 0;
+            unlockPassMutex();
+            
+            g_orbitCalculating = false;
+            triggerPrediction = false;
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
         }
         
         predictionProgress = 0;
@@ -6225,7 +6246,7 @@ void loop() {
                         earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
                         earth_renderer->getCanvas()->drawString(I18N::getLanguage() == LANG_ZH ? "TLE过期,请连WiFi更新" : "Stale TLE, sync WiFi", 5, 48);
                     }
-                } else if (selectedPassIndex != -1) {
+                } else if (selectedPassIndex >= 0 && selectedPassIndex < (int)localRecommendedPasses.size()) {
                     // Draw Detail View
                     const auto& p = localRecommendedPasses[selectedPassIndex];
                     earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
