@@ -227,6 +227,17 @@ String g_repSatName = "";
 uint32_t recentLaunchDownloadFinishedMs = 0;
 uint32_t downloadFinishedMs = 0;
 AppState g_wifiSetupReturnState = STATE_SAT_SELECT;
+
+void exitWiFiSetupScreen() {
+    appState = g_wifiSetupReturnState;
+    wifiIsScanning = false;
+    wifiIsInputtingPassword = false;
+    wifiNetworks.clear();
+    wifiNetworks.shrink_to_fit();
+    if (!HalWifi::isConnected()) {
+        HalWifi::disconnect();
+    }
+}
 bool showListHelp = false;
 bool isCameraTransitioning = false;
 float targetZoom = 0.95f;
@@ -5041,10 +5052,10 @@ void loop() {
                     if (wifiIsInputtingPassword) {
                         wifiIsInputtingPassword = false;
                     } else {
-                        appState = g_wifiSetupReturnState;
+                        exitWiFiSetupScreen();
                     }
                 } else if (!wifiIsInputtingPassword && justBack) {
-                    appState = g_wifiSetupReturnState;
+                    exitWiFiSetupScreen();
                 } else if (wifiIsInputtingPassword) {
                     if (justEnter) {
                         if (!wifiNetworks.empty() && wifiSelectedIndex >= 0 && wifiSelectedIndex < (int)wifiNetworks.size()) {
@@ -5054,6 +5065,11 @@ void loop() {
                             params->ssid = wifiNetworks[wifiSelectedIndex].ssid;
                             params->pass = String(wifiPasswordBuffer);
                             params->shouldSave = true;
+                            
+                            wifiNetworks.clear();
+                            wifiNetworks.shrink_to_fit();
+                            wifiIsScanning = false;
+                            wifiIsInputtingPassword = false;
                             
                             manualWifiToggle = true; // Stay connected since user explicitly set it up
                             xTaskCreatePinnedToCore(
