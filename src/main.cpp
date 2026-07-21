@@ -1236,6 +1236,66 @@ struct NetworkParams {
     bool shouldSave;
 };
 
+// 自动向 SatNOGS 开放数据库 (db.satnogs.org API) 联机查询任意 NORAD ID 的下行/上行无线电频率与调制模式
+bool fetchSatNogsFrequency(int noradId, String& outDl, String& outUl, String& outMode) {
+    PredictorTaskSuspendGuard predGuard;
+    delay(50);
+    WiFiClientSecure *client = new WiFiClientSecure;
+    if (!client) return false;
+    client->setInsecure();
+    client->setTimeout(4000);
+    
+    HTTPClient http;
+    http.setTimeout(4000);
+    http.setConnectTimeout(4000);
+    
+    String url = "https://db.satnogs.org/api/transmitters/?format=json&norad_cat_id=" + String(noradId);
+    http.begin(*client, url);
+    int httpCode = http.GET();
+    bool success = false;
+    
+    if (httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        payload.trim();
+        if (payload.length() > 0 && payload.startsWith("[")) {
+            JsonDocument doc;
+            DeserializationError error = deserializeJson(doc, payload);
+            if (!error && doc.is<JsonArray>()) {
+                JsonArray arr = doc.as<JsonArray>();
+                for (JsonObject item : arr) {
+                    const char* status = item["status"];
+                    if (!status || strcmp(status, "active") == 0 || strcmp(status, "alive") == 0 || arr.size() == 1) {
+                        double dlHz = item["down_low"].as<double>();
+                        double ulHz = item["up_low"].as<double>();
+                        const char* modeStr = item["mode"];
+                        
+                        if (dlHz > 1e6) {
+                            char buf[16];
+                            snprintf(buf, sizeof(buf), "%.3f", dlHz / 1e6);
+                            outDl = String(buf);
+                        }
+                        if (ulHz > 1e6) {
+                            char buf[16];
+                            snprintf(buf, sizeof(buf), "%.3f", ulHz / 1e6);
+                            outUl = String(buf);
+                        }
+                        if (modeStr && strlen(modeStr) > 0) {
+                            outMode = modeStr;
+                        }
+                        if (outDl.length() > 0) {
+                            success = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    http.end();
+    delete client;
+    return success;
+}
 
 void fetchFrequencies() {
     PredictorTaskSuspendGuard predGuard;
@@ -1783,8 +1843,27 @@ void downloadCustomSatTask(void* parameter) {
                     saveCustomSatellites();
                 }
                 
-                // 自动拉取匹配该自定义卫星的无线电频段信息 (下行/上行/亚音/模式)
+                // 1. 优先尝试拉取全系统静态频段库 frequencies.json
                 fetchFrequencies();
+                
+                // 2. 若静态库未收录，自动向 SatNOGS 开放 API (db.satnogs.org) 实时查询该卫星无线电频段
+                for (int i = 0; i < NUM_SATELLITES; i++) {
+                    if (g_satellites[i].noradId == id && g_satellites[i].downlinkFreq.length() == 0) {
+                        String dl = "", ul = "", mode = "";
+                        if (fetchSatNogsFrequency(id, dl, ul, mode)) {
+                            lockSatMutex();
+                            g_satellites[i].downlinkFreq = dl;
+                            g_satellites[i].uplinkFreq = ul;
+                            g_satellites[i].radioMode = mode;
+                            if (g_satellites[i].type == SAT_TYPE_VISUAL) {
+                                g_satellites[i].type = SAT_TYPE_HAM;
+                            }
+                            unlockSatMutex();
+                            LOG_I("APP", "Fetched live SatNOGS radio specs for NORAD %d: %s MHz %s", id, dl.c_str(), mode.c_str());
+                        }
+                        break;
+                    }
+                }
                 
                 downloadErrorMsg = "Download Success!";
                 noradInput = "";
