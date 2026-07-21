@@ -29,7 +29,9 @@ void HalWifi::begin(const char* ssid, const char* password) {
         }
         LOG_I("APP", "\nWiFi Connected! IP: %s, DNS: %s", WiFi.localIP().toString().c_str(), WiFi.dnsIP().toString().c_str());
     } else {
-        LOG_I("APP", "\nWiFi Connection Failed (Timeout).");
+        LOG_I("APP", "\nWiFi Connection Failed (Timeout). Disabling background auto-reconnect.");
+        WiFi.disconnect(true);
+        WiFi.setAutoReconnect(false);
     }
 }
 
