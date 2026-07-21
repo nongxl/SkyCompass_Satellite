@@ -1633,6 +1633,28 @@ void wrapTextIntoLines(LGFX_Sprite* canvas, const String& text, int w, std::vect
             start += len;
         }
     }
+String truncateUtf8Chars(const String& str, size_t maxChars) {
+    size_t charCount = 0;
+    size_t byteIdx = 0;
+    size_t len = str.length();
+    
+    while (byteIdx < len && charCount < maxChars) {
+        unsigned char c = (unsigned char)str[byteIdx];
+        size_t charBytes = 1;
+        if ((c & 0x80) == 0) charBytes = 1;
+        else if ((c & 0xE0) == 0xC0) charBytes = 2;
+        else if ((c & 0xF0) == 0xE0) charBytes = 3;
+        else if ((c & 0xF8) == 0xF0) charBytes = 4;
+        
+        if (byteIdx + charBytes > len) break;
+        byteIdx += charBytes;
+        charCount++;
+    }
+    
+    if (byteIdx < len) {
+        return str.substring(0, byteIdx) + "..";
+    }
+    return str;
 }
 
 int drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int w, int lineH, bool draw = true) {
@@ -2981,17 +3003,19 @@ void drawWiFiSetupPage() {
     uint16_t width = canvas->width();
     uint16_t height = canvas->height();
     
+    // Explicitly set Chinese UTF-8 font
+    canvas->setFont(&fonts::efontCN_12);
+    canvas->setTextSize(1);
+    
     // Background
     canvas->fillRect(0, 0, width, height, canvas->color565(15, 20, 25));
     
     // Top Bar
     canvas->fillRect(0, 0, width, 25, canvas->color565(30, 60, 100));
     canvas->setTextColor(TFT_WHITE);
-    canvas->setTextSize(2);
     canvas->drawString(I18N::get(TXT_WIFI_SETUP), 10, 5);
     
     canvas->setTextColor(TFT_WHITE);
-    canvas->setTextSize(1);
     
     if (wifiIsScanning) {
         canvas->drawString(I18N::get(TXT_SCANNING_NETWORKS), 20, 50);
@@ -3006,7 +3030,7 @@ void drawWiFiSetupPage() {
         if (wifiIsInputtingPassword && wifiSelectedIndex >= 0 && wifiSelectedIndex < (int)wifiNetworks.size()) {
             canvas->drawString(I18N::get(TXT_CONNECT_TO), 20, 40);
             canvas->setTextColor(TFT_GREEN);
-            String ssid = wifiNetworks[wifiSelectedIndex].ssid;
+            String ssid = truncateUtf8Chars(wifiNetworks[wifiSelectedIndex].ssid, 16);
             canvas->drawString(ssid.c_str(), 20, 55);
             
             canvas->setTextColor(TFT_WHITE);
@@ -3037,9 +3061,7 @@ void drawWiFiSetupPage() {
                     canvas->setTextColor(TFT_LIGHTGRAY);
                 }
                 
-                String ssidStr = wifiNetworks[index].ssid;
-                if (ssidStr.length() > 18) ssidStr = ssidStr.substring(0, 15) + "...";
-                
+                String ssidStr = truncateUtf8Chars(wifiNetworks[index].ssid, 14);
                 canvas->drawString(ssidStr.c_str(), 10, yPos);
                 
                 char rssiStr[16];
