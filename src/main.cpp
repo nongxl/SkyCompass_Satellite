@@ -5411,12 +5411,18 @@ void loop() {
                 }
             }
             else if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
-                double tx, ty, tz;
-                if (g_satellites[focusSatIndex].calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
-                    double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
-                    ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
-                    focalGeo = CoordTransform::ecefToGeodetic(ecef);
+                if (g_satellites[focusSatIndex].type == SAT_TYPE_GEO_TV) {
+                    double slotLon = getGeoSlotLongitude(g_satellites[focusSatIndex].noradId, g_satellites[focusSatIndex].uplinkFreq);
+                    focalGeo = {0.0, slotLon, 35785.863};
                     hasFocalPos = true;
+                } else {
+                    double tx, ty, tz;
+                    if (g_satellites[focusSatIndex].calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
+                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
+                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                        focalGeo = CoordTransform::ecefToGeodetic(ecef);
+                        hasFocalPos = true;
+                    }
                 }
             }
 
