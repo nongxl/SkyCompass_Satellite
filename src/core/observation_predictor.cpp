@@ -137,7 +137,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
         iterations++;
         // Reset Watchdog Timer periodically and yield to Idle Task to prevent starvation.
         // Note: pdMS_TO_TICKS(2) was 0 ticks (a no-op). Using 1 tick ensures IDLE0 runs and feeds the WDT.
-        if ((iterations & 63) == 0) {
+        if ((iterations & 15) == 0) {
             vTaskDelay(1);
         }
         

@@ -1190,7 +1190,7 @@ void predictorTask(void* parameter) {
             predictionProgress = 100;
         } else {
             for (int i = 0; i < NUM_SATELLITES; i++) {
-                vTaskDelay(pdMS_TO_TICKS(5)); // Yield CPU 0 to IDLE0 task to feed Task Watchdog Timer
+                vTaskDelay(1); // Yield CPU 0 (1 tick = 10ms) to IDLE0 task to feed Task Watchdog Timer
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
                 SatelliteType type = SAT_TYPE_VISUAL;
