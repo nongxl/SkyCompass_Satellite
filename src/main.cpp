@@ -5122,6 +5122,7 @@ void loop() {
                                     LOG_I("APP", "Bypassed rate limiting via physical C key");
                                 }
                             }
+                            manualWifiToggle = true;
                             recentLaunchDownloading = true;
                             recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
                             drawSatSelectPage();
