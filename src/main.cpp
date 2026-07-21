@@ -1838,8 +1838,9 @@ void recentLaunchNetworkTaskImpl() {
         }
     }
     
-    if (current_unix > 0 && lastUpdate > 0 && (current_unix - lastUpdate) < 7200 && LittleFS.exists("/json_recent_raw.jsonl")) {
-        LOG_I("RECENT_LAUNCH", "Last update was %u sec ago (< 2h). Bypassing download.", (unsigned int)(current_unix - lastUpdate));
+    // Only apply 2-hour rate limiting for background auto-sync. Manual user keypress (manualWifiToggle) always forces fresh download.
+    if (!manualWifiToggle && current_unix > 0 && lastUpdate > 0 && (current_unix - lastUpdate) < 7200 && LittleFS.exists("/json_recent_raw.jsonl")) {
+        LOG_I("RECENT_LAUNCH", "Background auto-sync: Last update was %u sec ago (< 2h). Bypassing download.", (unsigned int)(current_unix - lastUpdate));
         success = true;
         recentLaunchBypassed = true;
     }
@@ -5178,11 +5179,9 @@ void loop() {
                             drawSatSelectPage();
                             pushCanvasWithFilter();
                         } else if (!recentLaunchDownloading) {
-                            if (justC) {
-                                if (LittleFS.exists("/recent_last_update.txt")) {
-                                    LittleFS.remove("/recent_last_update.txt");
-                                    LOG_I("APP", "Bypassed rate limiting via physical C key");
-                                }
+                            if (LittleFS.exists("/recent_last_update.txt")) {
+                                LittleFS.remove("/recent_last_update.txt");
+                                LOG_I("APP", "Bypassed rate limiting via physical W/C key");
                             }
                             manualWifiToggle = true;
                             recentLaunchDownloading = true;
