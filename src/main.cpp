@@ -6149,6 +6149,7 @@ void loop() {
                     earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
                     earth_renderer->getCanvas()->drawString(I18N::get(TXT_PASS_REASON), 5, 82);
                     String reason = I18N::get(TXT_PASS_REASON_DARK);
+                    if (p.maxBrightness <= 2.0) reason += I18N::get(TXT_PASS_REASON_BRIGHT);
                     if (p.maxElevation > 60) reason += I18N::get(TXT_PASS_REASON_ZENITH);
                     if (p.visibleDuration > 300) reason += I18N::get(TXT_PASS_REASON_LONG);
                     earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
