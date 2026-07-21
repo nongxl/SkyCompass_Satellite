@@ -2207,6 +2207,7 @@ void imuTask(void* pvParameters) {
 
 volatile bool g_loadingFinished = false;
 volatile int g_loadingProgress = 18;
+String g_loadingStatusText = "";
 
 void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int selectedLangIndex = 0) {
     if (!earth_renderer) return;
@@ -2246,7 +2247,8 @@ void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int 
     
     canvas->setTextColor(TFT_YELLOW);
     canvas->setTextSize(1);
-    canvas->drawString(I18N::get(TXT_LOADING_MODELS), 120 - canvas->textWidth(I18N::get(TXT_LOADING_MODELS)) / 2, 50);
+    String statusStr = (g_loadingStatusText.length() > 0) ? g_loadingStatusText : I18N::get(TXT_LOADING_MODELS);
+    canvas->drawString(statusStr.c_str(), 120 - canvas->textWidth(statusStr.c_str()) / 2, 50);
     
     // Draw progress bar
     canvas->drawRect(35, 108, 170, 8, TFT_DARKGREY);
@@ -2522,6 +2524,10 @@ void setup() {
             }
 #endif 
             
+            bool isZh = (I18N::getLanguage() == LANG_ZH);
+            g_loadingStatusText = isZh ? "初始化传感器与外设..." : "Initializing Hardware...";
+            g_loadingProgress = 10;
+            
             // Load cached position from Preferences
             Preferences posPrefs;
             if (posPrefs.begin("position", true)) {
@@ -2555,6 +2561,9 @@ void setup() {
                 posPrefs.end();
             }
             
+            g_loadingStatusText = isZh ? "载入观测坐标与太阳模型..." : "Loading Location & Sun Data...";
+            g_loadingProgress = 25;
+            
             sun_calc = new SunCalculator(pos_manager);
             sun_calc->begin();
             
@@ -2581,6 +2590,7 @@ void setup() {
             
             // Offline TLE Cache Loading
             for (int i = 0; i < NUM_SATELLITES; i++) {
+                g_loadingStatusText = isZh ? ("解析轨道: " + g_satellites[i].name) : ("Parsing Orbit: " + g_satellites[i].name);
                 TLEData loaded_tle;
                 if (TLEUpdater::getTLE(g_satellites[i].noradId, loaded_tle)) {
                     loaded_tle.baseScore = g_satellites[i].baseScore;
@@ -2600,11 +2610,11 @@ void setup() {
                     g_satellites[i].calc.init(g_satellites[i].tle);
                 }
                 
-                // Slowly progress progress to 50%
-                g_loadingProgress = 18 + (int)(32.0f * (float)i / (float)NUM_SATELLITES);
+                // Slowly progress progress to 65%
+                g_loadingProgress = 30 + (int)(35.0f * (float)(i + 1) / (float)NUM_SATELLITES);
             }
             
-            g_loadingProgress = 50;
+            g_loadingProgress = 65;
             
             // Find the latest TLE Epoch as the initial system time anchor
             uint32_t latestEpoch = TLEManager::getMockTimeAnchor();
@@ -2619,6 +2629,9 @@ void setup() {
             current_unix = latestEpoch;
             g_timeSynced = true;
             LOG_I("APP", "Offline boot: Loaded cached TLEs. System time anchor set to: %u", current_unix);
+            
+            g_loadingStatusText = isZh ? "解算自定义目标与频段数据..." : "Loading Custom Satellites...";
+            g_loadingProgress = 75;
             
             // Load Custom Satellites from Preferences
             Preferences prefs;
@@ -2688,7 +2701,12 @@ void setup() {
                 saveCustomSatellites();
             }
             
-            g_loadingProgress = 80;
+            g_loadingStatusText = isZh ? "构建火箭与群编队数据..." : "Building Launch Formations...";
+            g_loadingProgress = 85;
+            tryLoadRecentLaunchCache();
+            
+            g_loadingStatusText = isZh ? "启动核心推算引擎..." : "Starting Predictor Engine...";
+            g_loadingProgress = 95;
             
             // Start predictor task on Core 0 for offline data (UI runs on Core 1)
             xTaskCreatePinnedToCore(
@@ -2705,9 +2723,9 @@ void setup() {
             manualWifiToggle = false;
             xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
 
-            tryLoadRecentLaunchCache();
-            
+            g_loadingStatusText = isZh ? "加载完成，准备就绪！" : "Ready!";
             g_loadingProgress = 100;
+            delay(100);
             g_loadingFinished = true;
             vTaskDelete(NULL);
         },
