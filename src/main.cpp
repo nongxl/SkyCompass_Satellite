@@ -5817,11 +5817,18 @@ void loop() {
                     continue;
                 }
                 
+                lockSatMutex();
+                SGP4Calc calcCopy = g_satellites[i].calc;
+                String nameCopy = g_satellites[i].name;
+                SatelliteIconType iconCopy = g_satellites[i].iconType;
+                uint16_t colorCopy = g_satellites[i].color;
+                unlockSatMutex();
+
                 bool runCalculation = (timeChanged || !g_satCaches[i].lastGeoValid);
                 
                 if (runCalculation) {
                     double tx, ty, tz;
-                    if (g_satellites[i].calc.getTEME(simTime, tx, ty, tz)) {
+                    if (calcCopy.getTEME(simTime, tx, ty, tz)) {
                         ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                         GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
                         
@@ -5880,7 +5887,7 @@ void loop() {
                     
                     if (shouldLogNow && appState == STATE_MAIN) {
                         log_i("[%s] Lat: %.2f, Lon: %.2f, Alt: %.1f km, Shadow: %s, Visible: %s", 
-                              g_satellites[i].name.c_str(), 
+                              nameCopy.c_str(), 
                               g_satCaches[i].lastGeo.lat, 
                               g_satCaches[i].lastGeo.lon, 
                               g_satCaches[i].lastGeo.alt, 
@@ -5889,10 +5896,10 @@ void loop() {
                     }
                     
                     SatRenderData data;
-                    data.name = g_satellites[i].name.c_str();
-                    data.iconType = g_satellites[i].iconType;
+                    data.name = nameCopy.c_str();
+                    data.iconType = iconCopy;
                     data.currentPos = g_satCaches[i].lastGeo;
-                    data.color = g_satellites[i].color;
+                    data.color = colorCopy;
                     data.isVisible = g_satCaches[i].isVisible;
                     
                     // Visual effects fields
@@ -5901,7 +5908,7 @@ void loop() {
                     data.simTime = simTime;
                     
                     if (appState == STATE_MAIN) {
-                        calculateOrbit(g_satellites[i].calc, simTime, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding, (isSatViewMode && (focusSatIndex == i) && !g_recentLaunchFocusMode));
+                        calculateOrbit(calcCopy, simTime, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding, (isSatViewMode && (focusSatIndex == i) && !g_recentLaunchFocusMode));
                         data.pastOrbit = &(g_satellites[i].cache.past);
                         data.futureOrbit = &(g_satellites[i].cache.future);
                     } else {
