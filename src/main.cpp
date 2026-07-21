@@ -1822,12 +1822,16 @@ void networkTaskImpl(void* parameter) {
     }
     
     if (ssid.length() == 0) {
-        LOG_I("APP", "No WiFi credentials available. Falling back to WiFi Setup.");
-        appState = STATE_WIFI_SETUP;
-        wifiIsScanning = true;
-        wifiIsInputtingPassword = false;
+        LOG_I("APP", "No WiFi credentials available. Offline mode active.");
+        if (manualWifiToggle) {
+            appState = STATE_WIFI_SETUP;
+            wifiIsScanning = true;
+            wifiIsInputtingPassword = false;
+        }
         g_wifiConnecting = false;
         g_dataUpdating = false;
+        g_timeSynced = true;
+        triggerPrediction = true;
         return;
     }
 
@@ -1835,15 +1839,19 @@ void networkTaskImpl(void* parameter) {
     HalWifi::begin(ssid.c_str(), pass.c_str());
     
     if (!HalWifi::isConnected()) {
-        LOG_I("APP", "WiFi connection failed. Falling back to WiFi Setup.");
+        LOG_I("APP", "WiFi connection failed. Entering offline mode.");
         if (appState == STATE_SAT_SELECT) {
             downloadErrorMsg = "WiFi Connection Failed!";
         }
-        appState = STATE_WIFI_SETUP;
-        wifiIsScanning = true;
-        wifiIsInputtingPassword = false;
+        if (manualWifiToggle) {
+            appState = STATE_WIFI_SETUP;
+            wifiIsScanning = true;
+            wifiIsInputtingPassword = false;
+        }
         g_wifiConnecting = false;
         g_dataUpdating = false;
+        g_timeSynced = true;
+        triggerPrediction = true;
         return;
     }
     
@@ -2678,10 +2686,11 @@ void drawWiFiSetupPage() {
     }
     
     if (wifiNetworks.empty() && !wifiIsScanning) {
+        wifiIsInputtingPassword = false;
         canvas->drawString(I18N::get(TXT_NO_NETWORKS_FOUND), 20, 80);
         canvas->drawString(I18N::get(TXT_PRESS_R_RESCAN), 20, 100);
     } else {
-        if (wifiIsInputtingPassword) {
+        if (wifiIsInputtingPassword && wifiSelectedIndex >= 0 && wifiSelectedIndex < (int)wifiNetworks.size()) {
             canvas->drawString(I18N::get(TXT_CONNECT_TO), 20, 40);
             canvas->setTextColor(TFT_GREEN);
             String ssid = wifiNetworks[wifiSelectedIndex].ssid;
@@ -4721,17 +4730,19 @@ void loop() {
                     appState = STATE_MAIN;
                 } else if (wifiIsInputtingPassword) {
                     if (justEnter) {
-                        // Connect
-                        appState = STATE_MAIN;
-                        NetworkParams* params = new NetworkParams();
-                        params->ssid = wifiNetworks[wifiSelectedIndex].ssid;
-                        params->pass = String(wifiPasswordBuffer);
-                        params->shouldSave = true;
-                        
-                        manualWifiToggle = true; // Stay connected since user explicitly set it up
-                        xTaskCreatePinnedToCore(
-                            networkTask, "NetworkTask", 16384, params, 1, NULL, 0
-                        );
+                        if (!wifiNetworks.empty() && wifiSelectedIndex >= 0 && wifiSelectedIndex < (int)wifiNetworks.size()) {
+                            // Connect
+                            appState = STATE_MAIN;
+                            NetworkParams* params = new NetworkParams();
+                            params->ssid = wifiNetworks[wifiSelectedIndex].ssid;
+                            params->pass = String(wifiPasswordBuffer);
+                            params->shouldSave = true;
+                            
+                            manualWifiToggle = true; // Stay connected since user explicitly set it up
+                            xTaskCreatePinnedToCore(
+                                networkTask, "NetworkTask", 16384, params, 1, NULL, 0
+                            );
+                        }
                     } else if (justBack) {
                         if (wifiPasswordLen > 0) {
                             wifiPasswordBuffer[--wifiPasswordLen] = '\0';

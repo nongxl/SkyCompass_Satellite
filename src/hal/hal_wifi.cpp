@@ -76,11 +76,12 @@ std::vector<WiFiNetwork> HalWifi::scanNetworks() {
     std::vector<WiFiNetwork> networks;
     LOG_I("APP", "Scanning WiFi networks...");
     
+    WiFi.disconnect(true);
+    delay(200);
     WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
     delay(100);
     
-    int n = WiFi.scanNetworks();
+    int n = WiFi.scanNetworks(false, true);
     LOG_I("APP", "Found %d networks", n);
     
     if (n > 0) {
@@ -92,6 +93,7 @@ std::vector<WiFiNetwork> HalWifi::scanNetworks() {
             networks.push_back(net);
         }
     }
+    WiFi.scanDelete(); // 必须无条件释放 ESP32 内部扫描结果内存缓冲区，防止 n==0 时内存泄漏崩溃
     return networks;
 }
 
