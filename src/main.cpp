@@ -2093,11 +2093,13 @@ void saveCustomSatellites() {
     prefs.end();
 }
 
+volatile bool g_isFastForwarding = false;
+
 void imuTask(void* pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms (100Hz) high precision interval
-    
     while (true) {
+        // 在手动调时/快进期间降低 IMU 轮询频率至 60ms(16Hz)，释放 I2C 总线带宽供键盘使用
+        TickType_t xFrequency = pdMS_TO_TICKS(g_isFastForwarding ? 60 : 10);
         if (imu && attitude) {
             imu->update();
             attitude->update();
@@ -4132,15 +4134,15 @@ void loop() {
 
     M5Cardputer.update();
     bool isFastForwarding = (lastTimeAdjustMillis != 0) || showRecommendations;
+    g_isFastForwarding = isFastForwarding;
 
     // BtnG0 (side button): trigger screenshot transfer via serial
     if (M5Cardputer.BtnA.wasPressed()) {
         doScreenshot();
     }
 
-
-    
-    if (gnss) {
+    // 手动调整时间/快进期间暂停 GNSS 串口解析，防止串口中断抢占 CPU/I2C 总线
+    if (gnss && !g_isFastForwarding) {
         gnss->update();
     }
 
@@ -4357,7 +4359,7 @@ void loop() {
                     handleContinuousKey(currentKey);
                 } else {
                     // Held down
-                    if (millis() - keyHoldStartTime > 400) { // 400ms delay before repeat
+                    if (millis() - keyHoldStartTime > 300) { // 300ms delay before repeat
                         if (millis() - lastKeyRepeat > 33) { // ~30Hz repeat rate
                             lastKeyRepeat = millis();
                             handleContinuousKey(currentKey);
@@ -4367,7 +4369,15 @@ void loop() {
             } else {
                 if (lastKey != 0) {
                     if (keyReleaseTime == 0) keyReleaseTime = millis();
-                    if (millis() - keyReleaseTime > 150) { // 150ms debounce for I2C drops
+                    if (millis() - keyReleaseTime < 120) {
+                        // 在 120ms 的 I2C 消抖窗口内，平滑保持上一有效按键的连续响应，防止 UART 中断导致断线卡顿
+                        if (millis() - keyHoldStartTime > 300) {
+                            if (millis() - lastKeyRepeat > 33) {
+                                lastKeyRepeat = millis();
+                                handleContinuousKey(lastKey);
+                            }
+                        }
+                    } else {
                         lastKey = 0;
                     }
                 }
