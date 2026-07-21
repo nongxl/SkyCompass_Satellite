@@ -279,11 +279,22 @@ void autoAssignIconAndColor(const String& name, SatIconType& icon, uint16_t& col
 }
 
 static double getGeoSlotLongitude(uint32_t noradId, const String& slotStr) {
-    if (noradId == 49125) return 101.4;
-    if (noradId == 52235) return 125.0;
-    if (noradId == 45863) return 134.0;
-    if (noradId == 29037) return 19.2;
-    if (noradId == 33403) return -97.0; // 97.0°W
+    if (noradId == 49125) return 101.4; // ChinaSat 9B
+    if (noradId == 52235) return 125.0; // ChinaSat 6D
+    if (noradId == 45863) return 134.0; // APStar 6D
+    if (noradId == 29037) return 19.2;  // Astra 1KR
+    if (noradId == 33403) return -97.0; // Galaxy 19 (97.0°W)
+    
+    if (noradId == 33051) return 92.2;  // ChinaSat 9
+    if (noradId == 42763) return 101.4; // ChinaSat 9A
+    if (noradId == 31792) return 115.5; // ChinaSat 6B
+    if (noradId == 58250) return 115.5; // ChinaSat 6E
+    if (noradId == 32062) return 128.0; // JCSAT-3A
+    if (noradId == 42951) return 110.0; // BSAT-4A
+    if (noradId == 37258) return 116.0; // KoreaSat 6
+    if (noradId == 39500) return 78.5;  // Thaicom 6
+    if (noradId == 52899) return 91.5;  // Measat 3d
+    if (noradId == 36832) return -7.0;  // Nilesat 201 (7.0°W)
     
     if (slotStr.length() > 0) {
         double val = slotStr.toDouble();
