@@ -1210,8 +1210,12 @@ void predictorTask(void* parameter) {
             completedCount = 1;
             predictionProgress = 100;
         } else {
+            // === PHASE 1: Fast 24-Hour (Tonight) Pass Calculation (< 300ms) ===
+            std::vector<PassEvent> phase1Passes;
+            phase1Passes.reserve(50);
+            
             for (int i = 0; i < NUM_SATELLITES; i++) {
-                vTaskDelay(1); // Yield CPU 0 (1 tick = 10ms) to IDLE0 task to feed Task Watchdog Timer
+                vTaskDelay(1); // Yield CPU 0 to IDLE0 task to feed WDT
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
                 SatelliteType type = SAT_TYPE_VISUAL;
@@ -1230,24 +1234,91 @@ void predictorTask(void* parameter) {
                 
                 if (!isSelected) continue;
                 
-                // GEO broadcast satellites & Deep space probes (no TLE on CelesTrak) — skip prediction
                 if (type == SAT_TYPE_GEO_TV || type == SAT_TYPE_DEEP_SPACE) {
                     completedCount++;
-                    predictionProgress = (completedCount * 100) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
-                    if (predictionProgress > 100) predictionProgress = 100;
                     continue;
                 }
                 
                 if (tle.line1.length() < 14 || tle.line2.length() < 14) {
                     completedCount++;
-                    predictionProgress = (completedCount * 100) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
-                    if (predictionProgress > 100) predictionProgress = 100;
                     continue;
                 }
                 
-                auto passes = predictor->predictPasses(tle, stdMag, startTime, 7);
+                // Fast 1-day prediction for Phase 1
+                auto passes1 = predictor->predictPasses(tle, stdMag, startTime, 1);
+                for (auto& p : passes1) {
+                    p.satSelected = true;
+                    p.satIndex = i;
+                }
+                phase1Passes.insert(phase1Passes.end(), passes1.begin(), passes1.end());
+                completedCount++;
+                predictionProgress = (completedCount * 50) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
+            }
+            
+            if (triggerPrediction || cancelPrediction || g_networkActive) {
+                if (cancelPrediction) {
+                    cancelPrediction = false;
+                    g_orbitCalculating = false;
+                    g_currentPredictingBaseTime = 0;
+                }
+                continue;
+            }
+            
+            // Publish Phase 1 (Tonight's passes) IMMEDIATELY to UI in ~300ms!
+            std::vector<PassEvent> upcomingPhase1;
+            for (const auto& pass : phase1Passes) {
+                if (pass.losTime >= current_unix + timeMachineOffset) {
+                    upcomingPhase1.push_back(pass);
+                }
+            }
+            std::sort(upcomingPhase1.begin(), upcomingPhase1.end(), [](const PassEvent& a, const PassEvent& b) {
+                if (a.score != b.score) return a.score > b.score;
+                return a.aosTime < b.aosTime;
+            });
+            
+            std::vector<TreeItem> tempDisplayTree1;
+            rebuildTreeLocal(tempDisplayTree1, upcomingPhase1, current_unix + timeMachineOffset);
+            
+            lockPassMutex();
+            recommendedPasses = upcomingPhase1;
+            displayTree = tempDisplayTree1;
+            predictionsReady = true;
+            lastPredictionBaseTime = startTime;
+            unlockPassMutex();
+            
+            g_orbitCalculating = false; // Turn off "Calculating..." status immediately!
+            g_readyStartTime = millis();
+            
+            // === PHASE 2: Background 7-Day Full Pass Calculation ===
+            completedCount = 0;
+            for (int i = 0; i < NUM_SATELLITES; i++) {
+                vTaskDelay(1); // Yield CPU 0
+                if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                // Cap passes to prevent OOM
+                SatelliteType type = SAT_TYPE_VISUAL;
+                bool isSelected = false;
+                TLEData tle;
+                float stdMag = 3.0;
+                
+                lockSatMutex();
+                isSelected = g_satellites[i].selected;
+                if (isSelected) {
+                    type = g_satellites[i].type;
+                    tle = g_satellites[i].tle;
+                    stdMag = g_satellites[i].stdMag;
+                }
+                unlockSatMutex();
+                
+                if (!isSelected) continue;
+                
+                if (type == SAT_TYPE_GEO_TV || type == SAT_TYPE_DEEP_SPACE || tle.line1.length() < 14 || tle.line2.length() < 14) {
+                    completedCount++;
+                    predictionProgress = 50 + (completedCount * 50) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
+                    continue;
+                }
+                
+                // Full 7-day prediction for Phase 2
+                auto passes = predictor->predictPasses(tle, stdMag, startTime, 7);
                 if (passes.size() > 8) {
                     std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
                         return a.score > b.score;
@@ -1261,8 +1332,7 @@ void predictorTask(void* parameter) {
                 }
                 allPasses.insert(allPasses.end(), passes.begin(), passes.end());
                 completedCount++;
-                predictionProgress = (completedCount * 100) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
-                if (predictionProgress > 100) predictionProgress = 100;
+                predictionProgress = 50 + (completedCount * 50) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
             }
             predictionProgress = 100;
         }
@@ -2567,7 +2637,7 @@ void setup() {
                     Serial2.end(); // Release GPIO 1/2 from UART
                     LOG_I("APP", "Chain Mono not found. Released GPIO 1/2. Restoring I²C bus.");
                 }
-                Wire.begin(); // Re-assert I²C master on GPIO 1(SCL)/2(SDA)
+                Wire.begin(8, 9, 100000); // Re-assert internal I²C master explicitly on GPIO 8 (SDA) / GPIO 9 (SCL)
                 delay(10);    // Short stabilisation before resuming IMU reads
                 if (imuTaskHandle != NULL) {
                     vTaskResume(imuTaskHandle);

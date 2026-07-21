@@ -93,6 +93,25 @@ public:
         
         auto imu_data = M5.Imu.getImuData();
         
+        // 校验 I2C 读数合法性，防止因 I2C 总线冲突/干扰导致 NaN, Inf 或物理飞尖峰数据引发地球视角乱跳
+        if (isnan(imu_data.accel.x) || isnan(imu_data.accel.y) || isnan(imu_data.accel.z) ||
+            isnan(imu_data.gyro.x)  || isnan(imu_data.gyro.y)  || isnan(imu_data.gyro.z)  ||
+            isinf(imu_data.accel.x) || isinf(imu_data.accel.y) || isinf(imu_data.accel.z) ||
+            isinf(imu_data.gyro.x)  || isinf(imu_data.gyro.y)  || isinf(imu_data.gyro.z)) {
+            return false;
+        }
+
+        // 陀螺仪角速度硬限幅：人体手持设备不可能超过 1000 deg/s 的极高旋转速度，过滤串口波特率脉冲干扰
+        if (fabs(imu_data.gyro.x) > 1000.0f || fabs(imu_data.gyro.y) > 1000.0f || fabs(imu_data.gyro.z) > 1000.0f) {
+            return false;
+        }
+
+        // 加速度模长校验：全零说明 I2C 读数失败，>5G 说明出现强烈冲击或野值，丢弃异常帧
+        float rawAccelMag = sqrt(imu_data.accel.x*imu_data.accel.x + imu_data.accel.y*imu_data.accel.y + imu_data.accel.z*imu_data.accel.z);
+        if (rawAccelMag < 0.2f || rawAccelMag > 5.0f) {
+            return false;
+        }
+
         _data.accelX = imu_data.accel.x;
         _data.accelY = imu_data.accel.y;
         _data.accelZ = imu_data.accel.z;
