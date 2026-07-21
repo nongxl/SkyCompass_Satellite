@@ -1115,12 +1115,31 @@ void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
                     if (factor > 1.0f) factor = 1.0f;
                     if (factor < 0.0f) factor = 0.0f;
                     
-                    uint8_t pr = (uint8_t)(255 * factor);
-                    uint8_t pg = (uint8_t)(200 * factor);
-                    uint8_t pb = (uint8_t)(90 * factor);
+                    int idx = outY * width + outX;
+                    uint16_t cur565 = __builtin_bswap16(buffer[idx]);
                     
-                    std::uint16_t color = _display->color565(pr, pg, pb);
-                    buffer[outY * width + outX] = __builtin_bswap16(color);
+                    // 提取当前像素 RGB565 (R:5bit, G:6bit, B:5bit)
+                    uint16_t r5 = (cur565 >> 11) & 0x1F;
+                    uint16_t g6 = (cur565 >> 5) & 0x3F;
+                    uint16_t b5 = cur565 & 0x1F;
+                    
+                    // 璀璨金黄基色：R/G 快速提升形成金黄，B 保持较低防止过早泛白
+                    uint16_t dr5 = (uint16_t)(7 * factor);   // 红色快速提升
+                    uint16_t dg6 = (uint16_t)(9 * factor);   // 绿色稳步提升
+                    uint16_t db5 = (uint16_t)(1.5f * factor); // 蓝色低增量，维持金色基调
+                    
+                    r5 = (r5 + dr5 > 31) ? 31 : (r5 + dr5);
+                    g6 = (g6 + dg6 > 63) ? 63 : (g6 + dg6);
+                    b5 = (b5 + db5 > 31) ? 31 : (b5 + db5);
+                    
+                    // 仅当 R 与 G 均接近饱和（大城市极高密度重叠）时，才提升 B 分量形成“亮白核心”
+                    if (r5 >= 28 && g6 >= 56) {
+                        uint16_t extraB = (uint16_t)(3 * factor);
+                        b5 = (b5 + extraB > 31) ? 31 : (b5 + extraB);
+                    }
+                    
+                    uint16_t new565 = (r5 << 11) | (g6 << 5) | b5;
+                    buffer[idx] = __builtin_bswap16(new565);
                 }
             }
         }
