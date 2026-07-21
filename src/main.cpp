@@ -1469,6 +1469,10 @@ bool fetchSatNogsFrequency(int noradId, String& outDl, String& outUl, String& ou
 }
 
 void fetchFrequencies() {
+    if (ESP.getFreeHeap() < 38000) {
+        LOG_I("APP", "Skipping frequency HTTPS sync due to low heap (%u bytes free)", (unsigned int)ESP.getFreeHeap());
+        return;
+    }
     PredictorTaskSuspendGuard predGuard;
     delay(100); // Wait for LwIP TCP stack to reclaim memory from previous connections
     WiFiClientSecure *client = new WiFiClientSecure;
@@ -2342,10 +2346,7 @@ void networkTaskImpl(void* parameter) {
         }
     }
     
-    if (g_dataUpdating) {
-        g_dataUpdating = false;
-        g_readyStartTime = millis(); // Trigger 2-second READY effect
-    }
+    vTaskDelay(pdMS_TO_TICKS(150)); // Allow LwIP sockets and TCP buffers to be fully reclaimed by ESP32 heap
     g_wifiConnecting = false;
     g_timeSynced = true; // Fallback to allow offline mock calculations if WiFi failed/finished
     triggerPrediction = true; // Wake up the prediction loop immediately
