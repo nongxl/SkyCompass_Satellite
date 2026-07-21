@@ -5,6 +5,7 @@
 #include "earth_data.h"
 #include "light_points_data.h"
 #include "sgp4_calc.h"
+#include "i18n.h"
 #include <math.h>
 
 #define DEG_TO_RAD 0.017453292519943295769236907684886
@@ -1002,7 +1003,11 @@ void EarthRenderer::drawFocusSightLineAndShadow(double centerLat, double centerL
             // 在地面定位点旁绘制极简仰角角标气泡
             if (userVisible) {
                 char angleBuf[32];
-                snprintf(angleBuf, sizeof(angleBuf), "El:%ddeg", (int)topo.el);
+                if (I18N::getLanguage() == LANG_ZH) {
+                    snprintf(angleBuf, sizeof(angleBuf), "仰角:%d°", (int)topo.el);
+                } else {
+                    snprintf(angleBuf, sizeof(angleBuf), "El:%d°", (int)topo.el);
+                }
                 
                 int bgX = ux + 5;
                 int bgY = uy - 16;
