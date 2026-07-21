@@ -220,6 +220,11 @@ bool showListHelp = false;
 bool isCameraTransitioning = false;
 float targetZoom = 0.95f;
 
+// 百科详情页手动翻页状态
+bool g_descManualScrolled = false;
+int g_descManualYOffset = 0;
+int g_descMaxScroll = 0;
+
 // Level 3 Objects 分页数据结构与状态
 bool recentLaunchInObjectsView = false;
 int recentLaunchObjectPage = 0;
@@ -1741,6 +1746,11 @@ void downloadCustomSatTask(void* parameter) {
                 p.calc.init(p.tle);
                 p.description = "Custom added satellite.\n\n";
                 p.type = SAT_TYPE_VISUAL;
+                if (p.noradId == 57172 || p.name.indexOf("UMKA") != -1 || p.name.indexOf("RS40S") != -1) {
+                    p.downlinkFreq = "437.625";
+                    p.radioMode = "SSTV/BPSK";
+                    p.type = SAT_TYPE_HAM;
+                }
                 autoAssignIconAndColor(p.name, p.iconType, p.color);
                 
                 bool exists = false;
@@ -1753,6 +1763,11 @@ void downloadCustomSatTask(void* parameter) {
                             g_satellites[i].calc.init(g_satellites[i].tle);
                             if (loaded_tle.name.length() > 0) {
                                 g_satellites[i].name = loaded_tle.name;
+                            }
+                            if (g_satellites[i].noradId == 57172 || g_satellites[i].name.indexOf("UMKA") != -1 || g_satellites[i].name.indexOf("RS40S") != -1) {
+                                g_satellites[i].downlinkFreq = "437.625";
+                                g_satellites[i].radioMode = "SSTV/BPSK";
+                                g_satellites[i].type = SAT_TYPE_HAM;
                             }
                             autoAssignIconAndColor(g_satellites[i].name, g_satellites[i].iconType, g_satellites[i].color);
                             break;
@@ -1767,6 +1782,9 @@ void downloadCustomSatTask(void* parameter) {
                 if (!exists) {
                     saveCustomSatellites();
                 }
+                
+                // 自动拉取匹配该自定义卫星的无线电频段信息 (下行/上行/亚音/模式)
+                fetchFrequencies();
                 
                 downloadErrorMsg = "Download Success!";
                 noradInput = "";
@@ -2572,6 +2590,11 @@ void setup() {
                             p.tle = loaded_tle;
                             p.calc.init(p.tle);
                             p.type = SAT_TYPE_VISUAL;
+                            if (p.noradId == 57172 || p.name.indexOf("UMKA") != -1 || p.name.indexOf("RS40S") != -1) {
+                                p.downlinkFreq = "437.625";
+                                p.radioMode = "SSTV/BPSK";
+                                p.type = SAT_TYPE_HAM;
+                            }
                             autoAssignIconAndColor(p.name, p.iconType, p.color);
                             if (NUM_SATELLITES < MAX_SATELLITES) {
                                 g_satellites[NUM_SATELLITES++] = p;
@@ -3169,114 +3192,19 @@ void drawSatSelectPage() {
                 if (el > 0) isTracking = true;
             }
             
-            int radioY = 124;
-            int requiredLines = 0;
-            
-            if (isTracking) {
-                requiredLines = 1;
-                if (selSat.type == SAT_TYPE_WEATHER) {
-                    requiredLines = 3;
-                } else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
-                    requiredLines = 4;
-                } else if (selSat.type == SAT_TYPE_HAM) {
-                    if (selSat.uplinkFreq.length() > 0) {
-                        requiredLines = 4;
-                    } else {
-                        requiredLines = 3;
-                    }
-                }
-            } else {
-                if (selSat.type == SAT_TYPE_WEATHER) {
-                    requiredLines = 3;
-                } else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
-                    requiredLines = 3;
-                } else if (selSat.type == SAT_TYPE_HAM) {
-                    PassEvent nextPass;
-                    bool foundNext = false;
-                    for (const auto& pass : recommendedPasses) {
-                        if (pass.satName == selSat.name && pass.aosTime >= current_unix + timeMachineOffset) {
-                            nextPass = pass;
-                            foundNext = true;
-                            break;
-                        }
-                    }
-                    int baseLines = (selSat.uplinkFreq.length() > 0) ? 3 : 2;
-                    if (foundNext) {
-                        requiredLines = baseLines + 2;
-                    } else {
-                        requiredLines = baseLines;
-                    }
-                }
-            }
-            
-            if (requiredLines > 0) {
-                radioY = bottomLimit - (requiredLines * 11 + 2);
-            } else {
-                radioY = bottomLimit;
-            }
-            
+            int radioY = bottomLimit;
             canvas->setTextColor(TFT_LIGHTGRAY);
             
-            // On-the-fly dynamically build specs description for custom satellites to prevent pointer dangling or memory wipes
+            // 1. 基础文字描述 (简介)
+            bool isZh = (I18N::getLanguage() == LANG_ZH);
             String finalDesc = "";
             if (satSelectedIndex >= NUM_BUILTIN_SATELLITES) {
-                if (selSat.tle.line1.length() >= 60 && selSat.tle.line2.length() >= 60) {
-                    // 1. Parse COSPAR ID
-                    String cospar = "";
-                    if (selSat.tle.line1.length() >= 17) {
-                        String rawCospar = selSat.tle.line1.substring(9, 17);
-                        rawCospar.trim();
-                        if (rawCospar.length() >= 5) {
-                            String yrStr = rawCospar.substring(0, 2);
-                            int yr = yrStr.toInt();
-                            String trueYr = (yr >= 50) ? ("19" + yrStr) : ("20" + yrStr);
-                            cospar = trueYr + "-" + rawCospar.substring(2);
-                        }
-                    }
-                    
-                    // 2. Parse Keplerian elements
-                    float inclination = selSat.tle.line2.substring(8, 16).toFloat();
-                    
-                    String eccRaw = selSat.tle.line2.substring(26, 33);
-                    eccRaw.trim();
-                    float eccentricity = 0.0f;
-                    if (eccRaw.length() > 0) {
-                        String eccStr = "0." + eccRaw;
-                        eccentricity = eccStr.toFloat();
-                    }
-                    
-                    float meanMotion = selSat.tle.line2.substring(52, 63).toFloat();
-                    
-                    float periodMin = 0.0f;
-                    float perigee = 0.0f;
-                    float apogee = 0.0f;
-                    
-                    if (meanMotion > 0) {
-                        periodMin = 1440.0f / meanMotion;
-                        
-                        double n = meanMotion * 2.0 * 3.141592653589793 / 86400.0;
-                        double mu = 3.986004418e14; // m^3/s^2
-                        double a = pow(mu / (n * n), 1.0 / 3.0) / 1000.0; // km
-                        
-                        perigee = a * (1.0f - eccentricity) - 6378.137f;
-                        apogee = a * (1.0f + eccentricity) - 6378.137f;
-                        if (perigee < 0) perigee = 0;
-                        if (apogee < 0) apogee = 0;
-                    }
-                    
-                    char buf[160];
-                    snprintf(buf, sizeof(buf),
-                             "%s"
-                             "COSPAR: %s\n"
-                             "Period: %.1f min\n"
-                             "Incl: %.2f deg\n"
-                             "Alt: %.1f/%.1f km",
-                             I18N::get(TXT_CUSTOM_ADDED_SAT), cospar.c_str(), periodMin, inclination, perigee, apogee);
-                    finalDesc = String(buf);
+                if (selSat.description && strlen(selSat.description) > 0) {
+                    finalDesc = selSat.description;
+                } else {
+                    finalDesc = isZh ? "自定义添加的目标卫星。" : "Custom added satellite.";
                 }
-            }
-            
-            if (finalDesc.length() == 0) {
+            } else {
                 const char* localDesc = I18N::getSatDescription(selSat.noradId);
                 if (localDesc) {
                     finalDesc = localDesc;
@@ -3285,17 +3213,170 @@ void drawSatSelectPage() {
                 }
             }
             
-            // Badges will be drawn at the bottom of the scrollable description
+            // 2. 拼接轨道参数与遥测细节 (COSPAR/周期/速度/倾角/高度/方位/仰角/频率)
+            String specBlock = "";
+            if (selSat.tle.line1.length() >= 60 && selSat.tle.line2.length() >= 60) {
+                // 解析 COSPAR 国际标识
+                String cospar = "";
+                if (selSat.tle.line1.length() >= 17) {
+                    String rawCospar = selSat.tle.line1.substring(9, 17);
+                    rawCospar.trim();
+                    if (rawCospar.length() >= 5) {
+                        String yrStr = rawCospar.substring(0, 2);
+                        int yr = yrStr.toInt();
+                        String trueYr = (yr >= 50) ? ("19" + yrStr) : ("20" + yrStr);
+                        cospar = trueYr + "-" + rawCospar.substring(2);
+                    }
+                }
+                
+                float inclination = selSat.tle.line2.substring(8, 16).toFloat();
+                String eccRaw = selSat.tle.line2.substring(26, 33);
+                eccRaw.trim();
+                float eccentricity = 0.0f;
+                if (eccRaw.length() > 0) {
+                    eccentricity = ("0." + eccRaw).toFloat();
+                }
+                float meanMotion = selSat.tle.line2.substring(52, 63).toFloat();
+                
+                float periodMin = 0.0f;
+                float perigee = 0.0f;
+                float apogee = 0.0f;
+                if (meanMotion > 0) {
+                    periodMin = 1440.0f / meanMotion;
+                    double n = meanMotion * 2.0 * 3.141592653589793 / 86400.0;
+                    double mu = 3.986004418e14;
+                    double a = pow(mu / (n * n), 1.0 / 3.0) / 1000.0;
+                    perigee = a * (1.0f - eccentricity) - 6378.137f;
+                    apogee = a * (1.0f + eccentricity) - 6378.137f;
+                    if (perigee < 0) perigee = 0;
+                    if (apogee < 0) apogee = 0;
+                }
+                
+                // 实时 SGP4 速度计算 (km/s)
+                double tx, ty, tz, vx, vy, vz;
+                double realSpeed = 0.0;
+                if (selSat.calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz, vx, vy, vz)) {
+                    realSpeed = sqrt(vx * vx + vy * vy + vz * vz);
+                }
+                
+                char specBuf[256];
+                if (isZh) {
+                    if (periodMin >= 120.0f) {
+                        snprintf(specBuf, sizeof(specBuf),
+                                 "\n国际标识: %s\n"
+                                 "轨道周期: %.2f小时\n"
+                                 "运行速度: %.2f km/s\n"
+                                 "轨道倾角: %.2f°\n"
+                                 "近/远地点: %.0f/%.0f km",
+                                 cospar.length() > 0 ? cospar.c_str() : "未知",
+                                 periodMin / 60.0f,
+                                 realSpeed > 0 ? realSpeed : 7.66,
+                                 inclination,
+                                 perigee, apogee);
+                    } else {
+                        snprintf(specBuf, sizeof(specBuf),
+                                 "\n国际标识: %s\n"
+                                 "轨道周期: %.1f分钟\n"
+                                 "运行速度: %.2f km/s\n"
+                                 "轨道倾角: %.2f°\n"
+                                 "近/远地点: %.0f/%.0f km",
+                                 cospar.length() > 0 ? cospar.c_str() : "未知",
+                                 periodMin,
+                                 realSpeed > 0 ? realSpeed : 7.66,
+                                 inclination,
+                                 perigee, apogee);
+                    }
+                } else {
+                    if (periodMin >= 120.0f) {
+                        snprintf(specBuf, sizeof(specBuf),
+                                 "\nCOSPAR: %s\n"
+                                 "Period: %.2fh\n"
+                                 "Speed: %.2f km/s\n"
+                                 "Incl: %.2f deg\n"
+                                 "Alt: %.0f/%.0f km",
+                                 cospar.length() > 0 ? cospar.c_str() : "N/A",
+                                 periodMin / 60.0f,
+                                 realSpeed > 0 ? realSpeed : 7.66,
+                                 inclination,
+                                 perigee, apogee);
+                    } else {
+                        snprintf(specBuf, sizeof(specBuf),
+                                 "\nCOSPAR: %s\n"
+                                 "Period: %.1f min\n"
+                                 "Speed: %.2f km/s\n"
+                                 "Incl: %.2f deg\n"
+                                 "Alt: %.0f/%.0f km",
+                                 cospar.length() > 0 ? cospar.c_str() : "N/A",
+                                 periodMin,
+                                 realSpeed > 0 ? realSpeed : 7.66,
+                                 inclination,
+                                 perigee, apogee);
+                    }
+                }
+                specBlock += String(specBuf);
+            }
             
-            if (finalDesc.length() > 0) {
+            // 实时观察数据 (方位角/仰角)
+            if (isTracking) {
+                char radioBuf[128];
+                if (isZh) {
+                    snprintf(radioBuf, sizeof(radioBuf), "\n方位角: %03.0f°  仰角: %02.0f°", az, el);
+                } else {
+                    snprintf(radioBuf, sizeof(radioBuf), "\nAz: %03.0f deg  El: %02.0f deg", az, el);
+                }
+                specBlock += String(radioBuf);
+            }
+            
+            // 无线电频段细节 (Rx / Tx / Tone / Mode)
+            if (selSat.downlinkFreq.length() > 0) {
+                char freqBuf[128];
+                if (isZh) {
+                    snprintf(freqBuf, sizeof(freqBuf), "\n下行: %s MHz", selSat.downlinkFreq.c_str());
+                } else {
+                    snprintf(freqBuf, sizeof(freqBuf), "\nRx: %s MHz", selSat.downlinkFreq.c_str());
+                }
+                specBlock += String(freqBuf);
+            }
+            if (selSat.uplinkFreq.length() > 0) {
+                char txBuf[128];
+                if (isZh) {
+                    if (selSat.tone.length() > 0) {
+                        snprintf(txBuf, sizeof(txBuf), "\n上行: %s MHz (亚音:%s)", selSat.uplinkFreq.c_str(), selSat.tone.c_str());
+                    } else {
+                        snprintf(txBuf, sizeof(txBuf), "\n上行: %s MHz", selSat.uplinkFreq.c_str());
+                    }
+                } else {
+                    if (selSat.tone.length() > 0) {
+                        snprintf(txBuf, sizeof(txBuf), "\nTx: %s MHz (Tone:%s)", selSat.uplinkFreq.c_str(), selSat.tone.c_str());
+                    } else {
+                        snprintf(txBuf, sizeof(txBuf), "\nTx: %s MHz", selSat.uplinkFreq.c_str());
+                    }
+                }
+                specBlock += String(txBuf);
+            }
+            if (selSat.radioMode.length() > 0) {
+                char modeBuf[64];
+                if (isZh) {
+                    snprintf(modeBuf, sizeof(modeBuf), "\n调制模式: %s", selSat.radioMode.c_str());
+                } else {
+                    snprintf(modeBuf, sizeof(modeBuf), "\nMode: %s", selSat.radioMode.c_str());
+                }
+                specBlock += String(modeBuf);
+            }
+            
+            String fullTextToRender = finalDesc + specBlock;
+            
+            if (fullTextToRender.length() > 0) {
                 int currLang = I18N::getLanguage();
                 if (satSelectedIndex != g_descLastSatIndex || currLang != g_descLastLang) {
                     g_descLastSatIndex = satSelectedIndex;
                     g_descLastLang = currLang;
+                    g_descManualScrolled = false;
+                    g_descManualYOffset = 0;
                     g_descWrappedLines.clear();
-                    wrapTextIntoLines(canvas, finalDesc, width - rightX - 5, g_descWrappedLines);
+                    wrapTextIntoLines(canvas, fullTextToRender, width - rightX - 5, g_descWrappedLines);
                     
-                    // Simulate bottom badges layout to compute labelAreaHeight dynamically
+                    // 动态计算底部标签组占用的高度
                     g_descLabelAreaHeight = 20;
                     const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(selSat.noradId);
                     if (entry) {
@@ -3315,7 +3396,6 @@ void drawSatSelectPage() {
                             if (flags & f) {
                                 String fName = Encyclopedia::getFlagName(f);
                                 if (fName.length() > 0) {
-                                    // Remove repetition
                                     if (catName.indexOf(fName) != -1 || fName.indexOf(catName) != -1) {
                                         continue;
                                     }
@@ -3331,29 +3411,36 @@ void drawSatSelectPage() {
                         g_descLabelAreaHeight = simY + 20;
                     }
                     
-                    g_lastSatSelectTime = millis(); // Reset the scroll timer to start from top
+                    g_lastSatSelectTime = millis();
                 }
 
                 if (!g_descWrappedLines.empty()) {
-                    int descAreaHeight = radioY - descY - 2;
+                    int descAreaHeight = bottomLimit - descY;
                     int totalLines = g_descWrappedLines.size();
                     int totalHeight = totalLines * 13 + g_descLabelAreaHeight;
+                    g_descMaxScroll = (totalHeight > descAreaHeight) ? (totalHeight - descAreaHeight + 13) : 0;
                     
                     int yOffset = 0;
                     if (totalHeight > descAreaHeight && descAreaHeight > 13) {
-                        int scrollSpeedMs = 66;
-                        int holdTimeMs = 1500;
-                        int scrollRange = totalHeight - descAreaHeight + 13;
-                        int cycleTime = scrollRange * scrollSpeedMs + holdTimeMs * 2;
-                        int t = (millis() - g_lastSatSelectTime) % cycleTime;
-                        if (t < holdTimeMs) yOffset = 0;
-                        else if (t < cycleTime - holdTimeMs) yOffset = (t - holdTimeMs) / scrollSpeedMs;
-                        else yOffset = scrollRange;
+                        if (g_descManualScrolled) {
+                            // 手动按中括号翻页模式下，暂停自动滚动功能
+                            yOffset = g_descManualYOffset;
+                        } else {
+                            // 默认自动循环滚动
+                            int scrollSpeedMs = 66;
+                            int holdTimeMs = 1500;
+                            int scrollRange = totalHeight - descAreaHeight + 13;
+                            int cycleTime = scrollRange * scrollSpeedMs + holdTimeMs * 2;
+                            int t = (millis() - g_lastSatSelectTime) % cycleTime;
+                            if (t < holdTimeMs) yOffset = 0;
+                            else if (t < cycleTime - holdTimeMs) yOffset = (t - holdTimeMs) / scrollSpeedMs;
+                            else yOffset = scrollRange;
+                        }
                     }
                     
                     canvas->setClipRect(rightX, descY, width - rightX, descAreaHeight);
                     
-                    // 1. Draw introduction wrapped text
+                    // 1. 绘制简介与属性细节文本
                     for (int idx = 0; idx < totalLines; idx++) {
                         int lineY = descY + idx * 13 - yOffset;
                         if (lineY >= descY - 13 && lineY <= descY + descAreaHeight) {
@@ -3380,7 +3467,7 @@ void drawSatSelectPage() {
                         }
                     }
                     
-                    // 2. Draw Category and Flag Badges below text (fully synchronized with scrolling & wrap support)
+                    // 2. 绘制分类标签与属性标记（置于文本下方，完美随滚动滑动）
                     int badgeY = descY + totalLines * 13 + 6 - yOffset;
                     const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(selSat.noradId);
                     if (entry) {
@@ -3390,7 +3477,6 @@ void drawSatSelectPage() {
                         String catName = Encyclopedia::getCategoryName(entry->category);
                         int catW = canvas->textWidth(catName.c_str()) + 6;
                         
-                        // Draw Category Badge
                         if (currBadgeY >= descY - 13 && currBadgeY <= descY + descAreaHeight) {
                             canvas->fillRoundRect(currBadgeX, currBadgeY, catW, 13, 2, canvas->color565(60, 80, 110));
                             canvas->setTextColor(TFT_WHITE);
@@ -3398,7 +3484,6 @@ void drawSatSelectPage() {
                         }
                         currBadgeX += catW + 4;
                         
-                        // Draw Flag Badges
                         uint32_t flags = entry->flags;
                         uint32_t allFlags[] = {
                             FLAG_VISIBLE, FLAG_CREWED, FLAG_HISTORIC, FLAG_ROCKET_BODY,
@@ -3409,7 +3494,6 @@ void drawSatSelectPage() {
                             if (flags & f) {
                                 String fName = Encyclopedia::getFlagName(f);
                                 if (fName.length() > 0) {
-                                    // Remove repetition
                                     if (catName.indexOf(fName) != -1 || fName.indexOf(catName) != -1) {
                                         continue;
                                     }
@@ -3447,157 +3531,6 @@ void drawSatSelectPage() {
                 }
             } else {
                 canvas->drawString(I18N::get(TXT_NO_DESCRIPTION), rightX, descY);
-            }
-            
-            if (satSelectedIndex >= NUM_BUILTIN_SATELLITES && requiredLines == 0) {
-                canvas->setTextColor(TFT_YELLOW);
-                canvas->drawString(I18N::get(TXT_PRESS_D_DELETE), rightX, bottomLimit - 12);
-            }
-            
-            if (requiredLines > 0) {
-                canvas->fillRect(rightX - 2, radioY - 2, width - rightX - 2, requiredLines * 11 + 2, canvas->color565(30, 40, 50));
-                
-                if (isTracking) {
-                    double tx_prev, ty_prev, tz_prev;
-                    double dist_prev = dist;
-                    if (selSat.calc.getTEME(current_unix + timeMachineOffset - 1, tx_prev, ty_prev, tz_prev)) {
-                        double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset - 1));
-                        ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
-                        GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                        TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
-                        dist_prev = topo_prev.range;
-                    }
-                    double radialVel = dist - dist_prev;
-                    
-                    double dlFreq = selSat.downlinkFreq.toDouble();
-                    double dopplerShiftHz = 0;
-                    if (dlFreq > 0) {
-                        dopplerShiftHz = -(radialVel / 299792.458) * (dlFreq * 1e6);
-                    }
-                    
-                    canvas->setTextColor(TFT_YELLOW);
-                    char posBuf[32];
-                    sprintf(posBuf, "Az:%03.0f El:%02.0f", az, el);
-                    canvas->drawString(posBuf, rightX, radioY);
-                    
-                    if (selSat.type == SAT_TYPE_WEATHER) {
-                        canvas->setTextColor(TFT_GREEN);
-                        char freqBuf[32];
-                        sprintf(freqBuf, "Rx:%s", selSat.downlinkFreq.c_str());
-                        canvas->drawString(freqBuf, rightX, radioY + 11);
-                        
-                        canvas->setTextColor(dopplerShiftHz > 0 ? TFT_CYAN : TFT_ORANGE);
-                        char dopBuf[32];
-                        sprintf(dopBuf, "%+dHz", (int)dopplerShiftHz);
-                        canvas->drawString(dopBuf, rightX + canvas->textWidth(freqBuf) + 2, radioY + 11);
-                        
-                        canvas->setTextColor(TFT_LIGHTGRAY);
-                        canvas->drawString((String(I18N::get(TXT_MODE)) + selSat.radioMode).c_str(), rightX, radioY + 22);
-                    }
-                    else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
-                        double dlFreq2 = 145.825;
-                        double dopplerShiftHz2 = -(radialVel / 299792.458) * (dlFreq2 * 1e6);
-                        
-                        canvas->setTextColor(TFT_GREEN);
-                        char f1[32];
-                        sprintf(f1, "APRS:%07.3f", dlFreq2 + dopplerShiftHz2/1e6);
-                        canvas->drawString(f1, rightX, radioY + 11);
-                        
-                        char f2[32];
-                        sprintf(f2, "SSTV:%07.3f", dlFreq + dopplerShiftHz/1e6);
-                        canvas->drawString(f2, rightX, radioY + 22);
-                        
-                        canvas->setTextColor(TFT_LIGHTGRAY);
-                        canvas->drawString((String(I18N::get(TXT_MODE)) + "FM/Packet").c_str(), rightX, radioY + 33);
-                    }
-                    else if (selSat.type == SAT_TYPE_HAM) {
-                        canvas->setTextColor(TFT_GREEN);
-                        char freqBuf[32];
-                        sprintf(freqBuf, "Rx:%s", selSat.downlinkFreq.c_str());
-                        canvas->drawString(freqBuf, rightX, radioY + 11);
-                        
-                        canvas->setTextColor(dopplerShiftHz > 0 ? TFT_CYAN : TFT_ORANGE);
-                        char dopBuf[32];
-                        sprintf(dopBuf, "%+dHz", (int)dopplerShiftHz);
-                        canvas->drawString(dopBuf, rightX + canvas->textWidth(freqBuf) + 2, radioY + 11);
-                        
-                        int nextLineY = radioY + 22;
-                        if (selSat.uplinkFreq.length() > 0) {
-                            canvas->setTextColor(TFT_RED);
-                            String txStr = "Tx:" + selSat.uplinkFreq;
-                            if (selSat.tone.length() > 0) txStr += " T:" + selSat.tone;
-                            canvas->drawString(txStr.c_str(), rightX, nextLineY);
-                            nextLineY += 11;
-                        }
-                        
-                        canvas->setTextColor(TFT_LIGHTGRAY);
-                        canvas->drawString((String(I18N::get(TXT_MODE)) + selSat.radioMode).c_str(), rightX, nextLineY);
-                    }
-                } else {
-                    if (selSat.type == SAT_TYPE_WEATHER) {
-                        canvas->setTextColor(TFT_GREEN);
-                        canvas->drawString("Rx: " + selSat.downlinkFreq + " MHz", rightX, radioY);
-                        canvas->setTextColor(TFT_CYAN);
-                        canvas->drawString((String(I18N::get(TXT_MODE)) + selSat.radioMode).c_str(), rightX, radioY + 11);
-                        canvas->setTextColor(TFT_LIGHTGRAY);
-                        canvas->drawString(I18N::get(TXT_WEATHER_IMAGING), rightX, radioY + 22);
-                    }
-                    else if (selSat.type == SAT_TYPE_SPACE_STATION && selSat.noradId == 25544) {
-                        canvas->setTextColor(TFT_GREEN);
-                        canvas->drawString("APRS: 145.825 MHz", rightX, radioY);
-                        canvas->drawString("SSTV: 145.800 MHz", rightX, radioY + 11);
-                        canvas->setTextColor(TFT_CYAN);
-                        canvas->drawString((String(I18N::get(TXT_MODE)) + "FM/Packet").c_str(), rightX, radioY + 22);
-                    }
-                    else if (selSat.type == SAT_TYPE_HAM) {
-                        canvas->setTextColor(TFT_GREEN);
-                        canvas->drawString("Rx: " + selSat.downlinkFreq + " MHz", rightX, radioY);
-                        
-                        int nextLineY = radioY + 11;
-                        if (selSat.uplinkFreq.length() > 0) {
-                            canvas->setTextColor(TFT_RED);
-                            String txStr = "Tx:" + selSat.uplinkFreq;
-                            if (selSat.tone.length() > 0) txStr += " T:" + selSat.tone;
-                            canvas->drawString(txStr.c_str(), rightX, nextLineY);
-                            nextLineY += 11;
-                        }
-                        
-                        canvas->setTextColor(TFT_CYAN);
-                        canvas->drawString((String(I18N::get(TXT_MODE)) + selSat.radioMode).c_str(), rightX, nextLineY);
-                        nextLineY += 11;
-                        
-                        PassEvent nextPass;
-                        bool foundNext = false;
-                        for (const auto& pass : recommendedPasses) {
-                            if (pass.satName == selSat.name && pass.aosTime >= current_unix + timeMachineOffset) {
-                                nextPass = pass;
-                                foundNext = true;
-                                break;
-                            }
-                        }
-                        if (foundNext) {
-                            canvas->setTextColor(TFT_YELLOW);
-                            time_t aosTime = nextPass.aosTime;
-                            time_t losTime = nextPass.losTime;
-                            
-                            struct tm* aos_info = localtime(&aosTime);
-                            char aosBuf[16];
-                            strftime(aosBuf, sizeof(aosBuf), "%H:%M:%S", aos_info);
-                            
-                            struct tm* los_info = localtime(&losTime);
-                            char losBuf[16];
-                            strftime(losBuf, sizeof(losBuf), "%H:%M:%S", los_info);
-                            
-                            char aosStr[32];
-                            char losStr[32];
-                            sprintf(aosStr, "%s%s", I18N::get(TXT_AOS), aosBuf);
-                            sprintf(losStr, "%s%s El:%02d", I18N::get(TXT_LOS), losBuf, (int)nextPass.maxElevation);
-                            
-                            canvas->drawString(aosStr, rightX, nextLineY);
-                            canvas->drawString(losStr, rightX, nextLineY + 11);
-                        }
-                    }
-                }
             }
         } else {
             if (downloadErrorMsg.length() > 0) {
@@ -5113,6 +5046,14 @@ void loop() {
                             else satSelectedIndex = NUM_SATELLITES;
                         } else if (justDot) {
                             satSelectedIndex = (satSelectedIndex + 1) % (NUM_SATELLITES + 1);
+                        } else if (justBracketL) {
+                            g_descManualScrolled = true;
+                            g_descManualYOffset -= 39;
+                            if (g_descManualYOffset < 0) g_descManualYOffset = 0;
+                        } else if (justBracketR) {
+                            g_descManualScrolled = true;
+                            g_descManualYOffset += 39;
+                            if (g_descManualYOffset > g_descMaxScroll) g_descManualYOffset = g_descMaxScroll;
                         }
                     }
                 }
@@ -6150,8 +6091,13 @@ void loop() {
                             double range_rate = dist - dist_prev;
                             
                             earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
+                            bool isZh = (I18N::getLanguage() == LANG_ZH);
                             char azaltBuf[32];
-                            sprintf(azaltBuf, "Az:%03d Alt:%02d", (int)az, (int)el);
+                            if (isZh) {
+                                sprintf(azaltBuf, "方位:%03d° 仰角:%02d°", (int)az, (int)el);
+                            } else {
+                                sprintf(azaltBuf, "Az:%03d° El:%02d°", (int)az, (int)el);
+                            }
                             earth_renderer->getCanvas()->drawString(azaltBuf, 5, 95);
                             
                             if (satType == SAT_TYPE_SPACE_STATION && noradId == 25544) {
@@ -6162,32 +6108,32 @@ void loop() {
                                 
                                 char rx1Buf[32];
                                 char rx2Buf[32];
-                                sprintf(rx1Buf, "Rx1:%07.3f", freq_aprs + shift_aprs/1000.0);
-                                sprintf(rx2Buf, "Rx2:%07.3f", freq_sstv + shift_sstv/1000.0);
+                                if (isZh) {
+                                    sprintf(rx1Buf, "下行1:%07.3f", freq_aprs + shift_aprs/1000.0);
+                                    sprintf(rx2Buf, "下行2:%07.3f", freq_sstv + shift_sstv/1000.0);
+                                } else {
+                                    sprintf(rx1Buf, "Rx1:%07.3f", freq_aprs + shift_aprs/1000.0);
+                                    sprintf(rx2Buf, "Rx2:%07.3f", freq_sstv + shift_sstv/1000.0);
+                                }
                                 earth_renderer->getCanvas()->drawString(rx1Buf, 5, 108);
                                 earth_renderer->getCanvas()->drawString(rx2Buf, 5, 120);
                             }
-                            else if (satType == SAT_TYPE_WEATHER) {
+                            else if (satType == SAT_TYPE_WEATHER || satType == SAT_TYPE_HAM) {
                                 if (downlinkFreq.length() > 0) {
                                     double freq_mhz = downlinkFreq.toDouble();
                                     double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
                                     char rxBuf[32];
-                                    sprintf(rxBuf, "Rx:%s (%+.1f)", downlinkFreq.c_str(), shift_khz);
+                                    if (isZh) {
+                                        sprintf(rxBuf, "下行:%s (%+.1f)", downlinkFreq.c_str(), shift_khz);
+                                    } else {
+                                        sprintf(rxBuf, "Rx:%s (%+.1f)", downlinkFreq.c_str(), shift_khz);
+                                    }
                                     earth_renderer->getCanvas()->drawString(rxBuf, 5, 108);
                                 }
-                            }
-                            else if (satType == SAT_TYPE_HAM) {
-                                if (downlinkFreq.length() > 0) {
-                                    double freq_mhz = downlinkFreq.toDouble();
-                                    double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
-                                    char rxBuf[32];
-                                    sprintf(rxBuf, "Rx:%s (%+.1f)", downlinkFreq.c_str(), shift_khz);
-                                    earth_renderer->getCanvas()->drawString(rxBuf, 5, 108);
-                                }
-                                if (uplinkFreq.length() > 0) {
+                                if (satType == SAT_TYPE_HAM && uplinkFreq.length() > 0) {
                                     earth_renderer->getCanvas()->setTextColor(TFT_ORANGE);
-                                    String txStr = "Tx:" + uplinkFreq;
-                                    if (tone.length() > 0) txStr += " T:" + tone;
+                                    String txStr = isZh ? ("上行:" + uplinkFreq) : ("Tx:" + uplinkFreq);
+                                    if (tone.length() > 0) txStr += isZh ? (" 亚音:" + tone) : (" Tone:" + tone);
                                     earth_renderer->getCanvas()->drawString(txStr.c_str(), 5, 120);
                                 }
                             }
@@ -6382,8 +6328,9 @@ void loop() {
                 }
                 
                 if (hasSatInfo && currentCalc != nullptr) {
+                    bool isZh = (I18N::getLanguage() == LANG_ZH);
                     earth_renderer->getCanvas()->setTextColor(satColor);
-                    earth_renderer->getCanvas()->drawString("Sat View", 180, 5);
+                    earth_renderer->getCanvas()->drawString(isZh ? "视角锁定" : "Sat View", isZh ? 180 : 180, 5);
                     
                     double tx, ty, tz;
                     if (currentCalc->getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
@@ -6411,8 +6358,13 @@ void loop() {
                         
                         char azBuf[32];
                         char elBuf[32];
-                        sprintf(azBuf, "Az : %03d", (int)az);
-                        sprintf(elBuf, "Alt: %02d", (int)el);
+                        if (isZh) {
+                            sprintf(azBuf, "方位: %03d°", (int)az);
+                            sprintf(elBuf, "仰角: %02d°", (int)el);
+                        } else {
+                            sprintf(azBuf, "Az : %03d°", (int)az);
+                            sprintf(elBuf, "El : %02d°", (int)el);
+                        }
                         
                         if (currentType == SAT_TYPE_SPACE_STATION && currentNoradId == 25544) {
                             double freq_aprs = 145.825;
@@ -6425,8 +6377,13 @@ void loop() {
                             
                             char rx1Buf[32];
                             char rx2Buf[32];
-                            sprintf(rx1Buf, "Rx1: %07.3f", freq_aprs + shift_aprs/1000.0);
-                            sprintf(rx2Buf, "Rx2: %07.3f", freq_sstv + shift_sstv/1000.0);
+                            if (isZh) {
+                                sprintf(rx1Buf, "下行1: %07.3f", freq_aprs + shift_aprs/1000.0);
+                                sprintf(rx2Buf, "下行2: %07.3f", freq_sstv + shift_sstv/1000.0);
+                            } else {
+                                sprintf(rx1Buf, "Rx1: %07.3f", freq_aprs + shift_aprs/1000.0);
+                                sprintf(rx2Buf, "Rx2: %07.3f", freq_sstv + shift_sstv/1000.0);
+                            }
                             earth_renderer->getCanvas()->drawString(rx1Buf, 5, 115);
                             earth_renderer->getCanvas()->drawString(rx2Buf, 5, 125);
                         } else {
@@ -6438,7 +6395,11 @@ void loop() {
                                     double freq_mhz = downlinkFreq.toDouble();
                                     double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
                                     char freqBuf[32];
-                                    sprintf(freqBuf, "Rx : %s (%+.1f)", downlinkFreq.c_str(), shift_khz);
+                                    if (isZh) {
+                                        sprintf(freqBuf, "下行: %s (%+.1f)", downlinkFreq.c_str(), shift_khz);
+                                    } else {
+                                        sprintf(freqBuf, "Rx : %s (%+.1f)", downlinkFreq.c_str(), shift_khz);
+                                    }
                                     earth_renderer->getCanvas()->drawString(freqBuf, 5, 125);
                                 }
                             }

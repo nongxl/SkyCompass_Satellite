@@ -15,8 +15,12 @@
     "freq": "137.100",
     "mode": "LRPT"
   },
+  "57172": {
+    "freq": "437.625",
+    "mode": "SSTV/BPSK"
+  },
   "_metadata": {
-    "last_updated": 1784424397,
-    "source": "GitHub Actions Auto Update"
+    "last_updated": 1784596397,
+    "source": "SkyCompass Radio Database"
   }
 }
