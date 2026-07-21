@@ -187,6 +187,16 @@ void unlockSatMutex() {
     if (g_satMutex) xSemaphoreGive(g_satMutex);
 }
 
+SemaphoreHandle_t g_passMutex = NULL;
+
+void lockPassMutex() {
+    if (g_passMutex) xSemaphoreTake(g_passMutex, portMAX_DELAY);
+}
+
+void unlockPassMutex() {
+    if (g_passMutex) xSemaphoreGive(g_passMutex);
+}
+
 volatile bool g_networkActive = false;
 struct NetworkActiveGuard {
     NetworkActiveGuard() { g_networkActive = true; }
@@ -857,7 +867,6 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
 
 TaskHandle_t predictorTaskHandle = NULL;
 TaskHandle_t imuTaskHandle = NULL; // IMU task handle, used to pause IMU during Grove bus probing
-portMUX_TYPE passMutex = portMUX_INITIALIZER_UNLOCKED;
 std::vector<PassEvent> recommendedPasses;
 bool showRecommendations = false;
 int passScrollIndex = 0;
@@ -938,7 +947,7 @@ void updateChainMonoDisplay() {
             bool foundNextPass = false;
             uint32_t earliestAos = 0xFFFFFFFF;
             
-            portENTER_CRITICAL(&passMutex);
+            lockPassMutex();
             for (const auto& pass : recommendedPasses) {
                 uint32_t passTime = pass.aosTime;
                 uint32_t currentSimTime = current_unix + timeMachineOffset;
@@ -950,7 +959,7 @@ void updateChainMonoDisplay() {
                     }
                 }
             }
-            portEXIT_CRITICAL(&passMutex);
+            unlockPassMutex();
             
             if (foundNextPass) {
                 timeDiff = nextPass.aosTime - (current_unix + timeMachineOffset);
@@ -1268,13 +1277,13 @@ void predictorTask(void* parameter) {
         std::vector<TreeItem> tempDisplayTree;
         rebuildTreeLocal(tempDisplayTree, tempRecommendedPasses, current_unix + timeMachineOffset);
         
-        portENTER_CRITICAL(&passMutex);
+        lockPassMutex();
         recommendedPasses.swap(tempRecommendedPasses);
         displayTree.swap(tempDisplayTree);
         predictionsReady = true;
         lastPredictionBaseTime = startTime; // 写入本次成功的基准时间缓存
         g_currentPredictingBaseTime = 0;
-        portEXIT_CRITICAL(&passMutex);
+        unlockPassMutex();
         
         if (g_orbitCalculating) {
             g_orbitCalculating = false;
@@ -1799,10 +1808,10 @@ void forceRefreshSingleSatTask(void* parameter) {
                 
                 downloadErrorMsg = "Refresh Success!";
                 
-                portENTER_CRITICAL(&passMutex);
+                lockPassMutex();
                 predictionsReady = false;
                 lastPredictionBaseTime = 0;
-                portEXIT_CRITICAL(&passMutex);
+                unlockPassMutex();
                 triggerPrediction = true;
             } else {
                 if (fetchError.length() > 0) {
@@ -1923,10 +1932,10 @@ void downloadCustomSatTask(void* parameter) {
                 downloadErrorMsg = "Download Success!";
                 noradInput = "";
                 
-                portENTER_CRITICAL(&passMutex);
+                lockPassMutex();
                 predictionsReady = false;
                 lastPredictionBaseTime = 0;
-                portEXIT_CRITICAL(&passMutex);
+                unlockPassMutex();
                 triggerPrediction = true;
             } else {
                 if (fetchError.length() > 0) {
@@ -2157,10 +2166,10 @@ void networkTaskImpl(void* parameter) {
             LOG_I("APP", "TLE Data is ready and models updated!");
             
             // Rerun predictor with new data
-            portENTER_CRITICAL(&passMutex);
+            lockPassMutex();
             predictionsReady = false;
             lastPredictionBaseTime = 0; // 缓存失效
-            portEXIT_CRITICAL(&passMutex);
+            unlockPassMutex();
             triggerPrediction = true;
             
             if (appState == STATE_SAT_SELECT) {
@@ -2384,6 +2393,9 @@ void drawLangSelectDialog(LGFX_Sprite* canvas) {
 void setup() {
     if (!g_satMutex) {
         g_satMutex = xSemaphoreCreateMutex();
+    }
+    if (!g_passMutex) {
+        g_passMutex = xSemaphoreCreateMutex();
     }
     
     Serial.begin(115200);
@@ -4096,7 +4108,7 @@ void loop() {
                 // Check if timezone adjusted day boundary is crossed
                 uint32_t targetTime = current_unix + timeMachineOffset;
                 bool isCacheValid = false;
-                portENTER_CRITICAL(&passMutex);
+                lockPassMutex();
                 uint32_t baseTime = 0;
                 if (predictionsReady && lastPredictionBaseTime != 0) {
                     baseTime = lastPredictionBaseTime;
@@ -4112,16 +4124,16 @@ void loop() {
                         isCacheValid = true;
                     }
                 }
-                portEXIT_CRITICAL(&passMutex);
+                unlockPassMutex();
                 
                 if (!isCacheValid) {
                     Serial.printf("[Debug] Time Machine resumed but cache invalid (day crossed). Resetting prediction. baseTime=%u, targetTime=%u\n", baseTime, targetTime);
-                    portENTER_CRITICAL(&passMutex);
+                    lockPassMutex();
                     predictionsReady = false;
                     lastPredictionBaseTime = 0; // Invalid cache
                     g_currentPredictingBaseTime = 0;
                     cancelPrediction = true; // 跨天时必须打断当前进行的计算并重算
-                    portEXIT_CRITICAL(&passMutex);
+                    unlockPassMutex();
                     triggerPrediction = true;
                 } else {
                     Serial.printf("[Debug] Time Machine resumed, cache is valid (same day). Continuing calculation or keeping cache. baseTime=%u\n", baseTime);
@@ -4160,10 +4172,10 @@ void loop() {
         if (abs(baseUserLat - oldLat) > 0.01 || abs(baseUserLon - oldLon) > 0.01 || abs(baseUserAlt - oldAlt) > 100.0) {
             Serial.printf("[Debug] Cache reset due to main loop coords change: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
                           oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
-            portENTER_CRITICAL(&passMutex);
+            lockPassMutex();
             lastPredictionBaseTime = 0; // 缓存失效
             predictionsReady = false;
-            portEXIT_CRITICAL(&passMutex);
+            unlockPassMutex();
             if (showRecommendations) {
                 triggerPrediction = true;
             }
@@ -4409,10 +4421,10 @@ void loop() {
                     else if (key == ']') { baseUserAlt += 10.0; if (baseUserAlt > 9000) baseUserAlt = 9000; locChanged = true; }
                     
                     if (locChanged) {
-                        portENTER_CRITICAL(&passMutex);
+                        lockPassMutex();
                         lastPredictionBaseTime = 0; // 缓存失效
                         predictionsReady = false;
-                        portEXIT_CRITICAL(&passMutex);
+                        unlockPassMutex();
                         
                         if (pos_manager) {
                             PositionData pos = {baseUserLat, baseUserLon, baseUserAlt};
@@ -4517,10 +4529,10 @@ void loop() {
                         posPrefs.end();
                     }
                     if (!isManualLocationMode) {
-                        portENTER_CRITICAL(&passMutex);
+                        lockPassMutex();
                         predictionsReady = false;
                         lastPredictionBaseTime = 0; // 缓存失效
-                        portEXIT_CRITICAL(&passMutex);
+                        unlockPassMutex();
                         triggerPrediction = true;
                     }
                 } else if (justR) {
@@ -4569,10 +4581,10 @@ void loop() {
                         // 4. Only recalculate if difference is beyond thresholds
                         if (timeCrossedDay || locShifted) {
                             Serial.printf("[Debug] Cache reset on justR: timeCrossedDay=%d, locShifted=%d\n", timeCrossedDay, locShifted);
-                            portENTER_CRITICAL(&passMutex);
+                            lockPassMutex();
                             lastPredictionBaseTime = 0; // 缓存失效
                             predictionsReady = false;
-                            portEXIT_CRITICAL(&passMutex);
+                            unlockPassMutex();
                             triggerPrediction = true;
                         } else {
                             Serial.println("[Debug] justR reset applied silently. Coords/Time shift within thresholds.");
@@ -4605,10 +4617,10 @@ void loop() {
                             posPrefs.putBool("use_manual_pos", false);
                             posPrefs.end();
                         }
-                        portENTER_CRITICAL(&passMutex);
+                        lockPassMutex();
                         predictionsReady = false;
                         lastPredictionBaseTime = 0; // 缓存失效
-                        portEXIT_CRITICAL(&passMutex);
+                        unlockPassMutex();
                         triggerPrediction = true;
                     } else if (isSatViewMode) {
                         isSatViewMode = false;
@@ -4622,7 +4634,7 @@ void loop() {
                         
                         uint32_t targetTime = current_unix + timeMachineOffset;
                         bool isCacheValid = false;
-                        portENTER_CRITICAL(&passMutex);
+                        lockPassMutex();
                         uint32_t baseTime = 0;
                         if (predictionsReady && lastPredictionBaseTime != 0) {
                             baseTime = lastPredictionBaseTime;
@@ -4638,7 +4650,7 @@ void loop() {
                                 isCacheValid = true;
                             }
                         }
-                        portEXIT_CRITICAL(&passMutex);
+                        unlockPassMutex();
                         
                         Serial.printf("[Debug] Enter Panel: predictionsReady=%d, lastPredictionBaseTime=%u, targetTime=%u, isCacheValid=%d, g_orbitCalculating=%d, triggerPrediction=%d\n", 
                                       predictionsReady, lastPredictionBaseTime, targetTime, isCacheValid, g_orbitCalculating, triggerPrediction);
@@ -4646,11 +4658,11 @@ void loop() {
                         bool needTrigger = !isCacheValid || (!predictionsReady && !g_orbitCalculating);
                         if (needTrigger && !g_orbitCalculating && !triggerPrediction) {
                             Serial.printf("[Debug] Triggering calculation. needTrigger=%d, isCacheValid=%d, predictionsReady=%d\n", needTrigger, isCacheValid, predictionsReady);
-                            portENTER_CRITICAL(&passMutex);
+                            lockPassMutex();
                             predictionsReady = false;
                             lastPredictionBaseTime = 0;
                             g_currentPredictingBaseTime = 0;
-                            portEXIT_CRITICAL(&passMutex);
+                            unlockPassMutex();
                             triggerPrediction = true;
                         }
                         
@@ -4658,7 +4670,7 @@ void loop() {
                     } else if (showRecommendations) {
                         if (selectedPassIndex != -1) {
                             // 获取当前选中的过境事件
-                            portENTER_CRITICAL(&passMutex);
+                            lockPassMutex();
                             if (selectedPassIndex >= 0 && selectedPassIndex < (int)recommendedPasses.size()) {
                                 const auto& pass = recommendedPasses[selectedPassIndex];
                                 
@@ -4670,7 +4682,7 @@ void loop() {
                                 showRecommendations = false;
                             }
                             selectedPassIndex = -1; // 重置详情索引
-                            portEXIT_CRITICAL(&passMutex);
+                            unlockPassMutex();
                         } else {
                             // Toggle category or open detail
                             if (passScrollIndex >= 0 && passScrollIndex < (int)displayTree.size()) {
@@ -4955,10 +4967,10 @@ void loop() {
                             g_recentLaunchFocusMode = false;
                             recentLaunchActiveBatchId = "";
                             g_repSatInitialized = false;
-                            portENTER_CRITICAL(&passMutex);
+                            lockPassMutex();
                             predictionsReady = false;
                             lastPredictionBaseTime = 0;
-                            portEXIT_CRITICAL(&passMutex);
+                            unlockPassMutex();
                             triggerPrediction = true;
                         }
                     } else {
@@ -5120,10 +5132,10 @@ void loop() {
                                 }
                             }
 
-                            portENTER_CRITICAL(&passMutex);
+                            lockPassMutex();
                             predictionsReady = false;
                             lastPredictionBaseTime = 0;
-                            portEXIT_CRITICAL(&passMutex);
+                            unlockPassMutex();
                             triggerPrediction = true;
                         }
                     } else if (justSemi) { // UP
@@ -5200,10 +5212,10 @@ void loop() {
                                 }
                             }
                             if (selectionChanged) {
-                                portENTER_CRITICAL(&passMutex);
+                                lockPassMutex();
                                 predictionsReady = false;
                                 lastPredictionBaseTime = 0;
-                                portEXIT_CRITICAL(&passMutex);
+                                unlockPassMutex();
                                 triggerPrediction = true;
                             }
                         } else if (justEnter) {
@@ -5314,10 +5326,10 @@ void loop() {
                     if (abs(baseUserLat - oldLat) > 0.01 || abs(baseUserLon - oldLon) > 0.01 || abs(baseUserAlt - oldAlt) > 100.0) {
                         Serial.printf("[Debug] GNSS sync cache reset: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
                                       oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
-                        portENTER_CRITICAL(&passMutex);
+                        lockPassMutex();
                         lastPredictionBaseTime = 0; // 缓存失效
                         predictionsReady = false;
-                        portEXIT_CRITICAL(&passMutex);
+                        unlockPassMutex();
                     }
                     
                     // Save GNSS location to Preferences (NVS) at most once per 60 seconds
@@ -5351,10 +5363,10 @@ void loop() {
                     LOG_I("APP", "Time synced to GNSS UTC: %u", current_unix);
                     
                     // Trigger predictor again with correct time
-                    portENTER_CRITICAL(&passMutex);
+                    lockPassMutex();
                     predictionsReady = false;
                     lastPredictionBaseTime = 0; // 缓存失效
-                    portEXIT_CRITICAL(&passMutex);
+                    unlockPassMutex();
                     triggerPrediction = true;
                 }
                 
@@ -6155,7 +6167,7 @@ void loop() {
             std::vector<PassEvent> localRecommendedPasses;
             std::vector<TreeItem> localDisplayTree;
 
-            portENTER_CRITICAL(&passMutex);
+            lockPassMutex();
             localPredictionsReady = predictionsReady;
             localPredictionProgress = predictionProgress;
             localTimeSynced = g_timeSynced;
@@ -6163,7 +6175,7 @@ void loop() {
                 localRecommendedPasses = recommendedPasses;
                 localDisplayTree = displayTree;
             }
-            portEXIT_CRITICAL(&passMutex);
+            unlockPassMutex();
 
             if (!localPredictionsReady) {
                 earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
