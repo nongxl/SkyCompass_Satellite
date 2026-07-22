@@ -1411,17 +1411,15 @@ struct NetworkParams {
 bool fetchSatNogsFrequency(int noradId, String& outDl, String& outUl, String& outMode) {
     PredictorTaskSuspendGuard predGuard;
     delay(50);
-    WiFiClientSecure *client = new WiFiClientSecure;
-    if (!client) return false;
-    client->setInsecure();
-    client->setTimeout(4000);
+    WiFiClient client;
+    client.setTimeout(4000);
     
     HTTPClient http;
     http.setTimeout(4000);
     http.setConnectTimeout(4000);
     
-    String url = "https://db.satnogs.org/api/transmitters/?format=json&norad_cat_id=" + String(noradId);
-    http.begin(*client, url);
+    String url = "http://db.satnogs.org/api/transmitters/?format=json&norad_cat_id=" + String(noradId);
+    http.begin(client, url);
     int httpCode = http.GET();
     bool success = false;
     
@@ -1464,39 +1462,27 @@ bool fetchSatNogsFrequency(int noradId, String& outDl, String& outUl, String& ou
     }
     
     http.end();
-    delete client;
     return success;
 }
 
 void fetchFrequencies() {
-    if (ESP.getFreeHeap() < 38000) {
-        LOG_I("APP", "Skipping frequency HTTPS sync due to low heap (%u bytes free)", (unsigned int)ESP.getFreeHeap());
-        return;
-    }
     PredictorTaskSuspendGuard predGuard;
-    delay(100); // Wait for LwIP TCP stack to reclaim memory from previous connections
-    WiFiClientSecure *client = new WiFiClientSecure;
-    if (!client) return;
-    client->setInsecure();
-    client->setTimeout(5000);
+    delay(50);
+    WiFiClient client;
+    client.setTimeout(4000);
     
     HTTPClient http;
-    http.setTimeout(5000);
-    http.setConnectTimeout(5000);
-    http.begin(*client, "https://raw.githubusercontent.com/nongxl/SkyCompass_Satellite/main/data/frequencies.json");
+    http.setTimeout(4000);
+    http.setConnectTimeout(4000);
+    http.begin(client, "http://raw.staticdn.net/nongxl/SkyCompass_Satellite/main/data/frequencies.json");
     int httpCode = http.GET();
-    if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-        if (httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-            String newUrl = http.getLocation();
-            http.end();
-            http.begin(*client, newUrl);
-            httpCode = http.GET();
-        }
+    if (httpCode != HTTP_CODE_OK) {
+        http.end();
+        http.begin(client, "http://raw.githubusercontent.com/nongxl/SkyCompass_Satellite/main/data/frequencies.json");
+        httpCode = http.GET();
     }
     if (httpCode == HTTP_CODE_OK) {
         String payload = http.getString();
-        
-        // Reclaim network buffers safely without deleting the client early
         http.end();
         
         payload.trim();
@@ -1533,11 +1519,8 @@ void fetchFrequencies() {
         } else {
             LOG_I("APP", "Frequencies payload skipped (size: %d)", payload.length());
         }
-    }
-    
-    if (client) {
+    } else {
         http.end();
-        delete client;
     }
 }
 
