@@ -897,8 +897,27 @@ void EarthRenderer::drawFocusSightLineAndShadow(double centerLat, double centerL
         if (sin_sunEl < -1.0f) sin_sunEl = -1.0f;
         float sunElDeg = asinf(sin_sunEl) * RAD_TO_DEG;
 
-        // 仅在白天 (太阳仰角 > 0°) 显示日影
-        if (sunElDeg > 0.0f) {
+        // 1. 太阳仰角晨昏过渡渐变因子 (太阳仰角在 -1.0° 到 +9.0° 之间 10° 范围平滑渐变)
+        float sunFade = (sunElDeg + 1.0f) / 10.0f;
+        if (sunFade > 1.0f) sunFade = 1.0f;
+        if (sunFade < 0.0f) sunFade = 0.0f;
+
+        // 2. 地球视角边缘 (Limb) 渐变因子 (转动球体至边缘 70%-100% 区域平滑淡出)
+        float dxCenter = (float)(ux - _centerX - _centerOffsetX);
+        float dyCenter = (float)(uy - _centerY - _centerOffsetY);
+        float distFromCenter = sqrtf(dxCenter * dxCenter + dyCenter * dyCenter);
+        float maxR = (float)_cameraFocusR;
+        float limbFade = 1.0f;
+        if (distFromCenter > maxR * 0.70f) {
+            limbFade = (maxR - distFromCenter) / (maxR * 0.30f);
+            if (limbFade < 0.0f) limbFade = 0.0f;
+            if (limbFade > 1.0f) limbFade = 1.0f;
+        }
+
+        float totalFade = sunFade * limbFade;
+
+        // 仅当渐变透明度 > 1% 时绘制日影，实现丝滑渐入渐出效果
+        if (totalFade > 0.01f) {
             float dLon = subLonR - uLonR;
             float y = sinf(dLon) * cosf(subLatR);
             float x = cosf(uLatR) * sinf(subLatR) - sinf(uLatR) * cosf(subLatR) * cosf(dLon);
@@ -950,10 +969,17 @@ void EarthRenderer::drawFocusSightLineAndShadow(double centerLat, double centerL
                     int headX = (int)(ux + dx);
                     int headY = (int)(uy + dy);
 
-                    uint16_t shadowCol = _display->color565(60, 65, 80);   // 暗灰色水滴影
-                    uint16_t shadowDot = _display->color565(130, 135, 150); // 水滴头中心微亮点
+                    uint8_t rCol = (uint8_t)(60.0f * totalFade);
+                    uint8_t gCol = (uint8_t)(65.0f * totalFade);
+                    uint8_t bCol = (uint8_t)(80.0f * totalFade);
+                    uint16_t shadowCol = _display->color565(rCol, gCol, bCol);   // 动态渐变暗灰色水滴影
 
-                    // 绘制纯粹水滴形阴影：尖端直连定位点 (ux, uy)，头部延伸至 (headX, headY)，无需中间连线
+                    uint8_t rDot = (uint8_t)(130.0f * totalFade);
+                    uint8_t gDot = (uint8_t)(135.0f * totalFade);
+                    uint8_t bDot = (uint8_t)(150.0f * totalFade);
+                    uint16_t shadowDot = _display->color565(rDot, gDot, bDot); // 动态渐变微亮点
+
+                    // 绘制纯粹水滴形阴影：尖端直连定位点 (ux, uy)，头部延伸至 (headX, headY)
                     _canvas->fillTriangle(ux, uy, pLeftX, pLeftY, pRightX, pRightY, shadowCol);
                     _canvas->fillCircle(headX, headY, 3, shadowCol);
                     _canvas->drawPixel(headX, headY, shadowDot);
