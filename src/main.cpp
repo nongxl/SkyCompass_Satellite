@@ -2932,7 +2932,7 @@ void setup() {
             xTaskCreatePinnedToCore(
                 predictorTask,
                 "PredictorTask",
-                16384,
+                8192,
                 NULL,
                 1,
                 &predictorTaskHandle,
@@ -2941,7 +2941,7 @@ void setup() {
             
             // Start network task on Core 0 to handle WiFi and TLE fetching in background
             manualWifiToggle = false;
-            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
+            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
 
             g_loadingStatusText = isZh ? "加载完成，准备就绪！" : "Ready!";
             g_loadingProgress = 100;
@@ -3875,10 +3875,11 @@ void drawSatSelectPage() {
     } else {
         // TAB_RECENT_LAUNCH Tab
         lockSatMutex();
-        std::vector<RecentLaunchItem> localLaunches = g_recentLaunches;
+        bool isLaunchEmpty = g_recentLaunches.empty();
+        int totalItems = g_recentLaunches.size();
         unlockSatMutex();
         
-        if (!recentLaunchDownloadSuccess && localLaunches.empty()) {
+        if (!recentLaunchDownloadSuccess && isLaunchEmpty) {
             if (recentLaunchDownloading) {
                 canvas->setTextColor(TFT_YELLOW);
                 canvas->drawString(I18N::get(TXT_DOWNLOADING_GP_JSONS), width/2 - canvas->textWidth(I18N::get(TXT_DOWNLOADING_GP_JSONS))/2, height/2 - 10);
@@ -3906,7 +3907,6 @@ void drawSatSelectPage() {
             int itemsPerPage = showBanner ? 6 : 8;
             int itemSpacing = 12;
             int startIndex = (recentLaunchSelectedIndex / itemsPerPage) * itemsPerPage;
-            int totalItems = localLaunches.size();
             
             for (int i = 0; i < itemsPerPage && (startIndex + i) < totalItems; i++) {
                 int index = startIndex + i;
@@ -3917,12 +3917,18 @@ void drawSatSelectPage() {
                     canvas->setTextColor(TFT_LIGHTGRAY);
                 }
                 
-                String checkBox = localLaunches[index].selected ? "[x]" : "[ ]";
+                lockSatMutex();
+                bool itemSel = (index < (int)g_recentLaunches.size()) ? g_recentLaunches[index].selected : false;
+                String nameStr = (index < (int)g_recentLaunches.size()) ? g_recentLaunches[index].displayName : "";
+                bool itemIsGroup = (index < (int)g_recentLaunches.size()) ? g_recentLaunches[index].isGroup : false;
+                int itemSatCnt = (index < (int)g_recentLaunches.size()) ? g_recentLaunches[index].satelliteCount : 0;
+                unlockSatMutex();
+
+                String checkBox = itemSel ? "[x]" : "[ ]";
                 canvas->drawString(checkBox.c_str(), 4, yPos);
                 
-                String nameStr = localLaunches[index].displayName;
-                if (localLaunches[index].isGroup) {
-                    nameStr = nameStr + " (" + String(localLaunches[index].satelliteCount) + ")";
+                if (itemIsGroup) {
+                    nameStr = nameStr + " (" + String(itemSatCnt) + ")";
                 }
                 if (index == recentLaunchSelectedIndex) {
                     drawScrollingText(canvas, nameStr.c_str(), 28, yPos, 56, TFT_WHITE);
@@ -3949,8 +3955,17 @@ void drawSatSelectPage() {
             canvas->drawFastVLine(85, 20, bottomLimit - 20, TFT_DARKGREY);
             
             int rightX = 89;
-            if (recentLaunchSelectedIndex < totalItems) {
-                RecentLaunchItem& item = localLaunches[recentLaunchSelectedIndex];
+            lockSatMutex();
+            RecentLaunchItem itemCopy;
+            bool hasSelectedItem = false;
+            if (recentLaunchSelectedIndex >= 0 && recentLaunchSelectedIndex < (int)g_recentLaunches.size()) {
+                itemCopy = g_recentLaunches[recentLaunchSelectedIndex];
+                hasSelectedItem = true;
+            }
+            unlockSatMutex();
+
+            if (hasSelectedItem) {
+                RecentLaunchItem& item = itemCopy;
                 
                 uint32_t epoch = item.epoch;
                 float inclination = item.inclination;
@@ -4853,7 +4868,10 @@ void loop() {
                     if (!g_networkActive) {
                         if (!HalWifi::isConnected()) {
                             manualWifiToggle = true;
-                            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+                            if (res != pdPASS) {
+                                LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
+                            }
                         } else {
                             WiFi.disconnect(true);
                             WiFi.mode(WIFI_OFF);
@@ -5339,7 +5357,7 @@ void loop() {
                                 pushCanvasWithFilter();
                                 
                                 int id = noradInput.toInt();
-                                BaseType_t res = xTaskCreatePinnedToCore(downloadCustomSatTask, "DownloadCustomSatTask", 16384, (void*)(intptr_t)id, 1, NULL, 0);
+                                BaseType_t res = xTaskCreatePinnedToCore(downloadCustomSatTask, "DownloadCustomSatTask", 8192, (void*)(intptr_t)id, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     isDownloadingCustom = false;
                                     downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
