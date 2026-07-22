@@ -969,20 +969,10 @@ void EarthRenderer::drawFocusSightLineAndShadow(double centerLat, double centerL
                     int headX = (int)(ux + dx);
                     int headY = (int)(uy + dy);
 
-                    uint8_t rCol = (uint8_t)(60.0f * totalFade);
-                    uint8_t gCol = (uint8_t)(65.0f * totalFade);
-                    uint8_t bCol = (uint8_t)(80.0f * totalFade);
-                    uint16_t shadowCol = _display->color565(rCol, gCol, bCol);   // 动态渐变暗灰色水滴影
-
-                    uint8_t rDot = (uint8_t)(130.0f * totalFade);
-                    uint8_t gDot = (uint8_t)(135.0f * totalFade);
-                    uint8_t bDot = (uint8_t)(150.0f * totalFade);
-                    uint16_t shadowDot = _display->color565(rDot, gDot, bDot); // 动态渐变微亮点
-
-                    // 绘制纯粹水滴形阴影：尖端直连定位点 (ux, uy)，头部延伸至 (headX, headY)
-                    _canvas->fillTriangle(ux, uy, pLeftX, pLeftY, pRightX, pRightY, shadowCol);
-                    _canvas->fillCircle(headX, headY, 3, shadowCol);
-                    _canvas->drawPixel(headX, headY, shadowDot);
+                    // 使用真实 Alpha 混合与底图地形像素叠加，完全渐变淡出至完全透明，绝无纯黑硬接缝
+                    fillTriangleAlpha(_canvas, ux, uy, pLeftX, pLeftY, pRightX, pRightY, 60, 65, 80, totalFade);
+                    fillCircleAlpha(_canvas, headX, headY, 3, 60, 65, 80, totalFade);
+                    blendPixelAlpha(_canvas, headX, headY, 130, 135, 150, totalFade);
                 }
             }
         }
@@ -1323,6 +1313,74 @@ inline void blendPixelAdd(LGFX_Sprite* canvas, int x, int y, uint8_t r, uint8_t 
     
     // Byte swap back to Big Endian (display format)
     buf[index] = (newCol >> 8) | (newCol << 8);
+}
+
+inline void blendPixelAlpha(LGFX_Sprite* canvas, int x, int y, uint8_t r, uint8_t g, uint8_t b, float alpha) {
+    if (alpha <= 0.001f) return;
+    int width = canvas->width();
+    int height = canvas->height();
+    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    
+    uint16_t* buf = (uint16_t*)canvas->getBuffer();
+    if (!buf) return;
+    
+    int index = y * width + x;
+    uint16_t rawCol = buf[index];
+    
+    uint16_t oldCol = (rawCol >> 8) | (rawCol << 8);
+    
+    uint8_t r_o = (oldCol >> 11) & 0x1F;
+    uint8_t g_o = (oldCol >> 5) & 0x3F;
+    uint8_t b_o = oldCol & 0x1F;
+    
+    uint8_t r_t = (r * 31) / 255;
+    uint8_t g_t = (g * 63) / 255;
+    uint8_t b_t = (b * 31) / 255;
+    
+    int r_new = (int)(r_o * (1.0f - alpha) + r_t * alpha);
+    int g_new = (int)(g_o * (1.0f - alpha) + g_t * alpha);
+    int b_new = (int)(b_o * (1.0f - alpha) + b_t * alpha);
+    
+    if (r_new > 31) r_new = 31;
+    if (g_new > 63) g_new = 63;
+    if (b_new > 31) b_new = 31;
+    
+    uint16_t newCol = (r_new << 11) | (g_new << 5) | b_new;
+    buf[index] = (newCol >> 8) | (newCol << 8);
+}
+
+inline void fillTriangleAlpha(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, int x2, int y2, uint8_t r, uint8_t g, uint8_t b, float alpha) {
+    if (alpha <= 0.001f) return;
+    int minX = std::min({x0, x1, x2});
+    int maxX = std::max({x0, x1, x2});
+    int minY = std::min({y0, y1, y2});
+    int maxY = std::max({y0, y1, y2});
+
+    auto edge = [](int ax, int ay, int bx, int by, int cx, int cy) {
+        return (cx - ax) * (by - ay) - (cy - ay) * (bx - ax);
+    };
+
+    for (int y = minY; y <= maxY; y++) {
+        for (int x = minX; x <= maxX; x++) {
+            int w0 = edge(x1, y1, x2, y2, x, y);
+            int w1 = edge(x2, y2, x0, y0, x, y);
+            int w2 = edge(x0, y0, x1, y1, x, y);
+            if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)) {
+                blendPixelAlpha(canvas, x, y, r, g, b, alpha);
+            }
+        }
+    }
+}
+
+inline void fillCircleAlpha(LGFX_Sprite* canvas, int cx, int cy, int rad, uint8_t r, uint8_t g, uint8_t b, float alpha) {
+    if (alpha <= 0.001f) return;
+    for (int dy = -rad; dy <= rad; dy++) {
+        for (int dx = -rad; dx <= rad; dx++) {
+            if (dx * dx + dy * dy <= rad * rad) {
+                blendPixelAlpha(canvas, cx + dx, cy + dy, r, g, b, alpha);
+            }
+        }
+    }
 }
 
 inline void drawLineAdd(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, uint8_t r, uint8_t g, uint8_t b, float alpha) {
