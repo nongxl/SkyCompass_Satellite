@@ -83,6 +83,8 @@ public:
 
     void setDrawDecorations(bool draw) { _drawDecorations = draw; }
 
+    void setGnssSearching(bool searching) { _gnssSearching = searching; }
+
     void setVisualMode(int mode) { _visualMode = mode; }
     int getVisualMode() const { return _visualMode; }
 
@@ -145,6 +147,7 @@ private:
     bool _isFastForwarding = false;
     int _visualMode = 0; // 0: Normal (No Aur/Air), 1: Red Night, 2: Gorgeous (With Aur/Air)
     bool _drawDecorations = true;
+    bool _gnssSearching = false;
 
     // Helper functions for orthographic projection
     bool projectOrthographic(double lat, double lon, double alt, double centerLat, double centerLon, int& outX, int& outY);

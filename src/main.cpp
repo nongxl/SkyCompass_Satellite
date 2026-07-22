@@ -6215,6 +6215,8 @@ void loop() {
         if (isManualLocationMode && ((millis() / 500) % 2 == 0)) {
             renderUserLat = 999.0; // Blink marker by putting it off-planet
         }
+        bool isGnssSearching = (gnss && gnss->isModuleInitialized() && !gnss->isInStandbyMode() && gnss->getStatus() != GNSS_STATUS_LOCKED);
+        earth_renderer->setGnssSearching(isGnssSearching);
         earth_renderer->setObserverConstrained(!isSatViewMode);
         earth_renderer->setFastForwarding(isFastForwarding);
         earth_renderer->setUnixTime(current_unix + timeMachineOffset);
