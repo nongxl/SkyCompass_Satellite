@@ -1928,13 +1928,9 @@ void forceRefreshSingleSatTask(void* parameter) {
             String fetchError = "";
             bool success = TLEUpdater::getTLE(targetId, new_tle, 0, nullptr, &fetchError);
             if (success && fetchError.length() == 0) {
-                new_tle.baseScore = g_satellites[targetIdx].baseScore;
-                SGP4Calc tempCalc;
-                tempCalc.init(new_tle);
-                
                 lockSatMutex();
                 g_satellites[targetIdx].tle = new_tle;
-                g_satellites[targetIdx].calc = tempCalc;
+                g_satellites[targetIdx].calc.init(new_tle);
                 if (targetIdx >= NUM_BUILTIN_SATELLITES) {
                     if (new_tle.name.length() > 0) {
                         g_satellites[targetIdx].name = new_tle.name;
@@ -2210,11 +2206,9 @@ void networkTaskImpl(void* parameter) {
             if (noradId == 50463) {
                 // JWST uses hardcoded TLE — no network needed
                 TLEData wTle = TLEManager::getJWST_TLE();
-                wTle.baseScore = g_satellites[i].baseScore;
-                SGP4Calc tempCalc; tempCalc.init(wTle);
                 lockSatMutex();
                 g_satellites[i].tle  = wTle;
-                g_satellites[i].calc = tempCalc;
+                g_satellites[i].calc.init(wTle);
                 unlockSatMutex();
                 updated = true;
                 continue;
@@ -2231,11 +2225,9 @@ void networkTaskImpl(void* parameter) {
 
                 if (cacheAge < maxAge && tleAge < (2 * 24 * 3600)) {
                     // Cache and TLE epoch are both fresh — use cache directly
-                    cached.baseScore = g_satellites[i].baseScore;
-                    SGP4Calc tempCalc; tempCalc.init(cached);
                     lockSatMutex();
                     g_satellites[i].tle  = cached;
-                    g_satellites[i].calc = tempCalc;
+                    g_satellites[i].calc.init(cached);
                     unlockSatMutex();
                     continue;
                 }
@@ -2269,11 +2261,9 @@ void networkTaskImpl(void* parameter) {
                     SGP4Calc::buildPseudoTle(rec, newTle.line1, newTle.line2);
                     TLEUpdater::saveToCache(noradId, newTle, now);
 
-                    SGP4Calc tempCalc;
-                    tempCalc.init(newTle);
                     lockSatMutex();
                     g_satellites[i].tle = newTle;
-                    g_satellites[i].calc = tempCalc;
+                    g_satellites[i].calc.init(newTle);
                     if (i >= NUM_BUILTIN_SATELLITES && newTle.name.length() > 0) {
                         g_satellites[i].name = newTle.name;
                         autoAssignIconAndColor(g_satellites[i].name, g_satellites[i].iconType, g_satellites[i].color);
