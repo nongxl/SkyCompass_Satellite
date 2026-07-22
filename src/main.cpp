@@ -3616,13 +3616,13 @@ void drawSatSelectPage() {
                 specBlock += String(specBuf);
             }
             
-            // 实时观察数据 (方位角/仰角)
+            // 实时观察数据 (方位角 / 仰角) 分开单行显示，确保“仰角:”作为行首键名高亮为绿色
             if (isTracking) {
                 char radioBuf[128];
                 if (isZh) {
-                    snprintf(radioBuf, sizeof(radioBuf), "\n方位角: %03.0f°  仰角: %02.0f°", az, el);
+                    snprintf(radioBuf, sizeof(radioBuf), "\n方位角: %03.0f°\n仰角: %02.0f°", az, el);
                 } else {
-                    snprintf(radioBuf, sizeof(radioBuf), "\nAz: %03.0f°  El: %02.0f°", az, el);
+                    snprintf(radioBuf, sizeof(radioBuf), "\nAzimuth: %03.0f°\nElevation: %02.0f°", az, el);
                 }
                 specBlock += String(radioBuf);
             }
@@ -3638,7 +3638,7 @@ void drawSatSelectPage() {
                 specBlock += String(statusBuf);
             }
             
-            // 无线电频段细节 (Rx / Tx / Tone / Mode)
+            // 无线电频段细节 (下行 / 上行 / 亚音 / 调制模式)
             if (selSat.downlinkFreq.length() > 0) {
                 char freqBuf[128];
                 if (isZh) {
@@ -3651,19 +3651,20 @@ void drawSatSelectPage() {
             if (selSat.uplinkFreq.length() > 0) {
                 char txBuf[128];
                 if (isZh) {
-                    if (selSat.tone.length() > 0) {
-                        snprintf(txBuf, sizeof(txBuf), "\n上行: %s MHz (亚音:%s)", selSat.uplinkFreq.c_str(), selSat.tone.c_str());
-                    } else {
-                        snprintf(txBuf, sizeof(txBuf), "\n上行: %s MHz", selSat.uplinkFreq.c_str());
-                    }
+                    snprintf(txBuf, sizeof(txBuf), "\n上行: %s MHz", selSat.uplinkFreq.c_str());
                 } else {
-                    if (selSat.tone.length() > 0) {
-                        snprintf(txBuf, sizeof(txBuf), "\nTx: %s MHz (Tone:%s)", selSat.uplinkFreq.c_str(), selSat.tone.c_str());
-                    } else {
-                        snprintf(txBuf, sizeof(txBuf), "\nTx: %s MHz", selSat.uplinkFreq.c_str());
-                    }
+                    snprintf(txBuf, sizeof(txBuf), "\nTx: %s MHz", selSat.uplinkFreq.c_str());
                 }
                 specBlock += String(txBuf);
+            }
+            if (selSat.tone.length() > 0) {
+                char toneBuf[64];
+                if (isZh) {
+                    snprintf(toneBuf, sizeof(toneBuf), "\n亚音: %s", selSat.tone.c_str());
+                } else {
+                    snprintf(toneBuf, sizeof(toneBuf), "\nTone: %s", selSat.tone.c_str());
+                }
+                specBlock += String(toneBuf);
             }
             if (selSat.radioMode.length() > 0) {
                 char modeBuf[64];
