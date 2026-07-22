@@ -5068,7 +5068,7 @@ void loop() {
                                 networkTask, "NetworkTask", 8192, params, 1, NULL, 0
                             );
                             if (res != pdPASS) {
-                                LOG_E("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
+                                LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
                                 delete params;
                             }
                         }
