@@ -2164,11 +2164,9 @@ void networkTaskImpl(void* parameter) {
             downloadErrorMsg = "WiFi Connected! Syncing time...";
         }
         
-        // Auto-trigger recent launches download if active tab is Recent Launch
+        // Auto-trigger recent launches download sequentially if active tab is Recent Launch
         if (currentSatTab == TAB_RECENT_LAUNCH || recentLaunchDownloading) {
-            recentLaunchDownloading = true;
-            recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
-            xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 16384, NULL, 1, NULL, 0);
+            recentLaunchNetworkTaskImpl();
         }
         
         // 2. Fetch NTP
@@ -5066,9 +5064,13 @@ void loop() {
                             wifiIsInputtingPassword = false;
                             
                             manualWifiToggle = true; // Stay connected since user explicitly set it up
-                            xTaskCreatePinnedToCore(
-                                networkTask, "NetworkTask", 16384, params, 1, NULL, 0
+                            BaseType_t res = xTaskCreatePinnedToCore(
+                                networkTask, "NetworkTask", 8192, params, 1, NULL, 0
                             );
+                            if (res != pdPASS) {
+                                LOG_E("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
+                                delete params;
+                            }
                         }
                     } else if (justBack) {
                         if (wifiPasswordLen > 0) {
@@ -5183,7 +5185,7 @@ void loop() {
                             recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
                             drawSatSelectPage();
                             pushCanvasWithFilter();
-                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 16384, NULL, 1, NULL, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 8192, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 recentLaunchDownloading = false;
                                 recentLaunchErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
@@ -5201,7 +5203,7 @@ void loop() {
                                 downloadErrorMsg = I18N::get(TXT_REFRESHING_GP);
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
-                                BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 16384, (void*)(intptr_t)satSelectedIndex, 1, NULL, 0);
+                                BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 8192, (void*)(intptr_t)satSelectedIndex, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
                                     drawSatSelectPage();
@@ -5218,7 +5220,7 @@ void loop() {
                                 downloadErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
-                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
+                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
                                     drawSatSelectPage();
