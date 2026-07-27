@@ -51,6 +51,13 @@ bool SGP4Calc::getTEME(uint32_t unix_ts, double& x, double& y, double& z, double
     
     double tsince = (jd - temp_satrec.jdsatepoch) * 24.0 * 60.0;
     
+    // 如果 tsince 时间跨度超过 30 天 (43200 分钟)，SGP4 已经完全失去预测精度，
+    // 并且深空积分器 dsspace 会执行超十万次双精度浮点积分循环（导致单次 SGP4 运算耗时数秒而卡死看门狗）。
+    // 直接拦截并返回错误。
+    if (abs(tsince) > 30.0 * 24.0 * 60.0) {
+        return false;
+    }
+    
     double ro[3];
     double vo[3];
     
