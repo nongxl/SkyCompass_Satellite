@@ -64,11 +64,58 @@ public:
         bool imuOk = M5.Imu.begin();
         
         if (imuOk) {
-            LOG_I("IMU", "IMU initialized successfully");
-            _enabled = true;
-            _data.status = IMU_STATUS_READY;
-            _lastUpdate = millis();
-            return true;
+            LOG_I("IMU", "IMU detected on I2C bus. Performing sanity check to filter out phantom devices...");
+            
+            // 进行 15 次快速采样，通过检验重力加速度范围与 ADC 噪声变化排除假阳性（如 Chain Mono UART 引起的虚假 ACK）
+            int validCount = 0;
+            float prevX = 0, prevY = 0, prevZ = 0;
+            bool first = true;
+            bool hasChange = false;
+            
+            for (int i = 0; i < 15; i++) {
+                M5.Imu.update();
+                auto imu_data = M5.Imu.getImuData();
+                float x = imu_data.accel.x;
+                float y = imu_data.accel.y;
+                float z = imu_data.accel.z;
+                
+                // 排除无效数值
+                if (isnan(x) || isnan(y) || isnan(z) || isinf(x) || isinf(y) || isinf(z)) {
+                    delay(10);
+                    continue;
+                }
+                
+                // 校验加速度模长：对于静止/微动设备，重力加速度绝对值应在合理区间 [0.6G, 1.8G]
+                float mag = sqrt(x*x + y*y + z*z);
+                if (mag > 0.6f && mag < 1.8f) {
+                    validCount++;
+                }
+                
+                // 校验数据波动：真实 IMU 因热噪声，连续浮点读数绝无可能 100% 完全相同。若全部相同，说明是死数据/无响应总线
+                if (!first) {
+                    if (x != prevX || y != prevY || z != prevZ) {
+                        hasChange = true;
+                    }
+                }
+                prevX = x; prevY = y; prevZ = z;
+                first = false;
+                
+                delay(10);
+            }
+            
+            // 必须有足够数量的正常模长数据，且数据必须存在微小的随机噪声波动
+            if (validCount >= 8 && hasChange) {
+                LOG_I("IMU", "IMU verified successfully (validCount=%d, hasChange=%d)", validCount, (int)hasChange);
+                _enabled = true;
+                _data.status = IMU_STATUS_READY;
+                _lastUpdate = millis();
+                return true;
+            } else {
+                LOG_W("IMU", "IMU verification failed (validCount=%d, hasChange=%d). Treating as phantom/fake device and disabling.", validCount, (int)hasChange);
+                _data.status = IMU_STATUS_ERROR;
+                _enabled = false;
+                return false;
+            }
         } else {
             LOG_I("IMU", "IMU initialization FAILED!");
             _data.status = IMU_STATUS_ERROR;
