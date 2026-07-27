@@ -1852,8 +1852,10 @@ void recentLaunchNetworkTaskImpl() {
     }
     
     // 2. Sync Time (NTP)
+    // Pass gmtOffset_sec=0 to sync to UTC. getUnixTime() returns time() which is
+    // affected by configTime()'s timezone offset. We always work in UTC internally.
     recentLaunchErrorMsg = "Syncing NTP time...";
-    HalWifi::syncNTPTime();
+    HalWifi::syncNTPTime(0);
     uint32_t ntpTime = HalWifi::getUnixTime();
     if (ntpTime > 0) {
         current_unix = ntpTime;
@@ -2209,8 +2211,8 @@ void networkTaskImpl(void* parameter) {
             recentLaunchNetworkTaskImpl();
         }
         
-        // 2. Fetch NTP
-        HalWifi::syncNTPTime();
+        // 2. Fetch NTP (UTC, gmtOffset_sec=0 ensures time() returns UTC)
+        HalWifi::syncNTPTime(0);
         
         // 3. Update time
         uint32_t ntpTime = HalWifi::getUnixTime();
@@ -6500,7 +6502,7 @@ void loop() {
                     earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
                     earth_renderer->getCanvas()->drawString(I18N::get(TXT_PASS_MAX_EL), 65, 70);
                     earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
-                    int maxElX = (I18N::getLanguage() == LANG_ZH) ? 120 : 100;
+                    int maxElX = (I18N::getLanguage() == LANG_ZH) ? 120 : 115;
                     earth_renderer->getCanvas()->drawString((String((int)p.maxElevation) + "°").c_str(), maxElX, 70);
                     
                     // Reason: (y=82)

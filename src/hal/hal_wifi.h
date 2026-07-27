@@ -17,7 +17,9 @@ public:
     static bool isConnected();
     
     // Sync time using NTP. Returns true if successful.
-    static bool syncNTPTime(long gmtOffset_sec = 28800, int daylightOffset_sec = 0);
+    // IMPORTANT: Always pass gmtOffset_sec=0 to get true UTC from getUnixTime().
+    // The system uses UTC internally; timezone is applied only at display time.
+    static bool syncNTPTime(long gmtOffset_sec = 0, int daylightOffset_sec = 0);
     
     // Get current Unix time (seconds since epoch)
     // Returns 0 if time is not synced.
