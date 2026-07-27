@@ -56,7 +56,7 @@ bool SGP4Calc::getTEME(uint32_t unix_ts, double& x, double& y, double& z, double
     
     bool success = sgp4(wgs72, temp_satrec, tsince, ro, vo);
     
-    if (success) {
+    if (success && temp_satrec.error == 0) {
         x = ro[0];
         y = ro[1];
         z = ro[2];
