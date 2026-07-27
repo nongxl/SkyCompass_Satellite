@@ -111,7 +111,7 @@ public:
                 _lastUpdate = millis();
                 return true;
             } else {
-                LOG_W("IMU", "IMU verification failed (validCount=%d, hasChange=%d). Treating as phantom/fake device and disabling.", validCount, (int)hasChange);
+                LOG_I("IMU", "IMU verification failed (validCount=%d, hasChange=%d). Treating as phantom/fake device and disabling.", validCount, (int)hasChange);
                 _data.status = IMU_STATUS_ERROR;
                 _enabled = false;
                 return false;
