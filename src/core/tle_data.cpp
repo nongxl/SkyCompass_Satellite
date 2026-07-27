@@ -33,12 +33,53 @@ TLEData TLEManager::getHubble_TLE() {
     return hubble;
 }
 
+#include <time.h>
+
 TLEData TLEManager::getJWST_TLE() {
     TLEData jwst;
     jwst.name = "JWST";
-    // Pseudo-TLE for deep space at L2, gives it a ~1-year orbit roughly on the ecliptic
-    jwst.line1 = "1 50463U 21130A   22001.00000000  .00000000  00000-0  00000-0 0  9999";
+    
+    // 动态生成接近当前系统时间的历元（Epoch），避免 dsspace 解析器死循环卡看门狗，并使 GP Age 显示为 0d 左右。
+    time_t now = time(nullptr);
+    if (now < 1700000000) {
+        // 时钟未同步时，默认使用 2026 年（对应模拟启动锚点时间 2026-07-27）
+        now = 1785096183;
+    }
+    struct tm* tm_utc = gmtime(&now);
+    int year = tm_utc->tm_year % 100; // 两位年份，例如 26
+    int yday = tm_utc->tm_yday + 1;   // 一年中的天数，1~366
+    
+    char l1_buf[80];
+    snprintf(l1_buf, sizeof(l1_buf), "1 50463U 21130A   %02d%03d.00000000  .00000000  00000-0  00000-0 0  999", year, yday);
+    
+    // 计算 Line 1 校验和（只累加数字和减号，取个位数）
+    int sum = 0;
+    for (int i = 0; i < 68; i++) {
+        char c = l1_buf[i];
+        if (c >= '0' && c <= '9') sum += (c - '0');
+        else if (c == '-') sum += 1;
+    }
+    l1_buf[68] = '0' + (sum % 10);
+    l1_buf[69] = '\0';
+    
+    jwst.line1 = String(l1_buf);
+    
+    // Line 2 原始串（末尾保留空出给校验和）
     jwst.line2 = "2 50463  23.4392   0.0000 0000000   0.0000   0.0000  0.00273700    00";
+    
+    // 计算 Line 2 校验和并补齐
+    sum = 0;
+    for (int i = 0; i < 68; i++) {
+        char c = jwst.line2[i];
+        if (c >= '0' && c <= '9') sum += (c - '0');
+        else if (c == '-') sum += 1;
+    }
+    char l2_buf[80];
+    strncpy(l2_buf, jwst.line2.c_str(), 68);
+    l2_buf[68] = '0' + (sum % 10);
+    l2_buf[69] = '\0';
+    jwst.line2 = String(l2_buf);
+    
     jwst.baseScore = 0;
     return jwst;
 }
