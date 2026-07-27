@@ -1468,22 +1468,25 @@ bool fetchSatNogsFrequency(int noradId, String& outDl, String& outUl, String& ou
 void fetchFrequencies() {
     PredictorTaskSuspendGuard predGuard;
     delay(50);
-    WiFiClient client;
-    client.setTimeout(4000);
+    std::unique_ptr<WiFiClient> client(new WiFiClient());
+    if (!client) return;
+    client->setTimeout(4000);
     
-    HTTPClient http;
-    http.setTimeout(4000);
-    http.setConnectTimeout(4000);
-    http.begin(client, "http://raw.staticdn.net/nongxl/SkyCompass_Satellite/main/data/frequencies.json");
-    int httpCode = http.GET();
+    std::unique_ptr<HTTPClient> http(new HTTPClient());
+    if (!http) return;
+    
+    http->setTimeout(4000);
+    http->setConnectTimeout(4000);
+    http->begin(*client, "http://raw.staticdn.net/nongxl/SkyCompass_Satellite/main/data/frequencies.json");
+    int httpCode = http->GET();
     if (httpCode != HTTP_CODE_OK) {
-        http.end();
-        http.begin(client, "http://raw.githubusercontent.com/nongxl/SkyCompass_Satellite/main/data/frequencies.json");
-        httpCode = http.GET();
+        http->end();
+        http->begin(*client, "http://raw.githubusercontent.com/nongxl/SkyCompass_Satellite/main/data/frequencies.json");
+        httpCode = http->GET();
     }
     if (httpCode == HTTP_CODE_OK) {
-        String payload = http.getString();
-        http.end();
+        String payload = http->getString();
+        http->end();
         
         payload.trim();
         if (payload.length() > 0 && payload.length() < 10240 && payload.startsWith("{")) {
@@ -1520,7 +1523,7 @@ void fetchFrequencies() {
             LOG_I("APP", "Frequencies payload skipped (size: %d)", payload.length());
         }
     } else {
-        http.end();
+        http->end();
     }
 }
 
@@ -2924,7 +2927,7 @@ void setup() {
             
             // Start network task on Core 0 to handle WiFi and TLE fetching in background
             manualWifiToggle = false;
-            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
 
             g_loadingStatusText = isZh ? "加载完成，准备就绪！" : "Ready!";
             g_loadingProgress = 100;
@@ -2933,7 +2936,7 @@ void setup() {
             vTaskDelete(NULL);
         },
         "SetupLoader",
-        8192,
+        12288,
         NULL,
         2, // Slightly lower than IMU but higher than predictor
         NULL,
@@ -4852,7 +4855,7 @@ void loop() {
                     if (!g_networkActive) {
                         if (!HalWifi::isConnected()) {
                             manualWifiToggle = true;
-                            BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
                             }
@@ -5057,7 +5060,7 @@ void loop() {
                             
                             manualWifiToggle = true; // Stay connected since user explicitly set it up
                             BaseType_t res = xTaskCreatePinnedToCore(
-                                networkTask, "NetworkTask", 8192, params, 1, NULL, 0
+                                networkTask, "NetworkTask", 16384, params, 1, NULL, 0
                             );
                             if (res != pdPASS) {
                                 LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
@@ -5212,7 +5215,7 @@ void loop() {
                                 downloadErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
-                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
                                     drawSatSelectPage();

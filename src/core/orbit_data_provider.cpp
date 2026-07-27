@@ -7,6 +7,7 @@
 #include <WiFiClient.h>  // Plain HTTP — no TLS heap cost
 #include <LittleFS.h>
 #include <esp_task_wdt.h>
+#include <memory>
 
 // Helper to streamingly read a single JSON object from stream
 static String readNextJsonObject(WiFiClient* stream, int& totalReadBytes) {
@@ -97,36 +98,39 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
     }
     
     // Use plain HTTP — CelesTrak supports HTTP and this saves ~40KB TLS heap
-    HTTPClient http;
-    http.setTimeout(10000);
-    http.setConnectTimeout(5000);
-    http.setUserAgent("Mozilla/5.0 (ESP32-Cardputer; SkyCompass Satellite Tracker)");
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    std::unique_ptr<HTTPClient> http(new HTTPClient());
+    if (!http) return false;
+    http->setTimeout(10000);
+    http->setConnectTimeout(5000);
+    http->setUserAgent("Mozilla/5.0 (ESP32-Cardputer; SkyCompass Satellite Tracker)");
+    http->setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     char url[128];
     sprintf(url, "http://celestrak.org/NORAD/elements/gp.php?CATNR=%u&FORMAT=json", (unsigned int)catNum);
     
-    WiFiClient client;
+    std::unique_ptr<WiFiClient> client(new WiFiClient());
+    if (!client) return false;
+    
     if (sharedClient) {
-        http.begin(*sharedClient, url);
+        http->begin(*sharedClient, url);
     } else {
-        http.begin(client, url);
+        http->begin(*client, url);
     }
     
-    int httpCode = http.GET();
+    int httpCode = http->GET();
     if (httpCode < 0) {
-        http.end();
+        http->end();
         delay(1000);
         if (sharedClient) {
-            http.begin(*sharedClient, url);
+            http->begin(*sharedClient, url);
         } else {
-            http.begin(client, url);
+            http->begin(*client, url);
         }
-        httpCode = http.GET();
+        httpCode = http->GET();
     }
     if (outHttpCode) *outHttpCode = httpCode;
     bool success = false;
     if (httpCode == HTTP_CODE_OK) {
-        String payload = http.getString();
+        String payload = http->getString();
         payload.trim();
         if (payload.startsWith("[") && payload.endsWith("]")) {
             payload = payload.substring(1, payload.length() - 1);
@@ -143,7 +147,7 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
             success = true;
         }
     }
-    http.end();
+    http->end();
     return success;
 }
 
@@ -220,34 +224,38 @@ bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& te
         }
     }
 
-    WiFiClient client;
-    HTTPClient http;
-    http.setTimeout(60000);
-    http.setConnectTimeout(30000);
-    http.setUserAgent("Mozilla/5.0 (ESP32-Cardputer; SkyCompass Satellite Tracker)");
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    std::unique_ptr<WiFiClient> client(new WiFiClient());
+    if (!client) return false;
+    
+    std::unique_ptr<HTTPClient> http(new HTTPClient());
+    if (!http) return false;
+    
+    http->setTimeout(60000);
+    http->setConnectTimeout(30000);
+    http->setUserAgent("Mozilla/5.0 (ESP32-Cardputer; SkyCompass Satellite Tracker)");
+    http->setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     
     String url = "http://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=json";
-    http.begin(client, url);
-    int httpCode = http.GET();
-
+    http->begin(*client, url);
+    int httpCode = http->GET();
+ 
     // 如果网络波动导致初次 DNS 或连接失败，自动重试一次
     if (httpCode < 0) {
-        http.end();
+        http->end();
         delay(1500);
-        http.begin(client, url);
-        httpCode = http.GET();
+        http->begin(*client, url);
+        httpCode = http->GET();
     }
-
+ 
     if (outHttpCode) *outHttpCode = httpCode;
     
     if (httpCode != HTTP_CODE_OK) {
-        http.end();
+        http->end();
         return false;
     }
     
-    int expectedSize = http.getSize();
-    WiFiClient* stream = http.getStreamPtr();
+    int expectedSize = http->getSize();
+    WiFiClient* stream = http->getStreamPtr();
     File f = LittleFS.open("/json_recent_raw.jsonl", "w", true);
     
     int rawCount = 0;
@@ -283,7 +291,7 @@ bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& te
     if (f) {
         f.close();
     }
-    http.end();
+    http->end();
     
     bool completed = true;
     if (expectedSize > 0 && totalReadBytes < expectedSize) {
