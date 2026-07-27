@@ -145,7 +145,7 @@ private:
     // Rendering configs
     bool _observerConstrained = true;
     bool _isFastForwarding = false;
-    int _visualMode = 0; // 0: Normal (No Aur/Air), 1: Red Night, 2: Gorgeous (With Aur/Air)
+    int _visualMode = 0; // 0: Normal (With Aurora), 1: Red Night (With Aurora)
     bool _drawDecorations = true;
     bool _gnssSearching = false;
 
@@ -157,7 +157,6 @@ private:
     void drawContinents(double centerLat, double centerLon);
     void drawLightPollution(double centerLat, double centerLon);
     void drawFocusSightLineAndShadow(double centerLat, double centerLon, double userLat, double userLon, const std::vector<SatRenderData>& satellites);
-    void drawAirglow(double centerLat, double centerLon);
     void drawAuroras(double centerLat, double centerLon);
     void drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon);
     void drawSatelliteIcon(int x, int y, SatIconType iconType, uint16_t color, bool renderDark, float intensity = 1.0f);

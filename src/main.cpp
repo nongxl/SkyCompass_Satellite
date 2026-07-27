@@ -660,7 +660,7 @@ int NUM_SATELLITES = 0;
 SatProfile g_satellites[MAX_SATELLITES];
 
 // We use a simulated time starting near the TLE epoch for Phase 3 offline testing
-uint32_t current_unix = 0; // Will be set in setup()
+volatile uint32_t current_unix = 0; // Will be set in setup()
 int32_t timeMachineOffset = 0;
 unsigned long last_update = 0;
 unsigned long gnssStartTime = 0;
@@ -1185,6 +1185,8 @@ volatile bool cancelPrediction = false;
 uint32_t lastPredictionBaseTime = 0;
 bool manualWifiToggle = false;
 std::vector<int> entrySelectedSatellites;
+bool entryRecentLaunchFocusMode = false;
+String entryRecentLaunchActiveBatchId = "";
 
 // Custom Satellite Input State
 String noradInput = "";
@@ -1210,6 +1212,13 @@ void predictorTask(void* parameter) {
         vTaskDelay(pdMS_TO_TICKS(2000));
         
         if (g_networkActive) {
+            continue;
+        }
+        
+        // Heap Protection: If system heap memory is critically low (< 24KB), defer the calculation
+        if (ESP.getFreeHeap() < 24000) {
+            LOG_I("APP", "Predictor task deferred: low heap safety guard triggered (%u bytes free)", ESP.getFreeHeap());
+            vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
         
@@ -1365,6 +1374,12 @@ void predictorTask(void* parameter) {
                 vTaskDelay(1); // Yield CPU 0
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
+                // Heap Protection: If system heap memory is critically low (< 21KB) during calculation, abort Phase 2 to prevent OOM
+                if (ESP.getFreeHeap() < 21000) {
+                    LOG_I("APP", "Predictor task Phase 2 interrupted: low heap protection triggered (%u bytes free)", ESP.getFreeHeap());
+                    break;
+                }
+                
                 SatelliteType type = SAT_TYPE_VISUAL;
                 bool isSelected = false;
                 TLEData tle;
@@ -1407,7 +1422,7 @@ void predictorTask(void* parameter) {
             predictionProgress = 100;
         }
         
-        if (triggerPrediction || cancelPrediction) {
+        if (triggerPrediction || cancelPrediction || g_networkActive) {
             if (cancelPrediction) {
                 cancelPrediction = false;
                 g_orbitCalculating = false; // 强行熄灭 Chain Mono 的计算动画
@@ -1431,11 +1446,8 @@ void predictorTask(void* parameter) {
             return a.aosTime < b.aosTime;
         });
         
-        // Auto-expand first category on finish
-        catExpanded[0] = true;
-        catExpanded[1] = false;
-        catExpanded[2] = false;
-        catExpanded[3] = false;
+        // Auto-expand first category on finish removed to keep user manual selection state and avoid UI flicker
+        // catExpanded states are now kept and only initialized on first panel entry
 
         // Compute local temporary variables outside the critical section to prevent malloc/OOM within spinlocks
         std::vector<PassEvent> tempRecommendedPasses = upcomingPasses;
@@ -1861,6 +1873,11 @@ void recentLaunchNetworkTaskImpl() {
         current_unix = ntpTime;
         g_timeSynced = true;
         LOG_I("RECENT_LAUNCH", "Time synced to UTC: %u", current_unix);
+        lockPassMutex();
+        lastPredictionBaseTime = 0;
+        predictionsReady = false;
+        unlockPassMutex();
+        triggerPrediction = true;
     }
     
     // 3. Check local update timestamp to enforce 2-hour rate limiting
@@ -2220,6 +2237,11 @@ void networkTaskImpl(void* parameter) {
             current_unix = ntpTime;
             g_timeSynced = true;
             LOG_I("APP", "Time synced to UTC: %u", current_unix);
+            lockPassMutex();
+            lastPredictionBaseTime = 0;
+            predictionsReady = false;
+            unlockPassMutex();
+            triggerPrediction = true;
         }
 
         if (appState == STATE_SAT_SELECT) {
@@ -4094,7 +4116,11 @@ void drawSatSelectPage() {
                     // Display real count of objects and clustered proxies
                     char satsBuf[64];
                     int proxyCount = item.proxyFormation.size();
-                    sprintf(satsBuf, "%s%d | Proxy: %d", I18N::get(TXT_RL_OBJECTS), item.satelliteCount, proxyCount);
+                    if (I18N::getLanguage() == LANG_ZH) {
+                        sprintf(satsBuf, "%s%d | 代理: %d", I18N::get(TXT_RL_OBJECTS), item.satelliteCount, proxyCount);
+                    } else {
+                        sprintf(satsBuf, "%s%d | Proxy: %d", I18N::get(TXT_RL_OBJECTS), item.satelliteCount, proxyCount);
+                    }
                     canvas->drawString(satsBuf, rightX, getY(4));
                     
                     char orbitBuf[48];
@@ -4718,7 +4744,7 @@ void loop() {
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
             if (appState == STATE_MAIN) {
                 if (justTab) {
-                    int nextMode = (earth_renderer->getVisualMode() + 1) % 3;
+                    int nextMode = (earth_renderer->getVisualMode() + 1) % 2;
                     earth_renderer->setVisualMode(nextMode);
                 } else if (justC) {
                     if (isSatViewMode) {
@@ -4847,6 +4873,12 @@ void loop() {
                         showRecommendations = true;
                         passScrollIndex = 0;
                         
+                        // 首次打开面板时，默认展开“今晚”分类，并折叠其它分类
+                        catExpanded[0] = true;
+                        catExpanded[1] = false;
+                        catExpanded[2] = false;
+                        catExpanded[3] = false;
+                        
                         uint32_t targetTime = current_unix + timeMachineOffset;
                         bool isCacheValid = false;
                         lockPassMutex();
@@ -4933,6 +4965,8 @@ void loop() {
                             entrySelectedSatellites.push_back(g_satellites[i].noradId);
                         }
                     }
+                    entryRecentLaunchFocusMode = g_recentLaunchFocusMode;
+                    entryRecentLaunchActiveBatchId = recentLaunchActiveBatchId;
                 } else if (justL) {
                     appState = STATE_LANG_SELECT;
                     langSelectedIndex = (I18N::getLanguage() == LANG_EN) ? 0 : 1;
@@ -5165,7 +5199,7 @@ void loop() {
                         showListHelp = false;
                     }
                 } else if (justTab) {
-                    int nextMode = (earth_renderer->getVisualMode() + 1) % 3;
+                    int nextMode = (earth_renderer->getVisualMode() + 1) % 2;
                     earth_renderer->setVisualMode(nextMode);
                 } else if (deleteConfirmIndex >= 0 && currentSatTab == TAB_ENCYCLOPEDIA) {
                     if (deleteConfirmIndex < NUM_BUILTIN_SATELLITES) {
@@ -5429,13 +5463,18 @@ void loop() {
                                     currentSelected.push_back(g_satellites[i].noradId);
                                 }
                             }
-                            if (currentSelected.size() != entrySelectedSatellites.size()) {
+                            if (g_recentLaunchFocusMode != entryRecentLaunchFocusMode ||
+                                recentLaunchActiveBatchId != entryRecentLaunchActiveBatchId) {
                                 selectionChanged = true;
                             } else {
-                                for (size_t i = 0; i < currentSelected.size(); i++) {
-                                    if (currentSelected[i] != entrySelectedSatellites[i]) {
-                                        selectionChanged = true;
-                                        break;
+                                if (currentSelected.size() != entrySelectedSatellites.size()) {
+                                    selectionChanged = true;
+                                } else {
+                                    for (size_t i = 0; i < currentSelected.size(); i++) {
+                                        if (currentSelected[i] != entrySelectedSatellites[i]) {
+                                            selectionChanged = true;
+                                            break;
+                                        }
                                     }
                                 }
                             }

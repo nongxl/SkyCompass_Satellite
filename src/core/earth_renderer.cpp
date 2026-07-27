@@ -452,11 +452,8 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
     // Draw city light pollution on the dark side
     drawLightPollution(centerLat, centerLon);
     
-    // Draw atmosphere and polar effects (only in Gorgeous mode [2])
-    if (_visualMode == 2) {
-        drawAirglow(centerLat, centerLon);
-        drawAuroras(centerLat, centerLon);
-    }
+    // Draw polar auroras for both modes to increase polar visibility (both Normal [0] and Red [1])
+    drawAuroras(centerLat, centerLon);
     
     // Draw user location as a map pin 📍
     int ux, uy;
@@ -1439,117 +1436,6 @@ inline void drawLineAdd(LGFX_Sprite* canvas, int x0, int y0, int x1, int y1, uin
         blendPixelAdd(canvas, x, y + 1, r, g, b, alpha * 0.7f);
         blendPixelAdd(canvas, x, y - 2, r, g, b, alpha * 0.35f);
         blendPixelAdd(canvas, x, y + 2, r, g, b, alpha * 0.35f);
-    }
-}
-
-void EarthRenderer::drawAirglow(double centerLat, double centerLon) {
-    float pitchRad = _cameraPitch * DEG_TO_RAD;
-    float rollRad = -_cameraRoll * DEG_TO_RAD;
-    float center_y_pitched = _cameraFocusR * sinf(pitchRad);
-    float center_rotatedX = -center_y_pitched * sinf(rollRad);
-    float center_rotatedY = center_y_pitched * cosf(rollRad);
-    int circleX = _centerX + _centerOffsetX + (int)center_rotatedX;
-    int circleY = _centerY + _centerOffsetY - (int)center_rotatedY;
-
-    // Calculate Sun's 2D direction on screen relative to Earth center
-    float sx = 1.0f;
-    float sy = 0.0f;
-    bool hasSun = _hasSunData;
-    
-    if (hasSun) {
-        float subLatR = (float)_subsolarLat * DEG_TO_RAD;
-        float subLonR = (float)_subsolarLon * DEG_TO_RAD;
-        float S_x = cosf(subLatR) * cosf(subLonR);
-        float S_y = cosf(subLatR) * sinf(subLonR);
-        float S_z = sinf(subLatR);
-        
-        float cLatRad = (float)centerLat * DEG_TO_RAD;
-        float cLonRad = (float)centerLon * DEG_TO_RAD;
-        float cos_cLat = cosf(cLatRad);
-        float sin_cLat = sinf(cLatRad);
-        float cos_cLon = cosf(cLonRad);
-        float sin_cLon = sinf(cLonRad);
-        
-        float proj_x = S_y * cos_cLon - S_x * sin_cLon;
-        float term2 = S_x * cos_cLon + S_y * sin_cLon;
-        float proj_y = cos_cLat * S_z - sin_cLat * term2;
-        float proj_z = sin_cLat * S_z + cos_cLat * term2;
-        
-        float pitchRadCam = _cameraPitch * DEG_TO_RAD;
-        float y_pitched = proj_y * cosf(pitchRadCam) - proj_z * sinf(pitchRadCam);
-        
-        float rollRadCam = -_cameraRoll * DEG_TO_RAD;
-        float cos_roll = cosf(rollRadCam);
-        float sin_roll = sinf(rollRadCam);
-        
-        float sun_rotatedX = proj_x * cos_roll - y_pitched * sin_roll;
-        float sun_rotatedY = proj_x * sin_roll + y_pitched * cos_roll;
-        
-        float sun_len = sqrtf(sun_rotatedX * sun_rotatedX + sun_rotatedY * sun_rotatedY);
-        if (sun_len > 0.01f) {
-            sx = sun_rotatedX / sun_len;
-            sy = sun_rotatedY / sun_len;
-        } else {
-            hasSun = false;
-        }
-    }
-
-    // Perfect concentric circles for a smooth glass cover appearance (no noise or vertical spikes)
-    int N = _isFastForwarding ? 3 : 10; // Reduced layers from 4 to 3 during fast forwarding to speed up
-    float startHeight = 2.5f;
-    float thickness = 6.75f; // total thickness of airglow dome
-    float maxAlpha = 0.55f;
-
-    for (int i = 0; i < N; i++) {
-        float t = (float)i / N;
-        // Asymmetric bell curve for airglow: faint at bottom, peak at 0.7 height, fade to 0 at top
-        float alpha = ((t < 0.7f) ? (0.2f + 0.8f * (t / 0.7f)) : (1.0f - (t - 0.7f) / 0.3f)) * maxAlpha;
-        
-        float baseR = _earthRadius + startHeight + t * thickness;
-        
-        // stepRad = 1.0/R guarantees exactly one pixel per step along the circumference - NO GAPS!
-        // For fast forwarding, use 2.0/R to reduce overhead by 50% (since we are fast-forwarding, minor gaps are invisible)
-        float stepRad = (_isFastForwarding ? 2.0f : 1.0f) / baseR;
-        
-        for (float rad = 0.0f; rad < TWO_PI_F; rad += stepRad) {
-            // Micro-optimization: cache sin and cos to avoid calling them twice per step
-            float cos_rad = cosf(rad);
-            float sin_rad = sinf(rad);
-            
-            int x = circleX + (int)(baseR * cos_rad + 0.5f);
-            int y = circleY - (int)(baseR * sin_rad + 0.5f);
-            
-            uint8_t r_val = 0;
-            uint8_t g_val = 140;
-            uint8_t b_val = 220;
-            
-            if (hasSun) {
-                // Dot product of limb point unit direction (cos_rad, -sin_rad) with Sun unit direction (sx, sy)
-                float dot = cos_rad * sx - sin_rad * sy;
-                
-                if (dot > 0.3f) {
-                    // Day side: Cyan-blue (Rayleigh scattering)
-                    r_val = 0; g_val = 140; b_val = 220;
-                } else if (dot >= 0.0f) {
-                    // Day-to-Terminator: Sunset Red to Cyan-Blue
-                    float t_color = dot / 0.3f;
-                    r_val = (uint8_t)(250.0f * (1.0f - t_color));
-                    g_val = (uint8_t)(80.0f + 60.0f * t_color);
-                    b_val = (uint8_t)(0.0f + 220.0f * t_color);
-                } else if (dot >= -0.3f) {
-                    // Terminator-to-Night: Night Gold (Sodium/OH airglow) to Sunset Red
-                    float t_color = (dot + 0.3f) / 0.3f;
-                    r_val = (uint8_t)(180.0f + 70.0f * t_color);
-                    g_val = (uint8_t)(130.0f - 50.0f * t_color);
-                    b_val = (uint8_t)(10.0f - 10.0f * t_color);
-                } else {
-                    // Night side: Warm Sodium Gold
-                    r_val = 180; g_val = 130; b_val = 10;
-                }
-            }
-            
-            blendPixelAdd(_canvas, x, y, r_val, g_val, b_val, alpha);
-        }
     }
 }
 
