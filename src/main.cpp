@@ -849,22 +849,33 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
         cache.past.clear();
         cache.future.clear();
         
-        double teme_x, teme_y, teme_z;
+        double teme_x = 0, teme_y = 0, teme_z = 0;
         double vx = 0, vy = 0, vz = 0;
         
         // 默认周期 90 分钟 (5400秒)
         double periodSec = 5400.0;
         if (calc.getTEME(baseTime, teme_x, teme_y, teme_z, vx, vy, vz)) {
-            double r = sqrt(teme_x * teme_x + teme_y * teme_y + teme_z * teme_z);
-            double v = sqrt(vx * vx + vy * vy + vz * vz);
-            double mu = 398600.4418; // 地球重力常数 km^3/s^2
-            double inv_a = 2.0 / r - (v * v) / mu;
-            if (inv_a > 0.0) {
-                double a = 1.0 / inv_a;
-                double calculatedPeriod = 2.0 * M_PI * sqrt((a * a * a) / mu);
-                // 限制周期在 10 秒到 7 天之间，防止溢出或无效值
-                if (calculatedPeriod > 10.0 && calculatedPeriod < 7.0 * 24.0 * 3600.0) {
-                    periodSec = calculatedPeriod;
+            // 确保位置和速度均不是 NaN 或 Inf
+            if (!std::isnan(teme_x) && !std::isnan(teme_y) && !std::isnan(teme_z) &&
+                !std::isinf(teme_x) && !std::isinf(teme_y) && !std::isinf(teme_z) &&
+                !std::isnan(vx) && !std::isnan(vy) && !std::isnan(vz) &&
+                !std::isinf(vx) && !std::isinf(vy) && !std::isinf(vz)) {
+                
+                double r = sqrt(teme_x * teme_x + teme_y * teme_y + teme_z * teme_z);
+                double v = sqrt(vx * vx + vy * vy + vz * vz);
+                double mu = 398600.4418; // 地球重力常数 km^3/s^2
+                
+                if (r > 0.1) { // 避免除以 0
+                    double inv_a = 2.0 / r - (v * v) / mu;
+                    if (inv_a > 0.0) {
+                        double a = 1.0 / inv_a;
+                        double calculatedPeriod = 2.0 * M_PI * sqrt((a * a * a) / mu);
+                        // 限制周期在 10 秒到 7 天之间，防止溢出或无效值
+                        if (!std::isnan(calculatedPeriod) && !std::isinf(calculatedPeriod) && 
+                            calculatedPeriod > 10.0 && calculatedPeriod < 7.0 * 24.0 * 3600.0) {
+                            periodSec = calculatedPeriod;
+                        }
+                    }
                 }
             }
         }
@@ -875,21 +886,44 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
         
         // 过去半个周期的轨迹 [-T/2, 0]
         for (int i = steps; i >= 0; i--) {
-            uint32_t t = baseTime - (uint32_t)(i * stepSizeSec);
+            uint32_t sub = (uint32_t)(i * stepSizeSec);
+            uint32_t t = (baseTime >= sub) ? (baseTime - sub) : 0; // 防范下溢至 42 亿秒导致 SDP4 深空异常算力崩溃
             if (calc.getTEME(t, teme_x, teme_y, teme_z)) {
+                if (std::isnan(teme_x) || std::isnan(teme_y) || std::isnan(teme_z) ||
+                    std::isinf(teme_x) || std::isinf(teme_y) || std::isinf(teme_z)) {
+                    continue;
+                }
                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
                 ECEFCoord ecef = CoordTransform::temeToECEF(teme_x, teme_y, teme_z, gmst);
-                cache.past.push_back(CoordTransform::ecefToGeodetic(ecef));
+                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                if (!std::isnan(geo.lat) && !std::isnan(geo.lon) && !std::isnan(geo.alt) &&
+                    !std::isinf(geo.lat) && !std::isinf(geo.lon) && !std::isinf(geo.alt)) {
+                    cache.past.push_back(geo);
+                }
             }
         }
         
         // 未来半个周期的轨迹 [0, +T/2]
         for (int i = 0; i <= steps; i++) {
-            uint32_t t = baseTime + (uint32_t)(i * stepSizeSec);
+            uint32_t add = (uint32_t)(i * stepSizeSec);
+            uint32_t t = baseTime;
+            if (0xFFFFFFFF - baseTime >= add) {
+                t = baseTime + add;
+            } else {
+                t = 0xFFFFFFFF; // 防范上溢
+            }
             if (calc.getTEME(t, teme_x, teme_y, teme_z)) {
+                if (std::isnan(teme_x) || std::isnan(teme_y) || std::isnan(teme_z) ||
+                    std::isinf(teme_x) || std::isinf(teme_y) || std::isinf(teme_z)) {
+                    continue;
+                }
                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
                 ECEFCoord ecef = CoordTransform::temeToECEF(teme_x, teme_y, teme_z, gmst);
-                cache.future.push_back(CoordTransform::ecefToGeodetic(ecef));
+                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                if (!std::isnan(geo.lat) && !std::isnan(geo.lon) && !std::isnan(geo.alt) &&
+                    !std::isinf(geo.lat) && !std::isinf(geo.lon) && !std::isinf(geo.alt)) {
+                    cache.future.push_back(geo);
+                }
             }
         }
         

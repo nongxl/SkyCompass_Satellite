@@ -91,6 +91,10 @@ bool isDaylight(double lat, double lon, double subLat, double subLon, bool hasSu
 // Check if a satellite is in Earth's shadow (cylindrical shadow model)
 bool isSatelliteInShadow(double lat, double lon, double alt, double subLat, double subLon, bool hasSun) {
     if (!hasSun) return false;
+    if (std::isnan(lat) || std::isnan(lon) || std::isnan(alt) || std::isinf(lat) || std::isinf(lon) || std::isinf(alt) ||
+        std::isnan(subLat) || std::isnan(subLon) || std::isinf(subLat) || std::isinf(subLon)) {
+        return false;
+    }
     float latR = (float)lat * DEG_TO_RAD;
     float lonR = (float)lon * DEG_TO_RAD;
     float subLatR = (float)subLat * DEG_TO_RAD;
@@ -107,6 +111,10 @@ bool isSatelliteInShadow(double lat, double lon, double alt, double subLat, doub
 }
 
 bool EarthRenderer::projectOrthographic(double lat, double lon, double alt, double centerLat, double centerLon, int& outX, int& outY) {
+    if (std::isnan(lat) || std::isnan(lon) || std::isnan(alt) || std::isinf(lat) || std::isinf(lon) || std::isinf(alt) ||
+        std::isnan(centerLat) || std::isnan(centerLon) || std::isinf(centerLat) || std::isinf(centerLon)) {
+        return false;
+    }
     float latRad = (float)lat * DEG_TO_RAD;
     float lonRad = (float)lon * DEG_TO_RAD;
     float cLatRad = (float)centerLat * DEG_TO_RAD;
