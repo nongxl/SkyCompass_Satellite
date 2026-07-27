@@ -810,12 +810,11 @@ void doScreenshot() {
     log_i("[Screenshot] Done. Sent %d bytes raw RGB565 (%dx%d)", total, w, h);
 }
 // Helper to pre-calculate orbits with caching
-void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& calcCount, bool isFastForwarding, bool forceUpdate = false) {
-    static uint32_t lastGlobalCalcMs = 0;
-    if (isFastForwarding && !forceUpdate) {
-        // Fast forwarding: DO NOT recalculate heavy orbit paths to ensure smooth input.
-        return;
+void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& calcCount, bool isTimeScrolling, bool forceUpdate = false) {
+    if (isTimeScrolling) {
+        return; // 快进/调节时间期间完全跳过重算，确保极度丝滑
     }
+    static uint32_t lastGlobalCalcMs = 0;
     
     // 限制物理时间上的计算频率。如果上一帧刚刚重算过轨道，那么在物理时间 120 毫秒内，
     // 任何卫星都不能进行轨道线重算（除非是首次计算），确保在任何高速按键或滑动操作下的丝滑帧率。
@@ -870,18 +869,21 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
                     if (inv_a > 0.0) {
                         double a = 1.0 / inv_a;
                         double calculatedPeriod = 2.0 * M_PI * sqrt((a * a * a) / mu);
-                        // 限制周期在 10 秒到 7 天之间，防止溢出或无效值
+                        // 限制周期在 10 秒到 12 小时（43200 秒）之间，防止溢出或深空模型过载
                         if (!std::isnan(calculatedPeriod) && !std::isinf(calculatedPeriod) && 
-                            calculatedPeriod > 10.0 && calculatedPeriod < 7.0 * 24.0 * 3600.0) {
+                            calculatedPeriod > 10.0 && calculatedPeriod < 12.0 * 3600.0) {
                             periodSec = calculatedPeriod;
+                        } else if (calculatedPeriod >= 12.0 * 3600.0) {
+                            periodSec = 12.0 * 3600.0; // 超过 12 小时（如 GEO 24 小时卫星），截断到 12 小时以确保 SDP4 稳定性与性能
                         }
                     }
                 }
             }
         }
         
-        // 保持点数恒定（前后各 24 个点），使 CPU 与内存开销保持平稳
-        int steps = 24;
+        // 动态点数优化：焦点卫星使用 12 对点（共 24 点），非焦点/背景卫星使用 8 对点（共 16 点）
+        // 极大减少背景卫星和 Recent Launches 渲染时的堆内存碎片与大小，防止 heap 溢出崩溃
+        int steps = forceUpdate ? 12 : 8;
         double stepSizeSec = (periodSec * 0.5) / steps;
         
         // 过去半个周期的轨迹 [-T/2, 0]
@@ -5938,7 +5940,7 @@ void loop() {
                             data.calc = &g_repSatCalc;
                             
                             if (appState == STATE_MAIN) {
-                                calculateOrbit(g_repSatCalc, simTime, g_repSatCache.cache, orbitsCalculatedThisFrame, isFastForwarding, (isSatViewMode && g_recentLaunchFocusMode));
+                                calculateOrbit(g_repSatCalc, simTime, g_repSatCache.cache, orbitsCalculatedThisFrame, lastTimeAdjustMillis != 0, (isSatViewMode && g_recentLaunchFocusMode));
                                 data.pastOrbit = &(g_repSatCache.cache.past);
                                 data.futureOrbit = &(g_repSatCache.cache.future);
                             } else {
@@ -6035,7 +6037,7 @@ void loop() {
                             data.simTime = simTime;
                             
                             if (appState == STATE_MAIN) {
-                                calculateOrbit(*(item.calc), simTime, item.cache.cache, orbitsCalculatedThisFrame, isFastForwarding, false);
+                                calculateOrbit(*(item.calc), simTime, item.cache.cache, orbitsCalculatedThisFrame, lastTimeAdjustMillis != 0, false);
                                 data.pastOrbit = &(item.cache.cache.past);
                                 data.futureOrbit = &(item.cache.cache.future);
                             } else {
@@ -6087,7 +6089,7 @@ void loop() {
                         data.isVisible = true;
                         
                         if (appState == STATE_MAIN) {
-                            calculateOrbit(obj.calc, simTime, obj.cache, orbitsCalculatedThisFrame, isFastForwarding, false);
+                            calculateOrbit(obj.calc, simTime, obj.cache, orbitsCalculatedThisFrame, lastTimeAdjustMillis != 0, false);
                             data.pastOrbit = &(obj.cache.past);
                             data.futureOrbit = &(obj.cache.future);
                         } else {
@@ -6254,7 +6256,7 @@ void loop() {
                             g_satCaches[i].cache.past.push_back(p);
                             g_satCaches[i].cache.future.push_back(p);
                         } else {
-                            calculateOrbit(calcCopy, simTime, g_satCaches[i].cache, orbitsCalculatedThisFrame, isFastForwarding, (isSatViewMode && (focusSatIndex == i) && !g_recentLaunchFocusMode));
+                            calculateOrbit(calcCopy, simTime, g_satCaches[i].cache, orbitsCalculatedThisFrame, lastTimeAdjustMillis != 0, (isSatViewMode && (focusSatIndex == i) && !g_recentLaunchFocusMode));
                         }
                         data.pastOrbit = &(g_satCaches[i].cache.past);
                         data.futureOrbit = &(g_satCaches[i].cache.future);
