@@ -850,10 +850,32 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
         cache.future.clear();
         
         double teme_x, teme_y, teme_z;
+        double vx = 0, vy = 0, vz = 0;
         
-        // Past 45 minutes, every 3 minutes (lower resolution to save CPU)
-        for (int i = 45; i >= 0; i -= 3) {
-            uint32_t t = baseTime - i * 60;
+        // 默认周期 90 分钟 (5400秒)
+        double periodSec = 5400.0;
+        if (calc.getTEME(baseTime, teme_x, teme_y, teme_z, vx, vy, vz)) {
+            double r = sqrt(teme_x * teme_x + teme_y * teme_y + teme_z * teme_z);
+            double v = sqrt(vx * vx + vy * vy + vz * vz);
+            double mu = 398600.4418; // 地球重力常数 km^3/s^2
+            double inv_a = 2.0 / r - (v * v) / mu;
+            if (inv_a > 0.0) {
+                double a = 1.0 / inv_a;
+                double calculatedPeriod = 2.0 * M_PI * sqrt((a * a * a) / mu);
+                // 限制周期在 10 秒到 7 天之间，防止溢出或无效值
+                if (calculatedPeriod > 10.0 && calculatedPeriod < 7.0 * 24.0 * 3600.0) {
+                    periodSec = calculatedPeriod;
+                }
+            }
+        }
+        
+        // 保持点数恒定（前后各 24 个点），使 CPU 与内存开销保持平稳
+        int steps = 24;
+        double stepSizeSec = (periodSec * 0.5) / steps;
+        
+        // 过去半个周期的轨迹 [-T/2, 0]
+        for (int i = steps; i >= 0; i--) {
+            uint32_t t = baseTime - (uint32_t)(i * stepSizeSec);
             if (calc.getTEME(t, teme_x, teme_y, teme_z)) {
                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
                 ECEFCoord ecef = CoordTransform::temeToECEF(teme_x, teme_y, teme_z, gmst);
@@ -861,9 +883,9 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
             }
         }
         
-        // Future 45 minutes, every 3 minutes
-        for (int i = 0; i <= 45; i += 3) {
-            uint32_t t = baseTime + i * 60;
+        // 未来半个周期的轨迹 [0, +T/2]
+        for (int i = 0; i <= steps; i++) {
+            uint32_t t = baseTime + (uint32_t)(i * stepSizeSec);
             if (calc.getTEME(t, teme_x, teme_y, teme_z)) {
                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
                 ECEFCoord ecef = CoordTransform::temeToECEF(teme_x, teme_y, teme_z, gmst);
