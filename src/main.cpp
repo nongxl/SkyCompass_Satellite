@@ -881,9 +881,9 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
             }
         }
         
-        // 动态点数优化：焦点卫星使用 12 对点（共 24 点），非焦点/背景卫星使用 8 对点（共 16 点）
-        // 极大减少背景卫星和 Recent Launches 渲染时的堆内存碎片与大小，防止 heap 溢出崩溃
-        int steps = forceUpdate ? 12 : 8;
+        // 动态点数优化：为了确保高轨与中轨卫星在三维地球上的弧线极其圆滑、无多边形折线，
+        // 焦点卫星使用 48 对点（共 96 点），非焦点/背景卫星使用 12 对点（共 24 点），兼顾视觉效果与堆内存占用。
+        int steps = forceUpdate ? 48 : 12;
         double stepSizeSec = (periodSec * 0.5) / steps;
         
         // 过去半个周期的轨迹 [-T/2, 0]

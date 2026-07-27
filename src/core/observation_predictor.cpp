@@ -100,6 +100,39 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
     SGP4Calc sgp4;
     sgp4.init(tle);
     
+    // 快速评估卫星物理轨道周期。如果大于 12 小时（如地球同步/地球静止卫星），
+    // 它们对地面观测者几乎是静止的，不存在常规意义上的快速过境。
+    // 直接返回空列表，从源头上杜绝 7 天过境微调计算（10秒步长下达 6 万次循环）霸占 CPU 触发 Task WDT Watchdog 崩溃。
+    double periodSec = 5400.0;
+    double teme_x = 0, teme_y = 0, teme_z = 0;
+    double vx = 0, vy = 0, vz = 0;
+    if (sgp4.getTEME(startTime, teme_x, teme_y, teme_z, vx, vy, vz)) {
+        if (!std::isnan(teme_x) && !std::isnan(teme_y) && !std::isnan(teme_z) &&
+            !std::isinf(teme_x) && !std::isinf(teme_y) && !std::isinf(teme_z) &&
+            !std::isnan(vx) && !std::isnan(vy) && !std::isnan(vz) &&
+            !std::isinf(vx) && !std::isinf(vy) && !std::isinf(vz)) {
+            
+            double r = sqrt(teme_x * teme_x + teme_y * teme_y + teme_z * teme_z);
+            double v = sqrt(vx * vx + vy * vy + vz * vz);
+            double mu = 398600.4418; // 地球重力常数 km^3/s^2
+            
+            if (r > 0.1) {
+                double inv_a = 2.0 / r - (v * v) / mu;
+                if (inv_a > 0.0) {
+                    double a = 1.0 / inv_a;
+                    double calculatedPeriod = 2.0 * M_PI * sqrt((a * a * a) / mu);
+                    if (!std::isnan(calculatedPeriod) && !std::isinf(calculatedPeriod) && calculatedPeriod > 10.0) {
+                        periodSec = calculatedPeriod;
+                    }
+                }
+            }
+        }
+    }
+    
+    if (periodSec > 12.0 * 3600.0) {
+        return passes;
+    }
+    
     SunCalculator sunCalc(_pm);
     
     uint32_t endTime = startTime + daysToPredict * 24 * 3600;
