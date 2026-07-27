@@ -482,7 +482,9 @@ public:
                 
                 String cosparForm = "";
                 if (item.batchId.length() == 5 && isdigit(item.batchId[0]) && isdigit(item.batchId[1])) {
-                    cosparForm = "20" + item.batchId.substring(0, 2) + "-" + item.batchId.substring(2);
+                    int yr = item.batchId.substring(0, 2).toInt();
+                    String century = (yr >= 50) ? "19" : "20";
+                    cosparForm = century + item.batchId.substring(0, 2) + "-" + item.batchId.substring(2);
                 }
                 
                 bool match = false;
