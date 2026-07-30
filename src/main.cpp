@@ -1365,9 +1365,6 @@ void predictorTask(void* parameter) {
             lastPredictionBaseTime = startTime;
             unlockPassMutex();
             
-            g_orbitCalculating = false; // Turn off "Calculating..." status immediately!
-            g_readyStartTime = millis();
-            
             // === PHASE 2: Background 7-Day Full Pass Calculation ===
             completedCount = 0;
             for (int i = 0; i < NUM_SATELLITES; i++) {
@@ -6672,9 +6669,22 @@ void loop() {
                         }
                         
                         if (item.isCategory) {
-                            earth_renderer->getCanvas()->setTextColor(idx == passScrollIndex ? TFT_WHITE : TFT_CYAN);
+                            bool isCalculatingCat = g_orbitCalculating && (item.categoryIndex > 0);
+                            if (isCalculatingCat) {
+                                earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
+                            } else {
+                                earth_renderer->getCanvas()->setTextColor(idx == passScrollIndex ? TFT_WHITE : TFT_CYAN);
+                            }
+                            
                             String prefix = catExpanded[item.categoryIndex] ? "[-] " : "[+] ";
-                            earth_renderer->getCanvas()->drawString((prefix + catNames[item.categoryIndex]).c_str(), 5, y);
+                            String label = prefix + catNames[item.categoryIndex];
+                            if (isCalculatingCat) {
+                                int dotState = (millis() / 400) % 3;
+                                if (dotState == 0) label += ".";
+                                else if (dotState == 1) label += "..";
+                                else label += "...";
+                            }
+                            earth_renderer->getCanvas()->drawString(label.c_str(), 5, y);
                         } else {
                             const auto& p = localRecommendedPasses[item.passIndex];
                             earth_renderer->getCanvas()->setTextColor(idx == passScrollIndex ? TFT_WHITE : TFT_LIGHTGRAY);
