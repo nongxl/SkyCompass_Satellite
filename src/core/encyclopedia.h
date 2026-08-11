@@ -35,6 +35,8 @@ struct EncyclopediaEntry {
     SatIconType icon;
     const char* description_zh;
     const char* description_en;
+    const char* description_ja;
+    const char* description_es;
     uint32_t flags;
     uint16_t color;
     int baseScore;
