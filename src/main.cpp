@@ -2536,10 +2536,19 @@ void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int 
         canvas->drawRect(dialogX, dialogY, dialogW, dialogH, TFT_YELLOW);
         
         canvas->setTextColor(TFT_WHITE);
+        canvas->setFont(I18N::getFont());
         canvas->drawString("Select Language", dialogX + (dialogW - canvas->textWidth("Select Language")) / 2, dialogY + 5);
         
-        const char* options[4] = {"English", "简体中文", "日本語", "Español"};
+        const char* options[4] = {"English", "简体中文", "日本語", "Espanol"};
+        const lgfx::IFont* optFonts[4] = {
+            &fonts::efontCN_12,
+            &fonts::efontCN_12,
+            &fonts::efontJA_12,
+            &fonts::efontCN_12
+        };
+        
         for (int i = 0; i < 4; i++) {
+            canvas->setFont(optFonts[i]);
             if (selectedLangIndex == i) {
                 canvas->setTextColor(TFT_GREEN);
                 String label = "> " + String(options[i]);
@@ -2550,6 +2559,7 @@ void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int 
                 canvas->drawString(label.c_str(), dialogX + 20, dialogY + 22 + i * 16);
             }
         }
+        canvas->setFont(I18N::getFont());
     }
     
     // Push to screen
@@ -2571,10 +2581,19 @@ void drawLangSelectDialog(LGFX_Sprite* canvas) {
     
     canvas->setTextColor(TFT_WHITE);
     canvas->setTextSize(1);
+    canvas->setFont(I18N::getFont());
     canvas->drawString(I18N::get(TXT_LANGUAGE_MENU), x + (w - canvas->textWidth(I18N::get(TXT_LANGUAGE_MENU))) / 2, y + 5);
     
-    const char* options[4] = {"English", "简体中文", "日本語", "Español"};
+    const char* options[4] = {"English", "简体中文", "日本語", "Espanol"};
+    const lgfx::IFont* optFonts[4] = {
+        &fonts::efontCN_12,
+        &fonts::efontCN_12,
+        &fonts::efontJA_12,
+        &fonts::efontCN_12
+    };
+    
     for (int i = 0; i < 4; i++) {
+        canvas->setFont(optFonts[i]);
         if (langSelectedIndex == i) {
             canvas->setTextColor(TFT_GREEN);
             String label = "> " + String(options[i]);
@@ -2585,6 +2604,7 @@ void drawLangSelectDialog(LGFX_Sprite* canvas) {
             canvas->drawString(label.c_str(), x + 20, y + 22 + i * 16);
         }
     }
+    canvas->setFont(I18N::getFont());
 }
 
 void setup() {
