@@ -6418,6 +6418,9 @@ void loop() {
         earth_renderer->setUnixTime(current_unix + timeMachineOffset);
         earth_renderer->render(viewLat, viewLon, renderUserLat, baseUserLon, sats);
         
+        // Ensure canvas font matches current language for HUD rendering
+        earth_renderer->getCanvas()->setFont(I18N::getFont());
+        
         // Draw coordinate overlay
         if (!showRecommendations && !showHelp && (appState == STATE_MAIN || appState == STATE_LANG_SELECT) && showHud) {
             earth_renderer->getCanvas()->setTextSize(1);
@@ -6965,6 +6968,7 @@ void loop() {
                     Language currL = I18N::getLanguage();
                     bool isZh = (currL == LANG_ZH);
                     bool isCjk = (currL == LANG_ZH || currL == LANG_JA);
+                    earth_renderer->getCanvas()->setFont(I18N::getFont());
                     earth_renderer->getCanvas()->setTextColor(satColor);
                     const char* satViewStr = (currL == LANG_ZH) ? "视角锁定" : ((currL == LANG_JA) ? "視点固定" : ((currL == LANG_ES) ? "Vista sat" : "Sat View"));
                     earth_renderer->getCanvas()->drawString(satViewStr, 180, 5);
