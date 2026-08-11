@@ -62,7 +62,7 @@ EarthRenderer::~EarthRenderer() {
 
 void EarthRenderer::begin() {
     _canvas->createSprite(_display->width(), _display->height());
-    _canvas->setFont(&fonts::efontCN_12);
+    _canvas->setFont(I18N::getFont());
 }
 
 void EarthRenderer::setSunPosition(double subsolarLat, double subsolarLon) {

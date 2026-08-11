@@ -999,19 +999,19 @@ String Encyclopedia::getCategoryName(Category category) {
         case Category::HUMAN_SPACEFLIGHT:
             return (lang == LANG_ZH) ? "载人航天" : (lang == LANG_JA ? "有人宇宙飛行" : (lang == LANG_ES ? "Vuelo espacial tripulado" : "Human Spaceflight"));
         case Category::ASTRONOMY:
-            return (lang == LANG_ZH) ? "天文学" : (lang == LANG_JA ? "天文学" : (lang == LANG_ES ? "Astronomía" : "Astronomy"));
+            return (lang == LANG_ZH) ? "天文学" : (lang == LANG_JA ? "天文学" : (lang == LANG_ES ? "Astronomia" : "Astronomy"));
         case Category::EARTH_OBSERVATION:
-            return (lang == LANG_ZH) ? "地球观测" : (lang == LANG_JA ? "地球観測" : (lang == LANG_ES ? "Observación terrestre" : "Earth Observation"));
+            return (lang == LANG_ZH) ? "地球观测" : (lang == LANG_JA ? "地球観測" : (lang == LANG_ES ? "Observacion terrestre" : "Earth Observation"));
         case Category::NAVIGATION:
-            return (lang == LANG_ZH) ? "导航" : (lang == LANG_JA ? "測位・航法" : (lang == LANG_ES ? "Navegación" : "Navigation"));
+            return (lang == LANG_ZH) ? "导航" : (lang == LANG_JA ? "測位・航法" : (lang == LANG_ES ? "Navegacion" : "Navigation"));
         case Category::WEATHER:
-            return (lang == LANG_ZH) ? "气象" : (lang == LANG_JA ? "気象" : (lang == LANG_ES ? "Meteorología" : "Weather"));
+            return (lang == LANG_ZH) ? "气象" : (lang == LANG_JA ? "気象" : (lang == LANG_ES ? "Meteorologia" : "Weather"));
         case Category::COMMUNICATIONS:
             return (lang == LANG_ZH) ? "通信" : (lang == LANG_JA ? "通信" : (lang == LANG_ES ? "Comunicaciones" : "Communications"));
         case Category::ROCKET_BODY:
             return (lang == LANG_ZH) ? "火箭残骸" : (lang == LANG_JA ? "ロケット残骸" : (lang == LANG_ES ? "Cuerpo de cohete" : "Rocket Body"));
         case Category::HISTORIC_EVENT:
-            return (lang == LANG_ZH) ? "历史事件" : (lang == LANG_JA ? "歴史的事件" : (lang == LANG_ES ? "Evento histórico" : "Historic Event"));
+            return (lang == LANG_ZH) ? "历史事件" : (lang == LANG_JA ? "歴史的事件" : (lang == LANG_ES ? "Evento historico" : "Historic Event"));
         default:
             return (lang == LANG_ZH) ? "未知" : (lang == LANG_JA ? "不明" : (lang == LANG_ES ? "Desconocido" : "Unknown"));
     }
@@ -1025,17 +1025,17 @@ String Encyclopedia::getFlagName(uint32_t flag) {
         case FLAG_CREWED:
             return (lang == LANG_ZH) ? "载人" : (lang == LANG_JA ? "有人" : (lang == LANG_ES ? "Tripulado" : "Crewed"));
         case FLAG_HISTORIC:
-            return (lang == LANG_ZH) ? "历史" : (lang == LANG_JA ? "歴史的" : (lang == LANG_ES ? "Histórico" : "Historic"));
+            return (lang == LANG_ZH) ? "历史" : (lang == LANG_JA ? "歴史的" : (lang == LANG_ES ? "Historico" : "Historic"));
         case FLAG_ROCKET_BODY:
             return (lang == LANG_ZH) ? "火箭残骸" : (lang == LANG_JA ? "ロケット残骸" : (lang == LANG_ES ? "Cuerpo cohete" : "Rocket Body"));
         case FLAG_DEBRIS:
             return (lang == LANG_ZH) ? "空间碎片" : (lang == LANG_JA ? "宇宙ゴミ" : (lang == LANG_ES ? "Escombros" : "Debris"));
         case FLAG_WEATHER:
-            return (lang == LANG_ZH) ? "气象" : (lang == LANG_JA ? "気象" : (lang == LANG_ES ? "Meteorología" : "Weather"));
+            return (lang == LANG_ZH) ? "气象" : (lang == LANG_JA ? "気象" : (lang == LANG_ES ? "Meteorologia" : "Weather"));
         case FLAG_RADIO:
             return (lang == LANG_ZH) ? "无线电" : (lang == LANG_JA ? "無線" : (lang == LANG_ES ? "Radio" : "Radio"));
         case FLAG_NAVIGATION:
-            return (lang == LANG_ZH) ? "导航" : (lang == LANG_JA ? "航法" : (lang == LANG_ES ? "Navegación" : "Navigation"));
+            return (lang == LANG_ZH) ? "导航" : (lang == LANG_JA ? "航法" : (lang == LANG_ES ? "Navegacion" : "Navigation"));
         case FLAG_SCIENCE:
             return (lang == LANG_ZH) ? "科学" : (lang == LANG_JA ? "科学" : (lang == LANG_ES ? "Ciencia" : "Science"));
         case FLAG_EARTH_OBS:

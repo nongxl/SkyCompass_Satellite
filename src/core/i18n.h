@@ -181,12 +181,18 @@ enum TextId {
     TXT_MAX
 };
 
+#include <M5GFX.h>
+
 class I18N {
 private:
     static Language _currentLang;
     static bool _initialized;
 
 public:
+    /**
+     * @brief 获取适合当前语言的 LovyanGFX 字体
+     */
+    static const lgfx::IFont* getFont();
     /**
      * @brief 初始化I18N管理器，加载NVS中的语言配置
      */

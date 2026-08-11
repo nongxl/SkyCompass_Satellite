@@ -2,6 +2,7 @@
 #include <M5Cardputer.h>
 #include <M5GFX.h>
 #include <math.h>
+#include "../core/i18n.h"
 
 /**
  * @brief M5 Cardputer ADV的显示模块实现
@@ -39,7 +40,7 @@ public:
         
         // 设置默认背景颜色
         _canvas.fillScreen(BLACK);
-        _canvas.setFont(&fonts::efontCN_12);
+        _canvas.setFont(I18N::getFont());
         _canvas.pushSprite(0, 0);
         
         return true;

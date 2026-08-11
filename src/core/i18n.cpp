@@ -384,7 +384,7 @@ static const char* const t_ja[TXT_MAX] = {
     "'w'キーでWiFiに接続して",
     "最新の打上げグループを取得します。",
     "経過時間: ",
-    "元 purchasers/Epoch: ",
+    "元Epoch: ",
     "代表: ",
     "物体数: ",
     "軌道: ",
@@ -420,7 +420,7 @@ static const char* const t_ja[TXT_MAX] = {
     "カラーフィルター[Tab]",
     
     // Recommended Passes Panel
-    " 推荐の通過イベント",
+    " 推奨の通過イベント",
     "7日以内に通過なし",
     "計算中...",
     "時刻同期待ち...",
@@ -448,8 +448,8 @@ static const char* const t_ja[TXT_MAX] = {
     "仰角: ",
     "距離: ",
     "赤経: ",
-    "赤纬: ",
-    "赤纬: ",
+    "赤緯: ",
+    "赤緯: ",
     "日の出: ",
     "日の入: ",
     "正午: ",
@@ -484,7 +484,7 @@ static const char* const t_ja[TXT_MAX] = {
     "言語設定",
     
     // Custom NORAD ADD Text
-    "カスタム衛星を追加するには5位または6位のNORAD IDを入力してください。",
+    "カスタム衛星を追加するには5桁または6桁のNORAD IDを入力してください。",
     "データソース: celestrak.org",
     
     // Extra Recent Launch Page Detail Specs
@@ -513,18 +513,18 @@ static const char* const t_ja[TXT_MAX] = {
     "すべての通過"
 };
 
-// 西班牙文文本资源表
+// 西班牙文文本资源表 (Standard ASCII rendering)
 static const char* const t_es[TXT_MAX] = {
     // Startup
     "Cargando modelos orbitales...",
     
     // WiFi Setup Page
-    "Configuración WiFi",
+    "Configuracion WiFi",
     "Buscando redes...",
     "No se encontraron redes.",
     "Presione [R] para buscar de nuevo",
     "Conectar a:",
-    "Contraseña:",
+    "Contrasena:",
     "[Enter] Conectar   [ESC] Cancelar",
     "Seleccionar red:",
     "[^/v] Sel [Enter] Ingresar [R] Buscar [ESC] Salir",
@@ -539,9 +539,9 @@ static const char* const t_es[TXT_MAX] = {
     "ID: ",
     "Edad GP: ",
     "Edad GP: N/A",
-    "Sin descripción.",
+    "Sin descripcion.",
     "Presione 'd' para eliminar",
-    "Imágenes meteorológicas",
+    "Imagenes meteorologicas",
     "Modo: ",
     "Satelite personalizado.\n\n",
     "AOS: ",
@@ -549,90 +549,90 @@ static const char* const t_es[TXT_MAX] = {
     
     // Recent Launch Page
     "Descargando JSONs GP...",
-    "Lanzamientos recientes requiere conexión.",
+    "Lanzamientos recientes requiere conexion.",
     "Presione 'w' para conectar WiFi",
-    "y descargar los grupos más recientes.",
+    "y descargar los grupos mas recientes.",
     "Edad: ",
-    "Época: ",
+    "Epoca: ",
     "Rep: ",
     "Objetos: ",
-    "Órbita: ",
+    "Orbita: ",
     "Estado: ",
     
     // Formation State Text
     "Operacional",
     "Tren compacto",
-    "Formación en tren",
-    "Expandiéndose",
+    "Formacion en tren",
+    "Expandiendose",
     
     // Coordinate HUD
     "Alt",
     
     // Compass Mode
-    "Modo de vista de cámara",
+    "Modo de vista de camara",
     "Presione 'S' para fijar referencia",
     
     // Help Panel
     "--- Ayuda y atajos ---",
     "Brillo pantalla[ [/] ]",
-    "Ubicación GNSS[G]",
-    "Menú de ayuda[H]",
+    "Ubicacion GNSS[G]",
+    "Menu de ayuda[H]",
     "Alternar HUD[Back]",
     "Bloquear vista[Spc]",
     "Panel de pases[Enter]",
-    "Lista de satélites[S]",
-    "Máquina del tiempo[ , / . ]",
-    "Vista satélite[V]",
+    "Lista de satelites[S]",
+    "Maquina del tiempo[ , / . ]",
+    "Vista satelite[V]",
     "Alternar WiFi[W]",
-    "Posición manual[C]",
+    "Posicion manual[C]",
     "Reiniciar hora[R]",
     "Filtro de color[Tab]",
     
     // Recommended Passes Panel
     " PASES RECOMENDADOS",
-    "Sin pases en 7 días",
+    "Sin pases en 7 dias",
     "Calculando...",
     "Esperando sinc. de hora...",
-    "Puntuación:",
+    "Puntuacion:",
     "Mag:",
-    "Razón:",
+    "Razon:",
     "Cielo oscuro",
     "+Brillante",
-    "+Cénit",
+    "+Zenit",
     "+Largo",
     "Nombre: ",
     "AOS: ",
-    "El Máx: ",
+    "El Max: ",
     "LOS: ",
-    "Duración: ",
-    "El Mín: ",
+    "Duracion: ",
+    "El Min: ",
     "Rastreable: ",
-    "Sí",
+    "Si",
     "No",
     "Presione OK para ir a hora AOS",
     
     // Sun Data Page
     "Datos del Sol",
     "Azimut: ",
-    "Elevación: ",
+    "Elevacion: ",
     "Distancia: ",
     "AR: ",
     "Dec: ",
     "Dec: ",
     "Amanecer: ",
     "Atardecer: ",
-    "Mediodía: ",
+    "Mediodia: ",
     "Presione ESC para volver",
     
     // Time Machine Page
-    "Máquina del tiempo",
+    "Maquina del tiempo",
     "Use las flechas para ajustar la hora",
     "Presione OK para confirmar",
     "Presione ESC para cancelar",
     "Hora actual:",
     
     // Quick Setup Dialog
-    "Configuración",
+    "Configuracion",
     "Long:",
     "Lat:",
     "Alt(m):",
@@ -640,7 +640,7 @@ static const char* const t_es[TXT_MAX] = {
     "Tab: campo, Del: borrar, OK: guardar",
     
     // Position Settings Page
-    "Ajuste de posición",
+    "Ajuste de posicion",
     "Longitud:",
     "Latitud:",
     "Altitud (m):",
@@ -653,7 +653,7 @@ static const char* const t_es[TXT_MAX] = {
     "Idioma",
     
     // Custom NORAD ADD Text
-    "Ingrese ID NORAD de 5 o 6 dígitos para agregar satélite.",
+    "Ingrese ID NORAD de 5 o 6 digitos para agregar satelite.",
     "Fuente: celestrak.org",
     
     // Extra Recent Launch Page Detail Specs
@@ -666,21 +666,28 @@ static const char* const t_es[TXT_MAX] = {
     
     // Status Feedback / Error Msg / Banner info
     "Sistema ocupado... Espere.",
-    "¡Error al iniciar tarea!",
+    "Error al iniciar tarea!",
     "Conectando a WiFi...",
     "WiFi desconectado.",
     "Actualizando JSON GP...",
-    "¡Error al leer caché!",
-    "¡Actualización exitosa!",
+    "Error al leer cache!",
+    "Actualizacion exitosa!",
     "Datos actualizados (<2h). Presione C para forzar.",
     "Error al actualizar: ",
     
     // Tree categories in passes panel
     "Esta noche",
-    "Próximos 7 días",
+    "Proximos 7 dias",
     "Muy recomendado",
     "Todos los pases"
 };
+
+const lgfx::IFont* I18N::getFont() {
+    if (getLanguage() == LANG_JA) {
+        return &fonts::efontJA_12;
+    }
+    return &fonts::efontCN_12;
+}
 
 void I18N::begin() {
     if (_initialized) return;

@@ -3072,8 +3072,8 @@ void drawWiFiSetupPage() {
     uint16_t width = canvas->width();
     uint16_t height = canvas->height();
     
-    // Explicitly set Chinese UTF-8 font
-    canvas->setFont(&fonts::efontCN_12);
+    // Set font matching current language
+    canvas->setFont(I18N::getFont());
     canvas->setTextSize(1);
     
     // Background
@@ -3334,7 +3334,7 @@ void drawSatSelectPage() {
         int textX = batX + (batW - canvas->textWidth(pctStr.c_str())) / 2;
         int textY = batY + 2; // standard char height is 8
         canvas->drawString(pctStr.c_str(), textX, textY);
-        canvas->setFont(&fonts::efontCN_12);
+        canvas->setFont(I18N::getFont());
     }
 
     
