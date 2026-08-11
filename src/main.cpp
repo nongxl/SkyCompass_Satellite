@@ -3595,13 +3595,14 @@ void drawSatSelectPage() {
             canvas->setTextColor(TFT_LIGHTGRAY);
             
             // 1. 基础文字描述 (简介)
-            bool isZh = (I18N::getLanguage() == LANG_ZH);
+            Language currL = I18N::getLanguage();
+            bool isZh = (currL == LANG_ZH);
             String finalDesc = "";
             if (satSelectedIndex >= NUM_BUILTIN_SATELLITES) {
                 if (selSat.description && strlen(selSat.description) > 0) {
                     finalDesc = selSat.description;
                 } else {
-                    finalDesc = isZh ? "自定义添加的目标卫星。" : "Custom added satellite.";
+                    finalDesc = I18N::get(TXT_CUSTOM_ADDED_SAT);
                 }
             } else {
                 const char* localDesc = I18N::getSatDescription(selSat.noradId);
@@ -3658,8 +3659,9 @@ void drawSatSelectPage() {
                     realSpeed = sqrt(vx * vx + vy * vy + vz * vz);
                 }
                 
+                Language currL = I18N::getLanguage();
                 char specBuf[256];
-                if (isZh) {
+                if (currL == LANG_ZH) {
                     if (periodMin >= 120.0f) {
                         snprintf(specBuf, sizeof(specBuf),
                                  "\n国际标识: %s\n"
@@ -3680,6 +3682,58 @@ void drawSatSelectPage() {
                                  "轨道倾角: %.2f°\n"
                                  "近/远地点: %.0f/%.0f km",
                                  cospar.length() > 0 ? cospar.c_str() : "未知",
+                                 periodMin,
+                                 realSpeed > 0 ? realSpeed : 7.66,
+                                 inclination,
+                                 perigee, apogee);
+                    }
+                } else if (currL == LANG_JA) {
+                    if (periodMin >= 120.0f) {
+                        snprintf(specBuf, sizeof(specBuf),
+                                 "\n国際識別: %s\n"
+                                 "周回周期: %.2f時間\n"
+                                 "飛行速度: %.2f km/s\n"
+                                 "軌道傾角: %.2f°\n"
+                                 "近/遠地点: %.0f/%.0f km",
+                                 cospar.length() > 0 ? cospar.c_str() : "不明",
+                                 periodMin / 60.0f,
+                                 realSpeed > 0 ? realSpeed : 7.66,
+                                 inclination,
+                                 perigee, apogee);
+                    } else {
+                        snprintf(specBuf, sizeof(specBuf),
+                                 "\n国際識別: %s\n"
+                                 "周回周期: %.1f分\n"
+                                 "飛行速度: %.2f km/s\n"
+                                 "軌道傾角: %.2f°\n"
+                                 "近/遠地点: %.0f/%.0f km",
+                                 cospar.length() > 0 ? cospar.c_str() : "不明",
+                                 periodMin,
+                                 realSpeed > 0 ? realSpeed : 7.66,
+                                 inclination,
+                                 perigee, apogee);
+                    }
+                } else if (currL == LANG_ES) {
+                    if (periodMin >= 120.0f) {
+                        snprintf(specBuf, sizeof(specBuf),
+                                 "\nID COSPAR: %s\n"
+                                 "Periodo: %.2fh\n"
+                                 "Velocidad: %.2f km/s\n"
+                                 "Inclinacion: %.2f°\n"
+                                 "Perigeo/Apogeo: %.0f/%.0f km",
+                                 cospar.length() > 0 ? cospar.c_str() : "N/A",
+                                 periodMin / 60.0f,
+                                 realSpeed > 0 ? realSpeed : 7.66,
+                                 inclination,
+                                 perigee, apogee);
+                    } else {
+                        snprintf(specBuf, sizeof(specBuf),
+                                 "\nID COSPAR: %s\n"
+                                 "Periodo: %.1f min\n"
+                                 "Velocidad: %.2f km/s\n"
+                                 "Inclinacion: %.2f°\n"
+                                 "Perigeo/Apogeo: %.0f/%.0f km",
+                                 cospar.length() > 0 ? cospar.c_str() : "N/A",
                                  periodMin,
                                  realSpeed > 0 ? realSpeed : 7.66,
                                  inclination,
@@ -3718,8 +3772,12 @@ void drawSatSelectPage() {
             // 实时观察数据 (方位角 / 仰角) 分开单行显示，确保“仰角:”作为行首键名高亮为绿色
             if (isTracking) {
                 char radioBuf[128];
-                if (isZh) {
+                if (currL == LANG_ZH) {
                     snprintf(radioBuf, sizeof(radioBuf), "\n方位角: %03.0f°\n仰角: %02.0f°", az, el);
+                } else if (currL == LANG_JA) {
+                    snprintf(radioBuf, sizeof(radioBuf), "\n方位角: %03.0f°\n仰角: %02.0f°", az, el);
+                } else if (currL == LANG_ES) {
+                    snprintf(radioBuf, sizeof(radioBuf), "\nAzimut: %03.0f°\nElevacion: %02.0f°", az, el);
                 } else {
                     snprintf(radioBuf, sizeof(radioBuf), "\nAzimuth: %03.0f°\nElevation: %02.0f°", az, el);
                 }
@@ -3729,8 +3787,12 @@ void drawSatSelectPage() {
             // 运行状态与无线电频段细节
             if (selSat.type == SAT_TYPE_HISTORICAL || selSat.noradId == 4382 || selSat.noradId == 5 || selSat.noradId == 27386 || selSat.noradId == 25576) {
                 char statusBuf[64];
-                if (isZh) {
+                if (currL == LANG_ZH) {
                     snprintf(statusBuf, sizeof(statusBuf), "\n运行状态: 已失效/默音在轨");
+                } else if (currL == LANG_JA) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\n運用状態: 非運用/静寂");
+                } else if (currL == LANG_ES) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\nEstado: Inactivo/Silencioso");
                 } else {
                     snprintf(statusBuf, sizeof(statusBuf), "\nStatus: Inactive/Silent");
                 }
@@ -3740,8 +3802,12 @@ void drawSatSelectPage() {
             // 无线电频段细节 (下行 / 上行 / 亚音 / 调制模式)
             if (selSat.downlinkFreq.length() > 0) {
                 char freqBuf[128];
-                if (isZh) {
+                if (currL == LANG_ZH) {
                     snprintf(freqBuf, sizeof(freqBuf), "\n下行: %s MHz", selSat.downlinkFreq.c_str());
+                } else if (currL == LANG_JA) {
+                    snprintf(freqBuf, sizeof(freqBuf), "\n受信(Rx): %s MHz", selSat.downlinkFreq.c_str());
+                } else if (currL == LANG_ES) {
+                    snprintf(freqBuf, sizeof(freqBuf), "\nRx (Bajada): %s MHz", selSat.downlinkFreq.c_str());
                 } else {
                     snprintf(freqBuf, sizeof(freqBuf), "\nRx: %s MHz", selSat.downlinkFreq.c_str());
                 }
@@ -3749,8 +3815,12 @@ void drawSatSelectPage() {
             }
             if (selSat.uplinkFreq.length() > 0) {
                 char txBuf[128];
-                if (isZh) {
+                if (currL == LANG_ZH) {
                     snprintf(txBuf, sizeof(txBuf), "\n上行: %s MHz", selSat.uplinkFreq.c_str());
+                } else if (currL == LANG_JA) {
+                    snprintf(txBuf, sizeof(txBuf), "\n送信(Tx): %s MHz", selSat.uplinkFreq.c_str());
+                } else if (currL == LANG_ES) {
+                    snprintf(txBuf, sizeof(txBuf), "\nTx (Subida): %s MHz", selSat.uplinkFreq.c_str());
                 } else {
                     snprintf(txBuf, sizeof(txBuf), "\nTx: %s MHz", selSat.uplinkFreq.c_str());
                 }
@@ -3758,8 +3828,12 @@ void drawSatSelectPage() {
             }
             if (selSat.tone.length() > 0) {
                 char toneBuf[64];
-                if (isZh) {
+                if (currL == LANG_ZH) {
                     snprintf(toneBuf, sizeof(toneBuf), "\n亚音: %s", selSat.tone.c_str());
+                } else if (currL == LANG_JA) {
+                    snprintf(toneBuf, sizeof(toneBuf), "\nトーン: %s", selSat.tone.c_str());
+                } else if (currL == LANG_ES) {
+                    snprintf(toneBuf, sizeof(toneBuf), "\nTono: %s", selSat.tone.c_str());
                 } else {
                     snprintf(toneBuf, sizeof(toneBuf), "\nTone: %s", selSat.tone.c_str());
                 }
@@ -3767,8 +3841,12 @@ void drawSatSelectPage() {
             }
             if (selSat.radioMode.length() > 0) {
                 char modeBuf[64];
-                if (isZh) {
+                if (currL == LANG_ZH) {
                     snprintf(modeBuf, sizeof(modeBuf), "\n调制模式: %s", selSat.radioMode.c_str());
+                } else if (currL == LANG_JA) {
+                    snprintf(modeBuf, sizeof(modeBuf), "\n変調方式: %s", selSat.radioMode.c_str());
+                } else if (currL == LANG_ES) {
+                    snprintf(modeBuf, sizeof(modeBuf), "\nModulacion: %s", selSat.radioMode.c_str());
                 } else {
                     snprintf(modeBuf, sizeof(modeBuf), "\nMode: %s", selSat.radioMode.c_str());
                 }
