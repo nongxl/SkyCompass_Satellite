@@ -2528,30 +2528,27 @@ void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int 
     // Draw language selection dialog if needed
     if (showLangSelect) {
         int dialogW = 140;
-        int dialogH = 70;
+        int dialogH = 90;
         int dialogX = 120 - dialogW / 2;
-        int dialogY = 67 - dialogH / 2 - 10;
+        int dialogY = 67 - dialogH / 2;
         
         canvas->fillRect(dialogX, dialogY, dialogW, dialogH, canvas->color565(30, 40, 50));
         canvas->drawRect(dialogX, dialogY, dialogW, dialogH, TFT_YELLOW);
         
         canvas->setTextColor(TFT_WHITE);
-        canvas->drawString("Select Language", dialogX + (dialogW - canvas->textWidth("Select Language")) / 2, dialogY + 8);
+        canvas->drawString("Select Language", dialogX + (dialogW - canvas->textWidth("Select Language")) / 2, dialogY + 5);
         
-        if (selectedLangIndex == 0) {
-            canvas->setTextColor(TFT_GREEN);
-            canvas->drawString("> English", dialogX + 25, dialogY + 28);
-        } else {
-            canvas->setTextColor(TFT_LIGHTGRAY);
-            canvas->drawString("  English", dialogX + 25, dialogY + 28);
-        }
-        
-        if (selectedLangIndex == 1) {
-            canvas->setTextColor(TFT_GREEN);
-            canvas->drawString("> 简体中文", dialogX + 25, dialogY + 45);
-        } else {
-            canvas->setTextColor(TFT_LIGHTGRAY);
-            canvas->drawString("  简体中文", dialogX + 25, dialogY + 45);
+        const char* options[4] = {"English", "简体中文", "日本語", "Español"};
+        for (int i = 0; i < 4; i++) {
+            if (selectedLangIndex == i) {
+                canvas->setTextColor(TFT_GREEN);
+                String label = "> " + String(options[i]);
+                canvas->drawString(label.c_str(), dialogX + 20, dialogY + 22 + i * 16);
+            } else {
+                canvas->setTextColor(TFT_LIGHTGRAY);
+                String label = "  " + String(options[i]);
+                canvas->drawString(label.c_str(), dialogX + 20, dialogY + 22 + i * 16);
+            }
         }
     }
     
@@ -2565,7 +2562,7 @@ void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int 
 void drawLangSelectDialog(LGFX_Sprite* canvas) {
     if (!canvas) return;
     
-    int w = 140, h = 70;
+    int w = 140, h = 90;
     int x = (canvas->width() - w) / 2;
     int y = (canvas->height() - h) / 2;
     
@@ -2574,22 +2571,19 @@ void drawLangSelectDialog(LGFX_Sprite* canvas) {
     
     canvas->setTextColor(TFT_WHITE);
     canvas->setTextSize(1);
-    canvas->drawString(I18N::get(TXT_LANGUAGE_MENU), x + (w - canvas->textWidth(I18N::get(TXT_LANGUAGE_MENU))) / 2, y + 8);
+    canvas->drawString(I18N::get(TXT_LANGUAGE_MENU), x + (w - canvas->textWidth(I18N::get(TXT_LANGUAGE_MENU))) / 2, y + 5);
     
-    if (langSelectedIndex == 0) {
-        canvas->setTextColor(TFT_GREEN);
-        canvas->drawString("> English", x + 25, y + 28);
-    } else {
-        canvas->setTextColor(TFT_LIGHTGRAY);
-        canvas->drawString("  English", x + 25, y + 28);
-    }
-    
-    if (langSelectedIndex == 1) {
-        canvas->setTextColor(TFT_GREEN);
-        canvas->drawString("> 简体中文", x + 25, y + 45);
-    } else {
-        canvas->setTextColor(TFT_LIGHTGRAY);
-        canvas->drawString("  简体中文", x + 25, y + 45);
+    const char* options[4] = {"English", "简体中文", "日本語", "Español"};
+    for (int i = 0; i < 4; i++) {
+        if (langSelectedIndex == i) {
+            canvas->setTextColor(TFT_GREEN);
+            String label = "> " + String(options[i]);
+            canvas->drawString(label.c_str(), x + 20, y + 22 + i * 16);
+        } else {
+            canvas->setTextColor(TFT_LIGHTGRAY);
+            String label = "  " + String(options[i]);
+            canvas->drawString(label.c_str(), x + 20, y + 22 + i * 16);
+        }
     }
 }
 
@@ -2798,8 +2792,8 @@ void setup() {
             }
 #endif 
             
-            bool isZh = (I18N::getLanguage() == LANG_ZH);
-            g_loadingStatusText = isZh ? "初始化传感器与外设..." : "Initializing Hardware...";
+            Language currL = I18N::getLanguage();
+            g_loadingStatusText = (currL == LANG_ZH) ? "初始化传感器与外设..." : ((currL == LANG_JA) ? "センサー・外来機器の初期化中..." : ((currL == LANG_ES) ? "Inicializando sensores..." : "Initializing Hardware..."));
             g_loadingProgress = 10;
             
             // Load cached position from Preferences
@@ -2835,7 +2829,8 @@ void setup() {
                 posPrefs.end();
             }
             
-            g_loadingStatusText = isZh ? "载入观测坐标与太阳模型..." : "Loading Location & Sun Data...";
+            Language currL_pos = I18N::getLanguage();
+            g_loadingStatusText = (currL_pos == LANG_ZH) ? "载入观测坐标与太阳模型..." : ((currL_pos == LANG_JA) ? "観測座標・太陽モデルの読み込み中..." : ((currL_pos == LANG_ES) ? "Cargando ubicación y Sol..." : "Loading Location & Sun Data..."));
             g_loadingProgress = 25;
             
             sun_calc = new SunCalculator(pos_manager);
@@ -2863,11 +2858,12 @@ void setup() {
             current_unix = 0; // We start at 0 so TLEUpdater uses cache regardless of age
             
             // Offline TLE Cache Loading
+            Language currL_parse = I18N::getLanguage();
             for (int i = 0; i < NUM_SATELLITES; i++) {
                 if (g_satellites[i].type == SAT_TYPE_GEO_TV || g_satellites[i].type == SAT_TYPE_DEEP_SPACE) {
                     continue;
                 }
-                g_loadingStatusText = isZh ? ("解析轨道: " + g_satellites[i].name) : ("Parsing Orbit: " + g_satellites[i].name);
+                g_loadingStatusText = (currL_parse == LANG_ZH) ? ("解析轨道: " + g_satellites[i].name) : ((currL_parse == LANG_JA) ? ("軌道解析中: " + g_satellites[i].name) : ((currL_parse == LANG_ES) ? ("Analizando órbita: " + g_satellites[i].name) : ("Parsing Orbit: " + g_satellites[i].name)));
                 TLEData loaded_tle;
                 if (TLEUpdater::getTLE(g_satellites[i].noradId, loaded_tle)) {
                     loaded_tle.baseScore = g_satellites[i].baseScore;
@@ -2913,7 +2909,7 @@ void setup() {
             g_timeSynced = true;
             LOG_I("APP", "Offline boot: Loaded cached TLEs. System time anchor set to: %u", current_unix);
             
-            g_loadingStatusText = isZh ? "解算自定义目标与频段数据..." : "Loading Custom Satellites...";
+            g_loadingStatusText = (currL_parse == LANG_ZH) ? "解算自定义目标与频段数据..." : ((currL_parse == LANG_JA) ? "カスタム目標・周波数の計算中..." : ((currL_parse == LANG_ES) ? "Cargando satélites personalizados..." : "Loading Custom Satellites..."));
             g_loadingProgress = 75;
             
             // Load Custom Satellites from Preferences
@@ -2986,11 +2982,12 @@ void setup() {
                 saveCustomSatellites();
             }
             
-            g_loadingStatusText = isZh ? "构建火箭与群编队数据..." : "Building Launch Formations...";
+            Language currL_boot = I18N::getLanguage();
+            g_loadingStatusText = (currL_boot == LANG_ZH) ? "构建火箭与群编队数据..." : ((currL_boot == LANG_JA) ? "ロケット・編隊データの構築中..." : ((currL_boot == LANG_ES) ? "Construyendo formaciones..." : "Building Launch Formations..."));
             g_loadingProgress = 85;
             tryLoadRecentLaunchCache();
             
-            g_loadingStatusText = isZh ? "启动核心推算引擎..." : "Starting Predictor Engine...";
+            g_loadingStatusText = (currL_boot == LANG_ZH) ? "启动核心推算引擎..." : ((currL_boot == LANG_JA) ? "推算エンジンの起動中..." : ((currL_boot == LANG_ES) ? "Iniciando motor de predicción..." : "Starting Predictor Engine..."));
             g_loadingProgress = 95;
             
             // Start predictor task on Core 0 for offline data (UI runs on Core 1)
@@ -3008,7 +3005,7 @@ void setup() {
             manualWifiToggle = false;
             xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
 
-            g_loadingStatusText = isZh ? "加载完成，准备就绪！" : "Ready!";
+            g_loadingStatusText = (currL_boot == LANG_ZH) ? "加载完成，准备就绪！" : ((currL_boot == LANG_JA) ? "ロード完了、準備完了！" : ((currL_boot == LANG_ES) ? "¡Listo!" : "Ready!"));
             g_loadingProgress = 100;
             delay(100);
             g_loadingFinished = true;
@@ -3035,13 +3032,13 @@ void setup() {
             bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
             bool currEnter = M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER);
             if (currSemi && !lastSemi) {
-                selectedLangIdx = (selectedLangIdx == 0) ? 1 : 0;
+                selectedLangIdx = (selectedLangIdx - 1 + 4) % 4;
             }
             if (currDot && !lastDot) {
-                selectedLangIdx = (selectedLangIdx == 0) ? 1 : 0;
+                selectedLangIdx = (selectedLangIdx + 1) % 4;
             }
             if (currEnter && !lastEnter) {
-                I18N::setLanguage(selectedLangIdx == 0 ? LANG_EN : LANG_ZH);
+                I18N::setLanguage((Language)selectedLangIdx);
                 I18N::setFirstStartDone();
                 needsLangSelect = false;
             }
@@ -4113,7 +4110,7 @@ void drawSatSelectPage() {
                     // Display real count of objects and clustered proxies
                     char satsBuf[64];
                     int proxyCount = item.proxyFormation.size();
-                    if (I18N::getLanguage() == LANG_ZH) {
+                    if (I18N::getLanguage() == LANG_ZH || I18N::getLanguage() == LANG_JA) {
                         sprintf(satsBuf, "%s%d | 代理: %d", I18N::get(TXT_RL_OBJECTS), item.satelliteCount, proxyCount);
                     } else {
                         sprintf(satsBuf, "%s%d | Proxy: %d", I18N::get(TXT_RL_OBJECTS), item.satelliteCount, proxyCount);
@@ -4259,10 +4256,12 @@ void drawSatSelectPage() {
         canvas->fillRect(x, y, w, h, canvas->color565(20, 30, 40));
         canvas->drawRect(x, y, w, h, TFT_LIGHTGRAY);
         
-        bool isZh = (I18N::getLanguage() == LANG_ZH);
+        Language currL = I18N::getLanguage();
+        bool isZh = (currL == LANG_ZH);
         canvas->setTextColor(TFT_WHITE);
         canvas->setTextSize(1);
-        canvas->drawString(isZh ? "--- 列表快捷键指南 ---" : "--- Setup Shortcuts ---", x + 35, y + 5);
+        const char* titleStr = (currL == LANG_ZH) ? "--- 列表快捷键指南 ---" : ((currL == LANG_JA) ? "--- ショートカットガイド ---" : ((currL == LANG_ES) ? "--- Guía de atajos ---" : "--- Setup Shortcuts ---"));
+        canvas->drawString(titleStr, x + (w - canvas->textWidth(titleStr)) / 2, y + 5);
 
         auto drawHotKey = [&](const char* word, char keyChar, int dx, int dy) {
             int cx = dx;
@@ -4966,7 +4965,7 @@ void loop() {
                     entryRecentLaunchActiveBatchId = recentLaunchActiveBatchId;
                 } else if (justL) {
                     appState = STATE_LANG_SELECT;
-                    langSelectedIndex = (I18N::getLanguage() == LANG_EN) ? 0 : 1;
+                    langSelectedIndex = (int)I18N::getLanguage();
                 } else if (justH) {
                     showHelp = !showHelp;
                 } else if (justG) {
@@ -5506,12 +5505,12 @@ void loop() {
                 if (justEsc || justTick || justBack) {
                     appState = STATE_MAIN;
                 } else if (justEnter) {
-                    I18N::setLanguage(langSelectedIndex == 0 ? LANG_EN : LANG_ZH);
+                    I18N::setLanguage((Language)langSelectedIndex);
                     appState = STATE_MAIN;
                 } else if (justSemi) { // UP
-                    langSelectedIndex = (langSelectedIndex == 0) ? 1 : 0;
+                    langSelectedIndex = (langSelectedIndex - 1 + 4) % 4;
                 } else if (justDot) { // DOWN
-                    langSelectedIndex = (langSelectedIndex == 0) ? 1 : 0;
+                    langSelectedIndex = (langSelectedIndex + 1) % 4;
                 }
             }
         }
@@ -6477,7 +6476,9 @@ void loop() {
                     }
                     if (hasStaleTle) {
                         earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
-                        earth_renderer->getCanvas()->drawString(I18N::getLanguage() == LANG_ZH ? "TLE过期,请连WiFi更新" : "Stale TLE, sync WiFi", 5, 48);
+                        Language currL = I18N::getLanguage();
+                        const char* staleMsg = (currL == LANG_ZH) ? "TLE过期,请连WiFi更新" : ((currL == LANG_JA) ? "TLE期限切れ,WiFi更新" : ((currL == LANG_ES) ? "TLE vencido, sinc WiFi" : "Stale TLE, sync WiFi"));
+                        earth_renderer->getCanvas()->drawString(staleMsg, 5, 48);
                     }
                 } else if (selectedPassIndex >= 0 && selectedPassIndex < (int)localRecommendedPasses.size()) {
                     // Draw Detail View
@@ -6487,6 +6488,8 @@ void loop() {
                     earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
                     earth_renderer->getCanvas()->drawString(p.satName.c_str(), 40, 20);
                     
+                    bool isCjk = (I18N::getLanguage() == LANG_ZH || I18N::getLanguage() == LANG_JA);
+
                     // Score: (y=32)
                     earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
                     earth_renderer->getCanvas()->drawString(I18N::get(TXT_PASS_SCORE), 5, 32);
@@ -6494,7 +6497,7 @@ void loop() {
                     for(int s=0;s<p.score;s++) stars += "*";
                     uint16_t starColor = (p.score==5) ? TFT_GOLD : (p.score>=3 ? TFT_GREEN : TFT_LIGHTGRAY);
                     earth_renderer->getCanvas()->setTextColor(starColor);
-                    int scoreX = (I18N::getLanguage() == LANG_ZH) ? 60 : 45;
+                    int scoreX = isCjk ? 60 : 45;
                     earth_renderer->getCanvas()->drawString(stars.c_str(), scoreX, 32);
                     
                     // Orbit: MM/DD (y=45)
@@ -6532,13 +6535,13 @@ void loop() {
                     } else {
                         sprintf(magBuf, "%s", I18N::get(TXT_VIS_NA));
                     }
-                    int magX = (I18N::getLanguage() == LANG_ZH) ? 40 : 35;
+                    int magX = isCjk ? 40 : 35;
                     earth_renderer->getCanvas()->drawString(magBuf, magX, 70);
                     
                     earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
                     earth_renderer->getCanvas()->drawString(I18N::get(TXT_PASS_MAX_EL), 65, 70);
                     earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
-                    int maxElX = (I18N::getLanguage() == LANG_ZH) ? 120 : 115;
+                    int maxElX = isCjk ? 120 : 115;
                     earth_renderer->getCanvas()->drawString((String((int)p.maxElevation) + "°").c_str(), maxElX, 70);
                     
                     // Reason: (y=82)
@@ -6549,7 +6552,7 @@ void loop() {
                     if (p.maxElevation > 60) reason += I18N::get(TXT_PASS_REASON_ZENITH);
                     if (p.visibleDuration > 300) reason += I18N::get(TXT_PASS_REASON_LONG);
                     earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                    int reasonX = (I18N::getLanguage() == LANG_ZH) ? 40 : 50;
+                    int reasonX = isCjk ? 40 : 50;
                     earth_renderer->getCanvas()->drawString(reason.c_str(), reasonX, 82);
                     
                     int sIdx = -1;
@@ -6598,9 +6601,9 @@ void loop() {
                             double range_rate = dist - dist_prev;
                             
                             earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                            bool isZh = (I18N::getLanguage() == LANG_ZH);
+                            bool isCjk = (I18N::getLanguage() == LANG_ZH || I18N::getLanguage() == LANG_JA);
                             char azaltBuf[32];
-                            if (isZh) {
+                            if (isCjk) {
                                 sprintf(azaltBuf, "方位:%03d° 仰角:%02d°", (int)az, (int)el);
                             } else {
                                 sprintf(azaltBuf, "Az:%03d° El:%02d°", (int)az, (int)el);
@@ -6615,7 +6618,7 @@ void loop() {
                                 
                                 char rx1Buf[32];
                                 char rx2Buf[32];
-                                if (isZh) {
+                                if (isCjk) {
                                     sprintf(rx1Buf, "下行1:%07.3f", freq_aprs + shift_aprs/1000.0);
                                     sprintf(rx2Buf, "下行2:%07.3f", freq_sstv + shift_sstv/1000.0);
                                 } else {
@@ -6630,7 +6633,7 @@ void loop() {
                                     double freq_mhz = downlinkFreq.toDouble();
                                     double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
                                     char rxBuf[32];
-                                    if (isZh) {
+                                    if (isCjk) {
                                         sprintf(rxBuf, "下行:%s (%+.1f)", downlinkFreq.c_str(), shift_khz);
                                     } else {
                                         sprintf(rxBuf, "Rx:%s (%+.1f)", downlinkFreq.c_str(), shift_khz);
@@ -6639,8 +6642,8 @@ void loop() {
                                 }
                                 if (satType == SAT_TYPE_HAM && uplinkFreq.length() > 0) {
                                     earth_renderer->getCanvas()->setTextColor(TFT_ORANGE);
-                                    String txStr = isZh ? ("上行:" + uplinkFreq) : ("Tx:" + uplinkFreq);
-                                    if (tone.length() > 0) txStr += isZh ? (" 亚音:" + tone) : (" Tone:" + tone);
+                                    String txStr = isCjk ? ("上行:" + uplinkFreq) : ("Tx:" + uplinkFreq);
+                                    if (tone.length() > 0) txStr += isCjk ? (" 亚音:" + tone) : (" Tone:" + tone);
                                     earth_renderer->getCanvas()->drawString(txStr.c_str(), 5, 120);
                                 }
                             }
@@ -6648,16 +6651,29 @@ void loop() {
                     }
                 } else {
                     
+                    // Count passes per category for display in top-level items
+                    int catCounts[4] = {0, 0, 0, 0};
+                    uint32_t currentSimTime = current_unix + timeMachineOffset;
+                    for (const auto& p : localRecommendedPasses) {
+                        if (p.losTime >= currentSimTime) {
+                            if (p.aosTime < currentSimTime + 24*3600) catCounts[0]++;
+                            if (p.aosTime < currentSimTime + 7*24*3600) catCounts[1]++;
+                            if (p.score >= 4) catCounts[2]++;
+                            catCounts[3]++;
+                        }
+                    }
+
                     // Draw Tree View
+                    bool isCjk = (I18N::getLanguage() == LANG_ZH || I18N::getLanguage() == LANG_JA);
                     const char* catNames[] = {
                         I18N::get(TXT_CAT_TONIGHT),
                         I18N::get(TXT_CAT_NEXT_7D),
                         I18N::get(TXT_CAT_HIGHLY_REC),
                         I18N::get(TXT_CAT_ALL_PASSES)
                     };
-                    int lineH = (I18N::getLanguage() == LANG_ZH) ? 14 : 11;
+                    int lineH = isCjk ? 14 : 11;
                     int y = 20;
-                    int itemsPerPage = (I18N::getLanguage() == LANG_ZH) ? 6 : 7;
+                    int itemsPerPage = isCjk ? 6 : 7;
                     int startIndex = (passScrollIndex / itemsPerPage) * itemsPerPage;
                     
                     for (int i = 0; i < itemsPerPage && (startIndex + i) < localDisplayTree.size(); i++) {
@@ -6677,7 +6693,7 @@ void loop() {
                             }
                             
                             String prefix = catExpanded[item.categoryIndex] ? "[-] " : "[+] ";
-                            String label = prefix + catNames[item.categoryIndex];
+                            String label = prefix + catNames[item.categoryIndex] + "(" + String(catCounts[item.categoryIndex]) + ")";
                             if (isCalculatingCat) {
                                 int dotState = (millis() / 400) % 3;
                                 if (dotState == 0) label += ".";
@@ -6848,9 +6864,12 @@ void loop() {
                 }
                 
                 if (hasSatInfo && currentCalc != nullptr) {
-                    bool isZh = (I18N::getLanguage() == LANG_ZH);
+                    Language currL = I18N::getLanguage();
+                    bool isZh = (currL == LANG_ZH);
+                    bool isCjk = (currL == LANG_ZH || currL == LANG_JA);
                     earth_renderer->getCanvas()->setTextColor(satColor);
-                    earth_renderer->getCanvas()->drawString(isZh ? "视角锁定" : "Sat View", isZh ? 180 : 180, 5);
+                    const char* satViewStr = (currL == LANG_ZH) ? "视角锁定" : ((currL == LANG_JA) ? "視点固定" : ((currL == LANG_ES) ? "Vista sat" : "Sat View"));
+                    earth_renderer->getCanvas()->drawString(satViewStr, 180, 5);
                     
                     double az = 0, el = 0, dist = 0, range_rate = 0, skew = 0;
                     bool hasValidPos = false;

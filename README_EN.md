@@ -32,6 +32,7 @@
   - `S`: Open the Satellite selection menu to select which satellites to draw on the screen. Press `d` in the menu to delete custom-downloaded satellites.
   - `W`: Enable/disable WiFi to perform NTP time synchronization and TLE data update.
   - `H`: Slide out the **Keyboard Shortcuts Help Menu** at the center of the screen.
+  - `L`: Open the **Language Selection Menu** to seamlessly switch between English, Simplified Chinese, Japanese (日本語), and Spanish (Español), automatically saved to NVS flash.
   - `C`: Enter/exit **Manual Location Mode (Crosshair Mode)**, using `;` (up), `.` (down), `,` (left), and `/` (right) like a joystick to rotate the globe and manually designate any observer location on Earth.
   - `G`: Enable/disable **GNSS Forced Always-On Mode**, bypassing the auto-sleep power management to manually acquire GPS coordinates.
   - `V`: Enter/exit **Spacecraft Follow Mode (Sat View Mode)**. In this mode, press `;` (previous) and `.` (next) to cycle focus between selected satellites.

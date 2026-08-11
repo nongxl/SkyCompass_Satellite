@@ -994,52 +994,52 @@ const char* Encyclopedia::getDescription(uint32_t noradId) {
 }
 
 String Encyclopedia::getCategoryName(Category category) {
-    bool isZh = (I18N::getLanguage() == LANG_ZH);
+    Language lang = I18N::getLanguage();
     switch (category) {
         case Category::HUMAN_SPACEFLIGHT:
-            return isZh ? "载人航天" : "Human Spaceflight";
+            return (lang == LANG_ZH) ? "载人航天" : (lang == LANG_JA ? "有人宇宙飛行" : (lang == LANG_ES ? "Vuelo espacial tripulado" : "Human Spaceflight"));
         case Category::ASTRONOMY:
-            return isZh ? "天文学" : "Astronomy";
+            return (lang == LANG_ZH) ? "天文学" : (lang == LANG_JA ? "天文学" : (lang == LANG_ES ? "Astronomía" : "Astronomy"));
         case Category::EARTH_OBSERVATION:
-            return isZh ? "地球观测" : "Earth Observation";
+            return (lang == LANG_ZH) ? "地球观测" : (lang == LANG_JA ? "地球観測" : (lang == LANG_ES ? "Observación terrestre" : "Earth Observation"));
         case Category::NAVIGATION:
-            return isZh ? "导航" : "Navigation";
+            return (lang == LANG_ZH) ? "导航" : (lang == LANG_JA ? "測位・航法" : (lang == LANG_ES ? "Navegación" : "Navigation"));
         case Category::WEATHER:
-            return isZh ? "气象" : "Weather";
+            return (lang == LANG_ZH) ? "气象" : (lang == LANG_JA ? "気象" : (lang == LANG_ES ? "Meteorología" : "Weather"));
         case Category::COMMUNICATIONS:
-            return isZh ? "通信" : "Communications";
+            return (lang == LANG_ZH) ? "通信" : (lang == LANG_JA ? "通信" : (lang == LANG_ES ? "Comunicaciones" : "Communications"));
         case Category::ROCKET_BODY:
-            return isZh ? "火箭残骸" : "Rocket Body";
+            return (lang == LANG_ZH) ? "火箭残骸" : (lang == LANG_JA ? "ロケット残骸" : (lang == LANG_ES ? "Cuerpo de cohete" : "Rocket Body"));
         case Category::HISTORIC_EVENT:
-            return isZh ? "历史事件" : "Historic Event";
+            return (lang == LANG_ZH) ? "历史事件" : (lang == LANG_JA ? "歴史的事件" : (lang == LANG_ES ? "Evento histórico" : "Historic Event"));
         default:
-            return isZh ? "未知" : "Unknown";
+            return (lang == LANG_ZH) ? "未知" : (lang == LANG_JA ? "不明" : (lang == LANG_ES ? "Desconocido" : "Unknown"));
     }
 }
 
 String Encyclopedia::getFlagName(uint32_t flag) {
-    bool isZh = (I18N::getLanguage() == LANG_ZH);
+    Language lang = I18N::getLanguage();
     switch (flag) {
         case FLAG_VISIBLE:
-            return isZh ? "肉眼可见" : "Visible";
+            return (lang == LANG_ZH) ? "肉眼可见" : (lang == LANG_JA ? "裸眼可視" : (lang == LANG_ES ? "Visible" : "Visible"));
         case FLAG_CREWED:
-            return isZh ? "载人" : "Crewed";
+            return (lang == LANG_ZH) ? "载人" : (lang == LANG_JA ? "有人" : (lang == LANG_ES ? "Tripulado" : "Crewed"));
         case FLAG_HISTORIC:
-            return isZh ? "历史" : "Historic";
+            return (lang == LANG_ZH) ? "历史" : (lang == LANG_JA ? "歴史的" : (lang == LANG_ES ? "Histórico" : "Historic"));
         case FLAG_ROCKET_BODY:
-            return isZh ? "火箭残骸" : "Rocket Body";
+            return (lang == LANG_ZH) ? "火箭残骸" : (lang == LANG_JA ? "ロケット残骸" : (lang == LANG_ES ? "Cuerpo cohete" : "Rocket Body"));
         case FLAG_DEBRIS:
-            return isZh ? "空间碎片" : "Debris";
+            return (lang == LANG_ZH) ? "空间碎片" : (lang == LANG_JA ? "宇宙ゴミ" : (lang == LANG_ES ? "Escombros" : "Debris"));
         case FLAG_WEATHER:
-            return isZh ? "气象" : "Weather";
+            return (lang == LANG_ZH) ? "气象" : (lang == LANG_JA ? "気象" : (lang == LANG_ES ? "Meteorología" : "Weather"));
         case FLAG_RADIO:
-            return isZh ? "无线电" : "Radio";
+            return (lang == LANG_ZH) ? "无线电" : (lang == LANG_JA ? "無線" : (lang == LANG_ES ? "Radio" : "Radio"));
         case FLAG_NAVIGATION:
-            return isZh ? "导航" : "Navigation";
+            return (lang == LANG_ZH) ? "导航" : (lang == LANG_JA ? "航法" : (lang == LANG_ES ? "Navegación" : "Navigation"));
         case FLAG_SCIENCE:
-            return isZh ? "科学" : "Science";
+            return (lang == LANG_ZH) ? "科学" : (lang == LANG_JA ? "科学" : (lang == LANG_ES ? "Ciencia" : "Science"));
         case FLAG_EARTH_OBS:
-            return isZh ? "地面观测" : "Earth Obs";
+            return (lang == LANG_ZH) ? "地面观测" : (lang == LANG_JA ? "地球観測" : (lang == LANG_ES ? "Obs terrestre" : "Earth Obs"));
         default:
             return "";
     }

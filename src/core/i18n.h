@@ -5,7 +5,9 @@
 
 enum Language {
     LANG_EN = 0,
-    LANG_ZH = 1
+    LANG_ZH = 1,
+    LANG_JA = 2,
+    LANG_ES = 3
 };
 
 enum TextId {

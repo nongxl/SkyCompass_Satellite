@@ -344,16 +344,353 @@ static const char* const t_zh[TXT_MAX] = {
     "所有过境"
 };
 
+// 日文文本资源表
+static const char* const t_ja[TXT_MAX] = {
+    // Startup
+    "衛星軌道モデルを読み込み中...",
+    
+    // WiFi Setup Page
+    "WiFi設定",
+    "ネットワークをスキャン中...",
+    "WiFiが見つかりません。",
+    "[R]キーで再スキャン",
+    "接続先:",
+    "パスワード:",
+    "[Enter] 接続     [ESC] キャンセル",
+    "ネットワークを選択:",
+    "[^/v] 選択 [Enter] 入力 [R] スキャン [ESC] 終了",
+    "接続中...",
+    
+    // Tab Headers
+    "衛星図鑑",
+    "最新打上げ",
+    
+    // Satellite / Encyclopedia View
+    "ダウンロード中...",
+    "ID: ",
+    "GP経過時間: ",
+    "GP経過時間: N/A",
+    "説明はありません。",
+    "'d'キーで削除",
+    "気象観測",
+    "モード: ",
+    "カスタム追加衛星。\n\n",
+    "AOS: ",
+    "LOS: ",
+    
+    // Recent Launch Page
+    "GP JSONをダウンロード中...",
+    "最新打上げはオンライン機能です。",
+    "'w'キーでWiFiに接続して",
+    "最新の打上げグループを取得します。",
+    "経過時間: ",
+    "元 purchasers/Epoch: ",
+    "代表: ",
+    "物体数: ",
+    "軌道: ",
+    "ステータス: ",
+    
+    // Formation State Text
+    "運用中",
+    "密接トレイン",
+    "編隊飛行",
+    "拡散中",
+    
+    // Coordinate HUD
+    "高度",
+    
+    // Compass Mode
+    "カメラビューモード",
+    "'S'キーで参照方向を設定",
+    
+    // Help Panel
+    "--- ヘルプ＆ショートカット ---",
+    "画面明るさ[ [/] ]",
+    "GNSS位置[G]",
+    "ヘルプメニュー[H]",
+    "HUD表示切り替え[Back]",
+    "視点ロック[Spc]",
+    "通過予測一覧[Enter]",
+    "衛星図鑑[S]",
+    "タイムマシン[ , / . ]",
+    "衛星追尾視点[V]",
+    "WiFi切り替え[W]",
+    "手動位置設定[C]",
+    "時刻リセット[R]",
+    "カラーフィルター[Tab]",
+    
+    // Recommended Passes Panel
+    " 推荐の通過イベント",
+    "7日以内に通過なし",
+    "計算中...",
+    "時刻同期待ち...",
+    "スコア:",
+    "等級:",
+    "理由:",
+    "暗い夜空",
+    "+高輝度",
+    "+天頂近く",
+    "+長時間",
+    "名称: ",
+    "AOS: ",
+    "最大仰角: ",
+    "LOS: ",
+    "継続時間: ",
+    "最小仰角: ",
+    "追尾可能: ",
+    "はい",
+    "いいえ",
+    "OKキーでAOS時刻へ移動",
+    
+    // Sun Data Page
+    "太陽データ",
+    "方位角: ",
+    "仰角: ",
+    "距離: ",
+    "赤経: ",
+    "赤纬: ",
+    "赤纬: ",
+    "日の出: ",
+    "日の入: ",
+    "正午: ",
+    "ESCキーで戻る",
+    
+    // Time Machine Page
+    "タイムマシン",
+    "左右キーで時間を調整",
+    "OKキーで確定",
+    "ESCキーでキャンセル",
+    "現在設定時刻:",
+    
+    // Quick Setup Dialog
+    "位置設定",
+    "経度:",
+    "緯度:",
+    "標高(m):",
+    "OK",
+    "Tab: 項目切替, Del: 削除, OK: 保存",
+    
+    // Position Settings Page
+    "位置パラメータ設定",
+    "経度:",
+    "緯度:",
+    "標高 (m):",
+    "UP/DOWN: 値の増減",
+    "LEFT/RIGHT: 項目選択",
+    "OK: 保存  ESC: キャンセル",
+    
+    // Language Dialog
+    "言語を選択",
+    "言語設定",
+    
+    // Custom NORAD ADD Text
+    "カスタム衛星を追加するには5位または6位のNORAD IDを入力してください。",
+    "データソース: celestrak.org",
+    
+    // Extra Recent Launch Page Detail Specs
+    "視認性:",
+    "極めて良好",
+    "中程度",
+    "データなし",
+    "'O'キーで衛星一覧表示",
+    "衛星が見つかりません。",
+    
+    // Status Feedback / Error Msg / Banner info
+    "システム処理中...",
+    "タスク初期化失敗！",
+    "WiFi接続中...",
+    "WiFi切断。",
+    "GP JSON更新中...",
+    "キャッシュ解析失敗！",
+    "更新成功：最新データです！",
+    "データは最新です(<2時間)。Cキーで強制更新。",
+    "更新失敗: ",
+    
+    // Tree categories in passes panel
+    "今夜",
+    "今後7日間",
+    "強く推奨",
+    "すべての通過"
+};
+
+// 西班牙文文本资源表
+static const char* const t_es[TXT_MAX] = {
+    // Startup
+    "Cargando modelos orbitales...",
+    
+    // WiFi Setup Page
+    "Configuración WiFi",
+    "Buscando redes...",
+    "No se encontraron redes.",
+    "Presione [R] para buscar de nuevo",
+    "Conectar a:",
+    "Contraseña:",
+    "[Enter] Conectar   [ESC] Cancelar",
+    "Seleccionar red:",
+    "[^/v] Sel [Enter] Ingresar [R] Buscar [ESC] Salir",
+    "Conectando...",
+    
+    // Tab Headers
+    "Enciclopedia",
+    "Lanzamientos recientes",
+    
+    // Satellite / Encyclopedia View
+    "Descargando...",
+    "ID: ",
+    "Edad GP: ",
+    "Edad GP: N/A",
+    "Sin descripción.",
+    "Presione 'd' para eliminar",
+    "Imágenes meteorológicas",
+    "Modo: ",
+    "Satelite personalizado.\n\n",
+    "AOS: ",
+    "LOS: ",
+    
+    // Recent Launch Page
+    "Descargando JSONs GP...",
+    "Lanzamientos recientes requiere conexión.",
+    "Presione 'w' para conectar WiFi",
+    "y descargar los grupos más recientes.",
+    "Edad: ",
+    "Época: ",
+    "Rep: ",
+    "Objetos: ",
+    "Órbita: ",
+    "Estado: ",
+    
+    // Formation State Text
+    "Operacional",
+    "Tren compacto",
+    "Formación en tren",
+    "Expandiéndose",
+    
+    // Coordinate HUD
+    "Alt",
+    
+    // Compass Mode
+    "Modo de vista de cámara",
+    "Presione 'S' para fijar referencia",
+    
+    // Help Panel
+    "--- Ayuda y atajos ---",
+    "Brillo pantalla[ [/] ]",
+    "Ubicación GNSS[G]",
+    "Menú de ayuda[H]",
+    "Alternar HUD[Back]",
+    "Bloquear vista[Spc]",
+    "Panel de pases[Enter]",
+    "Lista de satélites[S]",
+    "Máquina del tiempo[ , / . ]",
+    "Vista satélite[V]",
+    "Alternar WiFi[W]",
+    "Posición manual[C]",
+    "Reiniciar hora[R]",
+    "Filtro de color[Tab]",
+    
+    // Recommended Passes Panel
+    " PASES RECOMENDADOS",
+    "Sin pases en 7 días",
+    "Calculando...",
+    "Esperando sinc. de hora...",
+    "Puntuación:",
+    "Mag:",
+    "Razón:",
+    "Cielo oscuro",
+    "+Brillante",
+    "+Cénit",
+    "+Largo",
+    "Nombre: ",
+    "AOS: ",
+    "El Máx: ",
+    "LOS: ",
+    "Duración: ",
+    "El Mín: ",
+    "Rastreable: ",
+    "Sí",
+    "No",
+    "Presione OK para ir a hora AOS",
+    
+    // Sun Data Page
+    "Datos del Sol",
+    "Azimut: ",
+    "Elevación: ",
+    "Distancia: ",
+    "AR: ",
+    "Dec: ",
+    "Dec: ",
+    "Amanecer: ",
+    "Atardecer: ",
+    "Mediodía: ",
+    "Presione ESC para volver",
+    
+    // Time Machine Page
+    "Máquina del tiempo",
+    "Use las flechas para ajustar la hora",
+    "Presione OK para confirmar",
+    "Presione ESC para cancelar",
+    "Hora actual:",
+    
+    // Quick Setup Dialog
+    "Configuración",
+    "Long:",
+    "Lat:",
+    "Alt(m):",
+    "OK",
+    "Tab: campo, Del: borrar, OK: guardar",
+    
+    // Position Settings Page
+    "Ajuste de posición",
+    "Longitud:",
+    "Latitud:",
+    "Altitud (m):",
+    "ARRIBA/ABAJO: +/- valor",
+    "IZQ/DER: seleccionar campo",
+    "OK: guardar  ESC: cancelar",
+    
+    // Language Dialog
+    "Seleccionar idioma",
+    "Idioma",
+    
+    // Custom NORAD ADD Text
+    "Ingrese ID NORAD de 5 o 6 dígitos para agregar satélite.",
+    "Fuente: celestrak.org",
+    
+    // Extra Recent Launch Page Detail Specs
+    "Visibilidad:",
+    "Excelente",
+    "Moderada",
+    "N/A",
+    "Presione 'O' para objetos",
+    "No se encontraron objetos.",
+    
+    // Status Feedback / Error Msg / Banner info
+    "Sistema ocupado... Espere.",
+    "¡Error al iniciar tarea!",
+    "Conectando a WiFi...",
+    "WiFi desconectado.",
+    "Actualizando JSON GP...",
+    "¡Error al leer caché!",
+    "¡Actualización exitosa!",
+    "Datos actualizados (<2h). Presione C para forzar.",
+    "Error al actualizar: ",
+    
+    // Tree categories in passes panel
+    "Esta noche",
+    "Próximos 7 días",
+    "Muy recomendado",
+    "Todos los pases"
+};
+
 void I18N::begin() {
     if (_initialized) return;
     i18nPrefs.begin("i18n", false);
     int langCode = i18nPrefs.getInt("lang", -1);
     
-    if (langCode == -1) {
-        // 未设置过语言（首次启动），默认设为 LANG_EN
-        _currentLang = LANG_EN;
+    if (langCode >= 0 && langCode <= 3) {
+        _currentLang = (Language)langCode;
     } else {
-        _currentLang = (langCode == 1) ? LANG_ZH : LANG_EN;
+        _currentLang = LANG_EN;
     }
     _initialized = true;
 }
@@ -371,7 +708,13 @@ void I18N::setLanguage(Language lang) {
 
 const char* I18N::get(TextId id) {
     if (id < 0 || id >= TXT_MAX) return "";
-    return (_currentLang == LANG_ZH) ? t_zh[id] : t_en[id];
+    switch (_currentLang) {
+        case LANG_ZH: return t_zh[id];
+        case LANG_JA: return t_ja[id];
+        case LANG_ES: return t_es[id];
+        case LANG_EN:
+        default:      return t_en[id];
+    }
 }
 
 bool I18N::isFirstStart() {
