@@ -22,6 +22,12 @@ private:
     float _refRoll, _refPitch;
     
     float _temperature;
+    bool _firstUpdate;
+    
+    float _gyroBiasX;
+    float _gyroBiasY;
+    float _gyroBiasZ;
+    int _stillCount;
     
     static constexpr float FILTER_ALPHA = 0.1;
     static constexpr float MAX_ANGLE = 90.0f;
@@ -31,7 +37,8 @@ public:
               _lastUpdate(0), _dt(0), _isMoving(false),
               _lastAccelX(0), _lastAccelY(0), _lastAccelZ(1.0),
               _hasReferenceOrientation(false), _refRoll(0), _refPitch(0),
-              _temperature(25.0) {
+              _temperature(25.0), _firstUpdate(true),
+              _gyroBiasX(0.0f), _gyroBiasY(0.0f), _gyroBiasZ(0.0f), _stillCount(0) {
         
         _data.accelX = 0.0;
         _data.accelY = 0.0;
@@ -159,18 +166,54 @@ public:
             return false;
         }
 
+        // 获取原始陀螺仪读数
+        float rawGyroX = imu_data.gyro.x;
+        float rawGyroY = imu_data.gyro.y;
+        float rawGyroZ = imu_data.gyro.z;
+
+        // 计算加速度变化差值与原始陀螺仪模长
+        float accelDiff = sqrt(pow(imu_data.accel.x - _lastAccelX, 2) + 
+                               pow(imu_data.accel.y - _lastAccelY, 2) + 
+                               pow(imu_data.accel.z - _lastAccelZ, 2));
+        float rawGyroMag = sqrt(rawGyroX * rawGyroX + rawGyroY * rawGyroY + rawGyroZ * rawGyroZ);
+
+        // 在线静止检测：
+        // 1. 加速度模长在 1G 附近 (0.85G ~ 1.15G)
+        // 2. 加速度两帧变动极小 (< 0.08G)
+        // 3. 陀螺仪原始模长较小 (< 15.0 deg/s)
+        bool isStatic = (rawAccelMag > 0.85f && rawAccelMag < 1.15f) && (accelDiff < 0.08f) && (rawGyroMag < 15.0f);
+
+        if (isStatic) {
+            _stillCount++;
+            // 当静止持续超过 8 帧 (约 80ms~100ms) 时，自动在线学习并校准陀螺仪零偏
+            if (_stillCount > 8) {
+                float biasAlpha = 0.05f;
+                _gyroBiasX = _gyroBiasX * (1.0f - biasAlpha) + rawGyroX * biasAlpha;
+                _gyroBiasY = _gyroBiasY * (1.0f - biasAlpha) + rawGyroY * biasAlpha;
+                _gyroBiasZ = _gyroBiasZ * (1.0f - biasAlpha) + rawGyroZ * biasAlpha;
+            }
+        } else {
+            _stillCount = 0;
+        }
+
         _data.accelX = imu_data.accel.x;
         _data.accelY = imu_data.accel.y;
         _data.accelZ = imu_data.accel.z;
-        _data.gyroX = imu_data.gyro.x;
-        _data.gyroY = imu_data.gyro.y;
-        _data.gyroZ = imu_data.gyro.z;
+        // 扣除自动推算出的零偏
+        _data.gyroX = rawGyroX - _gyroBiasX;
+        _data.gyroY = rawGyroY - _gyroBiasY;
+        _data.gyroZ = rawGyroZ - _gyroBiasZ;
         
         float currentPitch = atan2(_data.accelY, _data.accelZ);
         float currentRoll = atan2(-_data.accelX, sqrt(_data.accelY * _data.accelY + _data.accelZ * _data.accelZ));
         
-        // 完美解决“卡顿”和“不跟手”：引入陀螺仪(Gyro)做互补滤波(Complementary Filter)
-        // 陀螺仪反应极快且平滑（解决不跟手和卡顿），加速计提供绝对重力参考纠正漂移
+        if (_firstUpdate) {
+            _pitch = currentPitch;
+            _roll = currentRoll;
+            _firstUpdate = false;
+        }
+        
+        // 引入扣除零偏后的陀螺仪(Gyro)角速度做互补滤波
         float gx = _data.gyroX * DEG_TO_RAD;
         float gy = _data.gyroY * DEG_TO_RAD;
         
@@ -178,36 +221,22 @@ public:
         float PI_F = 3.14159265f;
         float TWO_PI_F = PI_F * 2.0f;
 
-        // 积分陀螺仪角速度 (M5Cardputer的坐标系中：X=右, Y=前, Z=下)
-        // 经过严格的右手定则分析：
-        // 抬头 (Pitch UP)：绕X轴负向旋转 (gx < 0)，重力向后倒 (accelY < 0)，atan2(Y,Z) < 0。符号相同，相加！
-        // 右滚 (Roll RIGHT)：绕Y轴正向旋转 (gy > 0)，重力向左倒 (accelX < 0)，atan2(-X,Z) > 0。符号相同，相加！
+        // 积分陀螺仪角速度
         _pitch += gx * _dt;
         _roll += gy * _dt;
         
-        // 规整角度到 [-PI, PI] 之间，防止大幅度旋转时陀螺仪积分无限累积导致视角卡死
+        // 规整角度到 [-PI, PI] 之间
         while (_pitch > PI_F) _pitch -= TWO_PI_F;
         while (_pitch < -PI_F) _pitch += TWO_PI_F;
         while (_roll > PI_F) _roll -= TWO_PI_F;
         while (_roll < -PI_F) _roll += TWO_PI_F;
         
-        // 互补滤波系数：增大纠正时间常数至 5.0f，使加速度计拉回纠正极其缓慢，彻底消除急停时“地球往回转一下”的回弹反向回调
-        float tau = 5.0f; 
-        float alpha = _dt / (tau + _dt);
-        if (alpha > 1.0f) alpha = 1.0f;
+        // 动态互补滤波系数：
+        // 静止状态下加速度计绝对重力 100% 可信，使用快速修正系数 (0.15f) 在 0.2 秒内迅速把地球拉回静止姿态并消除任何残余漂移晃动
+        // 运动状态下使用平滑系数 (0.005f)，避免运动中的加速度抖动引发回弹
+        float alpha = isStatic ? 0.15f : 0.005f;
         
-        // 动态阈值防抖：只有在总加速度接近 1G 时（0.8G ~ 1.2G），说明此时没有剧烈的线性加减速（例如挥动手臂或急停）
-        // 这时才用加速计去纠正角度。完美解决“急停时地球往回转一点”的问题！
-        float accelMag = sqrt(_data.accelX*_data.accelX + _data.accelY*_data.accelY + _data.accelZ*_data.accelZ);
-        
-        // I²C 总线干扰检测：正常重力读数应在 [0.3, 4.0] G 之间
-        // 超出此范围说明数据被 UART/I²C 总线噪声污染（如 Grove 口 UART 干扰），丢弃本帧
-        // 避免脏数据进入陀螺仪积分导致地球仪乱跳
-        if (accelMag < 0.3f || accelMag > 4.0f) {
-            return false;
-        }
-        
-        if (accelMag > 0.8f && accelMag < 1.2f) {
+        if (rawAccelMag > 0.8f && rawAccelMag < 1.2f) {
             float diffPitch = currentPitch - _pitch;
             while (diffPitch > PI_F) diffPitch -= TWO_PI_F;
             while (diffPitch < -PI_F) diffPitch += TWO_PI_F;
@@ -225,9 +254,9 @@ public:
             while (_roll < -PI_F) _roll += TWO_PI_F;
         }
         
-        float accelDiff = sqrt(pow(_data.accelX - _lastAccelX, 2) + 
-                               pow(_data.accelY - _lastAccelY, 2) + 
-                               pow(_data.accelZ - _lastAccelZ, 2));
+        accelDiff = sqrt(pow(_data.accelX - _lastAccelX, 2) + 
+                         pow(_data.accelY - _lastAccelY, 2) + 
+                         pow(_data.accelZ - _lastAccelZ, 2));
         _isMoving = accelDiff > _config.motionThreshold;
         _data.isMoving = _isMoving;
         
