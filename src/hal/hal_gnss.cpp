@@ -58,38 +58,24 @@ public:
         delay(30);
         
         // 2. 使用 M5Unified 安全线程化 I2C 接口探查并激活 PI4IOE5V6408 IO 扩展芯片 (I2C 0x43/0x44)
+        // PI4IOE5V6408 寄存器映射：
+        // 0x07: Output High-Impedance Register (0x00 = 输出使能/禁用高阻)
+        // 0x03: I/O Direction Register (0xFF = 全部配置为 Output 输出模式)
+        // 0x05: Output Port Register (0xFF = 输出全部 HIGH 高电平，使能 GPS 电源并拉高解除 RST)
         uint8_t addrs[] = {0x43, 0x44};
         for (uint8_t addr : addrs) {
             // 通过 M5.In_I2C (Cardputer 板载/Cap I2C 总线) 开启
-            if (M5.In_I2C.writeRegister8(addr, 0x07, 0x00, 100000)) { // High-Z 禁用
+            if (M5.In_I2C.writeRegister8(addr, 0x07, 0x00, 100000)) {
                 LOG_I("GNSS", "Found Cap LoRa-1262 IO Expander via M5.In_I2C at 0x%02X, enabling power...", addr);
-                M5.In_I2C.writeRegister8(addr, 0x01, 0xFF, 100000); // Direction (全设为 Output)
-                M5.In_I2C.writeRegister8(addr, 0x03, 0xFF, 100000); // Output High (GPS Power ON & 解除 RST 状态)
+                M5.In_I2C.writeRegister8(addr, 0x03, 0xFF, 100000); // 0x03: Direction = Output
+                M5.In_I2C.writeRegister8(addr, 0x05, 0xFF, 100000); // 0x05: Output = HIGH (Power ON & RST High)
             }
             
             // 通过 M5.Ex_I2C (外设 I2C 总线) 开启
             if (M5.Ex_I2C.writeRegister8(addr, 0x07, 0x00, 100000)) {
                 LOG_I("GNSS", "Found Cap LoRa-1262 IO Expander via M5.Ex_I2C at 0x%02X, enabling power...", addr);
-                M5.Ex_I2C.writeRegister8(addr, 0x01, 0xFF, 100000);
                 M5.Ex_I2C.writeRegister8(addr, 0x03, 0xFF, 100000);
-            }
-
-            // 备用 Wire 通道检测 (安全防护)
-            Wire.begin();
-            Wire.beginTransmission(addr);
-            Wire.write(0x07);
-            Wire.write(0x00);
-            if (Wire.endTransmission() == 0) {
-                LOG_I("GNSS", "Found Cap LoRa-1262 IO Expander via Wire at 0x%02X, enabling power...", addr);
-                Wire.beginTransmission(addr);
-                Wire.write(0x01);
-                Wire.write(0xFF);
-                Wire.endTransmission();
-                
-                Wire.beginTransmission(addr);
-                Wire.write(0x03);
-                Wire.write(0xFF);
-                Wire.endTransmission();
+                M5.Ex_I2C.writeRegister8(addr, 0x05, 0xFF, 100000);
             }
         }
         delay(200); // 给予 GNSS 芯片上电解冻并启动 UART 输出的缓冲时间
@@ -149,7 +135,6 @@ public:
         LOG_I("GNSS", "Probing Cap LoRa-1262 GNSS on RX=15, TX=13 @ 115200...");
         _config.baudRate = 115200;
         Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
-        Wire.begin();
         delay(50);
         
         // 超时设为 2000ms 保证完整覆盖 1Hz NMEA 周期
@@ -165,7 +150,6 @@ public:
             _config.baudRate = 9600;
             LOG_I("GNSS", "115200 probe timed out, fallback probing on RX=15, TX=13 @ 9600...");
             Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
-            Wire.begin();
             delay(50);
 
             if (probeUart(9600, 2000)) {
@@ -194,6 +178,9 @@ public:
         Serial.flush();
         
         _gps->begin();
+        delay(50);
+        _gps->write("\r\n$PCAS04,3*1A\r\n"); // 启用 GPS + 北斗 BDS 双模搜星
+        _gps->write("$PCAS00*01\r\n");     // 发送唤醒/热启动指令
         LOG_I("GNSS", "Initialization complete");
         _enabled = true;
         _isInitialized = true;
@@ -482,7 +469,7 @@ public:
     
     void exitStandbyMode() override {
         if (_gps && _isInitialized) {
-            Serial1.println("");
+            _gps->write("\r\n$PCAS00*01\r\n");
             _isInStandby = false;
             _data.status = GNSS_STATUS_SEARCHING;
             LOG_I("GNSS", "Exited standby mode");
@@ -529,7 +516,11 @@ public:
     }
 
     bool probeGrove() override {
-        if (!_isInitialized) return false;
+        // 如果 Cap LoRa-1262 槽位已初始化并正常工作，保持 Cap GNSS，禁止切换到空的 Grove 端口
+        if (_isInitialized && _config.rxPin == 15) {
+            LOG_I("GNSS", "Cap GNSS is already active on RX=15, TX=13. Keeping Cap GNSS.");
+            return true;
+        }
         
         // 彻底释放 GPIO 2 / 1 上的 I2C 控制权，防止硬件外设锁定
         Wire.end();
@@ -551,6 +542,8 @@ public:
         if (_gps) {
             _gps->begin();
             _data.status = GNSS_STATUS_SEARCHING;
+            _isInitialized = true;
+            _enabled = true;
         }
         _isProbing = false;
         return true;

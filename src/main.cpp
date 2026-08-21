@@ -2466,11 +2466,9 @@ volatile bool g_isFastForwarding = false;
 void imuTask(void* pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     while (true) {
-        // 在手动调时/快进期间降低 IMU 轮询频率至 60ms(16Hz)，释放 I2C 总线带宽供键盘使用
-        TickType_t xFrequency = pdMS_TO_TICKS(g_isFastForwarding ? 60 : 10);
-        if (imu && attitude) {
-            imu->update();
-            attitude->update();
+        TickType_t xFrequency = pdMS_TO_TICKS(10); // 恒定 100Hz 高速采样，保证极佳的跟手性
+        if (attitude) {
+            attitude->update(); // attitude->update() 内部已包含 _imu->update()
         }
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
@@ -2794,10 +2792,10 @@ void setup() {
                 }
             } else {
                 if (!skipMonoProbe) {
-                    LOG_I("APP", "Chain Mono module not detected. Releasing Grove pins for GNSS.");
+                    LOG_I("APP", "Chain Mono module not detected. Releasing Grove pins.");
                     Serial2.end();
-                    if (gnss) {
-                        LOG_I("APP", "Triggering late GNSS Grove port probe...");
+                    if (gnss && !gnss->isModuleInitialized()) {
+                        LOG_I("APP", "Cap GNSS not found, probing Grove port for GNSS...");
                         gnss->probeGrove();
                     }
                 } else {
@@ -2806,8 +2804,8 @@ void setup() {
             }
 #else
             isMonoInitialized = false;
-            if (gnss) {
-                LOG_I("APP", "Chain Mono is disabled. Probing Grove port late for GNSS.");
+            if (gnss && !gnss->isModuleInitialized()) {
+                LOG_I("APP", "Cap GNSS not found, probing Grove port for GNSS...");
                 gnss->probeGrove();
             }
 #endif 
@@ -4280,22 +4278,32 @@ void drawSatSelectPage() {
                         String satName = obj.name;
                         if (satName.startsWith("STARLINK ")) {
                             satName = "SL " + satName.substring(9);
+                        } else if (satName.startsWith("STARLINK-")) {
+                            satName = "SL-" + satName.substring(9);
                         }
                         String lineText = "- " + satName + " (" + String(obj.orbit.catalogNumber) + ")";
-                        int maxW = obj.lastGeoValid ? (width - rightX - 40) : (width - rightX - 4);
-                        drawScrollingText(canvas, lineText.c_str(), rightX, memY + s * 13, maxW, TFT_LIGHTGRAY);
                         
+                        int altW = 0;
                         if (obj.lastGeoValid) {
                             char hBuf[16];
                             sprintf(hBuf, "%dkm", (int)obj.lastGeo.alt);
+                            altW = canvas->textWidth(hBuf);
                             canvas->setTextColor(TFT_GREEN);
-                            canvas->drawString(hBuf, width - 36, memY + s * 13);
+                            canvas->drawString(hBuf, width - altW - 2, memY + s * 13);
                         }
+                        
+                        int maxW = obj.lastGeoValid ? (width - rightX - altW - 4) : (width - rightX - 4);
+                        drawScrollingText(canvas, lineText.c_str(), rightX, memY + s * 13, maxW, TFT_LIGHTGRAY);
                     }
                     
                     if (g_level3Objects.empty()) {
-                        canvas->setTextColor(TFT_RED);
-                        canvas->drawString(I18N::get(TXT_NO_OBJECTS_FOUND), rightX, memY);
+                        if (recentLaunchDownloading) {
+                            canvas->setTextColor(TFT_YELLOW);
+                            canvas->drawString(I18N::get(TXT_DOWNLOADING), rightX, memY);
+                        } else {
+                            canvas->setTextColor(TFT_RED);
+                            canvas->drawString(I18N::get(TXT_NO_OBJECTS_FOUND), rightX, memY);
+                        }
                     }
                 }
             }
@@ -4399,12 +4407,11 @@ void drawSatSelectPage() {
             drawHotKey(isZh ? "勾选[Enter]" : "Select[Enter]", 'e', x + 112, ty); ty += 14;
             
             drawHotKey(isZh ? "删除自定[d]" : "Del Custom[d]", 'd', x + 8, ty);
-            drawHotKey(isZh ? "刷新星历[c]" : "Refresh GP[c]", 'c', x + 112, ty); ty += 14;
+            drawHotKey(isZh ? "刷新星历[w]" : "Refresh GP[w]", 'w', x + 112, ty); ty += 14;
             
-            drawHotKey(isZh ? "开关WiFi[w]" : "WiFi[w]", 'w', x + 8, ty);
+            drawHotKey(isZh ? "返回地图[Esc]" : "Exit[Esc]", 'x', x + 8, ty);
             drawHotKey(isZh ? "主题模式[Tab]" : "Theme[Tab]", 't', x + 112, ty); ty += 14;
-            
-            drawHotKey(isZh ? "返回地图[Esc]" : "Exit[Esc]", 'x', x + 8, ty); ty += 14;
+
         } else {
             if (recentLaunchInObjectsView) {
                 drawHotKey(isZh ? "清单翻页[ [/] ]" : "Page[ [/] ]", '[', x + 8, ty);
@@ -4540,6 +4547,8 @@ void loop() {
             });
             
             calculateFormationsForItems(*tempLaunches);
+            
+            lockSatMutex();
             g_recentLaunches = std::move(*tempLaunches);
             
             bool hasSelected = false;
@@ -4566,6 +4575,7 @@ void loop() {
                     g_repSatInitialized = false;
                 }
             }
+            unlockSatMutex();
             recentLaunchSelectedIndex = 0;
             recentLaunchDownloadSuccess = true;
             if (recentLaunchBypassed) {
@@ -5900,15 +5910,9 @@ void loop() {
         if (lonDiff > 180.0) targetViewLon -= 360.0;
         else if (lonDiff < -180.0) targetViewLon += 360.0;
         
-        float dt = 0.15f;
-        if (isFastForwarding) {
-            dt = 1.0f;
-        } else if (isSatViewMode) {
-            if (isCameraTransitioning) {
-                dt = 0.15f;
-            } else {
-                dt = 1.0f;
-            }
+        float dt = 0.20f;
+        if (isSatViewMode && !isCameraTransitioning) {
+            dt = 1.0f; // 锁定特定卫星视角时直接跟随机位
         }
         
         smoothViewLat += (targetViewLat - smoothViewLat) * dt;
@@ -6943,6 +6947,7 @@ void loop() {
                     satName = g_repSatName;
                     
                     double ageDays = 30.0;
+                    lockSatMutex();
                     if (!g_recentLaunches.empty()) {
                         for (const auto& item : g_recentLaunches) {
                             if (item.batchId == recentLaunchActiveBatchId) {
@@ -6953,6 +6958,7 @@ void loop() {
                             }
                         }
                     }
+                    unlockSatMutex();
                     
                     uint16_t baseCol = TFT_WHITE;
                     if (ageDays <= 2.0) baseCol = TFT_WHITE;

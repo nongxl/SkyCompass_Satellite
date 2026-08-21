@@ -10,3 +10,4 @@ prompts/
 plan.txt
 *.pdf
 m5stack*
+.gitignore

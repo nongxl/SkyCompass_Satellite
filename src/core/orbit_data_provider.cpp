@@ -370,8 +370,6 @@ bool OrbitDataProvider::loadLevel3ObjectsPage(const RecentLaunchItem& item, int 
     int loadCount = 0;
     int matchIndex = 0;
     
-    JSONParser parser;
-    
     String cosparForm = "";
     if (item.batchId.length() == 5 && isdigit(item.batchId[0]) && isdigit(item.batchId[1])) {
         int yr = item.batchId.substring(0, 2).toInt();
@@ -379,36 +377,64 @@ bool OrbitDataProvider::loadLevel3ObjectsPage(const RecentLaunchItem& item, int 
         cosparForm = century + item.batchId.substring(0, 2) + "-" + item.batchId.substring(2);
     }
     
-    while (f.available() && loadCount < 5) {
-        String singleLine = f.readStringUntil('\n');
-        singleLine.trim();
-        if (singleLine.length() == 0) continue;
-        
-        // Cheap text pre-filtering using index search
-        bool match = false;
-        if (singleLine.indexOf(item.batchId) != -1) {
-            match = true;
-        } else if (cosparForm.length() > 0 && singleLine.indexOf(cosparForm) != -1) {
-            match = true;
+    const char* batchIdC = item.batchId.c_str();
+    const char* cosparC = cosparForm.c_str();
+    bool hasCospar = (cosparForm.length() > 0);
+    
+    // 将缓冲区与解析器声明为静态存储，彻底避免在 loopTask 栈上占用空间（0 字节栈开销）
+    static uint8_t buffer[1024];
+    static char lineBuf[512];
+    static JSONParser parser;
+    static OrbitRecord record;
+    
+    size_t bufLen = 0;
+    size_t bufPos = 0;
+    size_t linePos = 0;
+    
+    while ((f.available() || bufPos < bufLen) && loadCount < 5) {
+        if (bufPos >= bufLen) {
+            bufLen = f.read(buffer, sizeof(buffer));
+            bufPos = 0;
+            if (bufLen == 0) break;
         }
         
-        if (match) {
-            if (matchIndex >= skipCount) {
-                OrbitRecord record;
-                if (parser.parse(singleLine, record)) {
-                    LazyObjectItem obj;
-                    obj.name = record.name;
-                    obj.orbit = record; 
-                    obj.calc.init(obj.orbit); // Heavy calculations done only for visible 5 items
-                    obj.lastGeoValid = false;
-                    obj.isVisible = false;
-                    g_level3Objects.push_back(obj);
-                    loadCount++;
+        char c = (char)buffer[bufPos++];
+        if (c == '\n' || c == '\r') {
+            if (linePos > 0) {
+                lineBuf[linePos] = '\0';
+                
+                // 零堆内存开销极速子串匹配
+                bool match = false;
+                if (strstr(lineBuf, batchIdC) != nullptr) {
+                    match = true;
+                } else if (hasCospar && strstr(lineBuf, cosparC) != nullptr) {
+                    match = true;
                 }
+                
+                if (match) {
+                    if (matchIndex >= skipCount) {
+                        if (parser.parse(lineBuf, record)) {
+                            LazyObjectItem obj;
+                            obj.name = record.name;
+                            obj.orbit = record; 
+                            obj.calc.init(obj.orbit);
+                            obj.lastGeoValid = false;
+                            obj.isVisible = false;
+                            g_level3Objects.push_back(obj);
+                            loadCount++;
+                        }
+                    }
+                    matchIndex++;
+                }
+                linePos = 0;
             }
-            matchIndex++;
+        } else {
+            if (linePos < sizeof(lineBuf) - 1) {
+                lineBuf[linePos++] = c;
+            }
         }
     }
+    
     f.close();
     return loadCount > 0;
 }
