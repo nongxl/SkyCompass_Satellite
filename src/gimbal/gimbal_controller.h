@@ -44,6 +44,7 @@ private:
     // 平滑滤波器参数
     float _lerpFactor;      // 跟踪模式的Lerp因子 (0.0f - 1.0f)
     float _maxDegPerSec;    // 最大度数/秒，防止焦点切换和自检时的骤动
+    unsigned long _lastLogTick;
 
     void updateHardwareServos();
     void processLerp(float dt);

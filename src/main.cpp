@@ -6979,7 +6979,15 @@ void loop() {
             
             // Draw Gimbal Status
             if (gimbal.isOnline()) {
-                earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
+                uint16_t gbColor = TFT_LIGHTGRAY;
+                switch (gimbal.getState()) {
+                    case GIMBAL_STATE_INITIALIZING: gbColor = TFT_ORANGE; break;
+                    case GIMBAL_STATE_PREPOINT:     gbColor = TFT_YELLOW; break;
+                    case GIMBAL_STATE_TRACKING:     gbColor = TFT_GREEN; break;
+                    case GIMBAL_STATE_STANDBY:      
+                    default:                        gbColor = TFT_LIGHTGRAY; break;
+                }
+                earth_renderer->getCanvas()->setTextColor(gbColor);
                 char gbBuf[16];
                 if (gimbal.getCurrentmA() > 0.1f) {
                     snprintf(gbBuf, sizeof(gbBuf), "GB:%.0fmA", gimbal.getCurrentmA());

@@ -10,7 +10,8 @@ GimbalController::GimbalController() :
     _tarAzAngle(90.0f), _tarElAngle(90.0f), _tarAltAngle(90.0f),
     _lastTick(0),
     _lerpFactor(0.08f),
-    _maxDegPerSec(5.0f) {}
+    _maxDegPerSec(5.0f),
+    _lastLogTick(0) {}
 
 bool GimbalController::begin(TwoWire *wire, uint8_t sda, uint8_t scl, uint32_t freq) {
     // 启用 I2C 超时检测机制，防线缆松动死锁
@@ -97,6 +98,7 @@ void GimbalController::setTargetTrack(float realAz, float realEl, float realAltK
     apply180DegreeLimit(realAz, realEl, realAltKm, _tarAzAngle, _tarElAngle, _tarAltAngle);
     
     if (_state != GIMBAL_STATE_TRACKING) {
+        Serial.printf("[Gimbal] State changed from %d to TRACKING\n", _state);
         _state = GIMBAL_STATE_TRACKING;
         _maxDegPerSec = 10.0f; // 跟踪模式下允许响应稍快，但仍限制暴冲
         setLEDsByState();
@@ -109,6 +111,7 @@ void GimbalController::setTargetPrePoint(float aosAz) {
     apply180DegreeLimit(aosAz, 0.0f, 0.0f, _tarAzAngle, _tarElAngle, _tarAltAngle);
     
     if (_state != GIMBAL_STATE_PREPOINT) {
+        Serial.printf("[Gimbal] State changed from %d to PREPOINT (AOS Az: %.1f)\n", _state, aosAz);
         _state = GIMBAL_STATE_PREPOINT;
         _maxDegPerSec = 2.0f; // 极慢角速度，静默预定目标
         setLEDsByState();
@@ -121,6 +124,7 @@ void GimbalController::setStandby() {
     _tarAltAngle = 90.0f;
     
     if (_state != GIMBAL_STATE_STANDBY) {
+        Serial.printf("[Gimbal] State changed from %d to STANDBY\n", _state);
         _state = GIMBAL_STATE_STANDBY;
         _maxDegPerSec = 3.0f;
         setLEDsByState();
@@ -239,6 +243,28 @@ void GimbalController::tick() {
                     }
                 }
             }
+        }
+    }
+    
+    // 周期性调试日志 (每1000毫秒)
+    if (now - _lastLogTick > 1000) {
+        _lastLogTick = now;
+        if (_isOnline) {
+            if (_state == GIMBAL_STATE_TRACKING) {
+                Serial.printf("[Gimbal] TRACKING | Target -> Az:%.1f, El:%.1f, Alt:%.1f | Out -> Az:%.1f, El:%.1f, Alt:%.1f | Curr: %.0fmA\n",
+                    _tarAzAngle, _tarElAngle, _tarAltAngle, _curAzAngle, _curElAngle, _curAltAngle, _currentmA);
+            } else if (_state == GIMBAL_STATE_PREPOINT) {
+                Serial.printf("[Gimbal] PREPOINT | Target AOS -> Az:%.1f | Out -> Az:%.1f, El:%.1f | Curr: %.0fmA\n",
+                    _tarAzAngle, _curAzAngle, _curElAngle, _currentmA);
+            } else if (_state == GIMBAL_STATE_STANDBY) {
+                Serial.printf("[Gimbal] STANDBY | Out -> Az:%.1f, El:%.1f, Alt:%.1f | Curr: %.0fmA\n",
+                    _curAzAngle, _curElAngle, _curAltAngle, _currentmA);
+            } else if (_state == GIMBAL_STATE_INITIALIZING) {
+                Serial.printf("[Gimbal] INITIALIZING | Out -> Az:%.1f, El:%.1f, Alt:%.1f\n",
+                    _curAzAngle, _curElAngle, _curAltAngle);
+            }
+        } else {
+            Serial.println("[Gimbal] OFFLINE");
         }
     }
 }
