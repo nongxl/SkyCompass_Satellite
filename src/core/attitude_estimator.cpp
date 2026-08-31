@@ -128,6 +128,14 @@ void AttitudeEstimator::calibrateHeading() {
     if (_imu) {
         _imu->calibrate();
     }
+    _filteredAttitude.roll = 0.0f;
+    _filteredAttitude.pitch = 0.0f;
+    _filteredAttitude.yaw = 0.0f;
+    _filteredAttitude.heading = 0.0f;
+    _attitude.roll = 0.0f;
+    _attitude.pitch = 0.0f;
+    _attitude.yaw = 0.0f;
+    _attitude.heading = 0.0f;
     initVirtualHeading();
 }
 

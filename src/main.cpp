@@ -2481,26 +2481,38 @@ String g_loadingStatusText = "";
 void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int selectedLangIndex = 0) {
     if (!earth_renderer) return;
     
+    static float bootInitialPitch = 0.0f;
+    static float bootInitialRoll = 0.0f;
+    static bool bootInitialCaptured = false;
+    
     float pitch = 0.0f;
     float roll = 0.0f;
     if (attitude) {
         AttitudeData att = attitude->getAttitude();
         pitch = att.pitch;
         roll = att.roll;
+        if (!bootInitialCaptured && (fabs(pitch) > 0.01f || fabs(roll) > 0.01f || progressPercentage >= 10)) {
+            bootInitialPitch = pitch;
+            bootInitialRoll = roll;
+            bootInitialCaptured = true;
+        }
     }
+    
+    // 开机动态交互：以开机初识手持角度为基准，随手持转动/倾斜实时呈现 3D 地球仪动态转动
+    float dPitch = bootInitialCaptured ? (pitch - bootInitialPitch) : 0.0f;
+    float dRoll = bootInitialCaptured ? (roll - bootInitialRoll) : 0.0f;
+    
+    double viewLat = baseUserLat - dPitch;
+    double viewLon = baseUserLon - dRoll;
+    if (viewLat > 90.0) viewLat = 90.0;
+    if (viewLat < -90.0) viewLat = -90.0;
+    while (viewLon > 180.0) viewLon -= 360.0;
+    while (viewLon < -180.0) viewLon += 360.0;
     
     // Set camera attitude to 0 (looking straight down) to pivot around the center of the Earth sphere
     earth_renderer->setCameraAttitude(0.0f, 0.0f, 0.0f);
     earth_renderer->setObserverConstrained(false);
     earth_renderer->setDrawDecorations(false);
-    
-    // Center of projection shifts with IMU pitch/roll to rotate the globe around its center
-    double viewLat = baseUserLat - pitch;
-    double viewLon = baseUserLon - roll;
-    if (viewLat > 90.0) viewLat = 90.0;
-    if (viewLat < -90.0) viewLat = -90.0;
-    if (viewLon > 180.0) viewLon -= 360.0;
-    if (viewLon < -180.0) viewLon += 360.0;
     
     // Draw the background Earth globe (no satellites list)
     earth_renderer->setUnixTime(current_unix == 0 ? 1783300000 : current_unix);
@@ -5904,6 +5916,26 @@ void loop() {
         static float smoothOffsetX = 0.0f;
         static float smoothOffsetY = 0.0f;
         static double smoothFocusAlt = 0.0;
+        
+        static bool s_firstMainLoopFrame = true;
+        if (s_firstMainLoopFrame) {
+            s_firstMainLoopFrame = false;
+            lockedPitch = 0.0f;
+            lockedRoll = 0.0f;
+            smoothViewLat = baseUserLat;
+            smoothViewLon = baseUserLon;
+            targetViewLat = baseUserLat;
+            targetViewLon = baseUserLon;
+            smoothPitch = 0.0f;
+            smoothRoll = 0.0f;
+            smoothYaw = 0.0f;
+            targetPitch = 0.0f;
+            targetRoll = 0.0f;
+            targetYaw = 0.0f;
+            if (attitude) {
+                attitude->calibrateHeading();
+            }
+        }
         
         // Handle longitude wrap-around for interpolation
         double lonDiff = targetViewLon - smoothViewLon;

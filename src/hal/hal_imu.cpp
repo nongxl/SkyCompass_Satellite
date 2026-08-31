@@ -213,6 +213,11 @@ public:
             _firstUpdate = false;
         }
         
+        // 陀螺仪死区过滤：消除微弱静态底噪与温漂
+        if (fabs(_data.gyroX) < 0.5f) _data.gyroX = 0.0f;
+        if (fabs(_data.gyroY) < 0.5f) _data.gyroY = 0.0f;
+        if (fabs(_data.gyroZ) < 0.5f) _data.gyroZ = 0.0f;
+
         // 引入扣除零偏后的陀螺仪(Gyro)角速度做互补滤波
         float gx = _data.gyroX * DEG_TO_RAD;
         float gy = _data.gyroY * DEG_TO_RAD;
@@ -231,12 +236,13 @@ public:
         while (_roll > PI_F) _roll -= TWO_PI_F;
         while (_roll < -PI_F) _roll += TWO_PI_F;
         
-        // 动态互补滤波系数：
-        // 静止状态下加速度计绝对重力 100% 可信，使用快速修正系数 (0.15f) 在 0.2 秒内迅速把地球拉回静止姿态并消除任何残余漂移晃动
-        // 运动状态下使用平滑系数 (0.005f)，避免运动中的加速度抖动引发回弹
-        float alpha = isStatic ? 0.15f : 0.005f;
-        
-        if (rawAccelMag > 0.8f && rawAccelMag < 1.2f) {
+        // 强健的动态互补滤波重力锚定：
+        // 手持设备在晃动或倾斜时，重力加速度矢量是唯一可靠的绝对参考源。
+        // 在 0.4G ~ 2.5G 宽泛手持动态范围内持续进行重力修正（静止 0.20f，运动 0.08f），
+        // 保证在 0.1 秒内彻底吸收消除任何陀螺仪零偏漂移，物理上杜绝地球仪无休止自转
+        if (rawAccelMag >= 0.4f && rawAccelMag <= 2.5f) {
+            float alpha = isStatic ? 0.20f : 0.08f;
+            
             float diffPitch = currentPitch - _pitch;
             while (diffPitch > PI_F) diffPitch -= TWO_PI_F;
             while (diffPitch < -PI_F) diffPitch += TWO_PI_F;
@@ -322,11 +328,25 @@ public:
     }
 
     bool calibrate() override {
-        LOG_I("IMU", "Setting reference orientation...");
+        LOG_I("IMU", "Setting current holding posture as reference center...");
+        M5.Imu.update();
+        auto imu_data = M5.Imu.getImuData();
+        if (!isnan(imu_data.accel.x) && !isnan(imu_data.accel.y) && !isnan(imu_data.accel.z)) {
+            _data.accelX = imu_data.accel.x;
+            _data.accelY = imu_data.accel.y;
+            _data.accelZ = imu_data.accel.z;
+            _pitch = atan2(_data.accelY, _data.accelZ);
+            _roll = atan2(-_data.accelX, sqrt(_data.accelY * _data.accelY + _data.accelZ * _data.accelZ));
+        }
         _hasReferenceOrientation = true;
         _refRoll = _roll;
         _refPitch = _pitch;
-        LOG_I("IMU", "Reference set: Pitch=%.1f deg, Roll=%.1f deg", _refPitch * RAD_TO_DEG, _refRoll * RAD_TO_DEG);
+        _data.roll = 0.0f;
+        _data.pitch = 0.0f;
+        _data.yaw = 0.0f;
+        _data.heading = 0.0f;
+        _lastUpdate = millis();
+        LOG_I("IMU", "Reference posture captured: Pitch=%.1f deg, Roll=%.1f deg (Aligned to 0)", _refPitch * RAD_TO_DEG, _refRoll * RAD_TO_DEG);
         _data.status = IMU_STATUS_READY;
         return true;
     }
