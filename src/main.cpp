@@ -49,11 +49,14 @@ enum MonoState {
 
 // Set to 1 if you have an external M5Chain Mono 8x8 screen module attached to Grove Port.
 // Set to 0 (default) to keep Grove port free, which prevents keyboard I2C/UART sharing conflicts on Cardputer.
-#define ENABLE_CHAIN_MONO 1
+#define ENABLE_CHAIN_MONO 0
 
 bool isMonoInitialized = false;
 uint8_t mono_id = 0;
 uint8_t operation_status = 0;
+
+#include "gimbal/gimbal_controller.h"
+GimbalController gimbal;
 
 #include "core/mono_icons.h"
 
@@ -2816,6 +2819,22 @@ void setup() {
             }
 #else
             isMonoInitialized = false;
+            // Initialize 3-axis Gimbal on Grove I2C (SDA=2, SCL=1)
+            {
+                bool isGnssOccupyingGrove = false;
+                if (gnss) {
+                    GnssConfig gnssCfg = gnss->getConfig();
+                    if (gnssCfg.rxPin == 2) {
+                        isGnssOccupyingGrove = true;
+                    }
+                }
+                if (!isGnssOccupyingGrove) {
+                    LOG_I("APP", "Initializing 3-axis Gimbal on Grove I2C (SDA=2, SCL=1)...");
+                    gimbal.begin(&Wire, 2, 1, 400000);
+                } else {
+                    LOG_I("APP", "Grove port is occupied by GNSS. Skipping Gimbal initialization.");
+                }
+            }
             if (gnss && !gnss->isModuleInitialized()) {
                 LOG_I("APP", "Cap GNSS not found, probing Grove port for GNSS...");
                 gnss->probeGrove();
@@ -4451,6 +4470,7 @@ void drawSatSelectPage() {
 }
 
 void loop() {
+    gimbal.tick();
     // Resume suspended predictorTask after 500ms debounce of time machine adjustments
     if (lastTimeAdjustMillis != 0 && millis() - lastTimeAdjustMillis > 500) {
         lastTimeAdjustMillis = 0;
@@ -6442,6 +6462,53 @@ void loop() {
                 }
             }
         
+        // Update 3-axis Gimbal Targets based on active sat view focus
+        if (gimbal.isOnline()) {
+            if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+                if (g_satCaches[focusSatIndex].lastGeoValid) {
+                    GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                    ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_satCaches[focusSatIndex].lastGeo);
+                    TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
+                    
+                    float realAz = topo.az;
+                    float realEl = topo.el;
+                    float realAltKm = g_satCaches[focusSatIndex].lastGeo.alt;
+                    
+                    if (realEl > 0.0f) {
+                        gimbal.setTargetTrack(realAz, realEl, realAltKm);
+                    } else {
+                        // Under horizon: search earliest future AOS for this specific satellite in recommendedPasses
+                        uint32_t currentSimTime = current_unix + timeMachineOffset;
+                        bool foundNext = false;
+                        uint32_t earliestAos = 0xFFFFFFFF;
+                        float aosAz = 90.0f;
+                        
+                        lockPassMutex();
+                        for (const auto& pass : recommendedPasses) {
+                            if (pass.satName == g_satellites[focusSatIndex].name && pass.aosTime > currentSimTime) {
+                                if (pass.aosTime < earliestAos) {
+                                    earliestAos = pass.aosTime;
+                                    aosAz = pass.startAz;
+                                    foundNext = true;
+                                }
+                            }
+                        }
+                        unlockPassMutex();
+                        
+                        if (foundNext) {
+                            gimbal.setTargetPrePoint(aosAz);
+                        } else {
+                            gimbal.setStandby();
+                        }
+                    }
+                } else {
+                    gimbal.setStandby();
+                }
+            } else {
+                gimbal.setStandby();
+            }
+        }
+        
         // Render scene
         double renderUserLat = baseUserLat;
         if (isManualLocationMode && ((millis() / 500) % 2 == 0)) {
@@ -6910,13 +6977,19 @@ void loop() {
                 earth_renderer->getCanvas()->drawString("GP:N/A", 52, 105);
             }
             
-            // Draw M5Chain Mono Status
-            if (isMonoInitialized) {
+            // Draw Gimbal Status
+            if (gimbal.isOnline()) {
                 earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                earth_renderer->getCanvas()->drawString("MN:OK", 100, 105);
+                char gbBuf[16];
+                if (gimbal.getCurrentmA() > 0.1f) {
+                    snprintf(gbBuf, sizeof(gbBuf), "GB:%.0fmA", gimbal.getCurrentmA());
+                } else {
+                    snprintf(gbBuf, sizeof(gbBuf), "GB:OK");
+                }
+                earth_renderer->getCanvas()->drawString(gbBuf, 100, 105);
             } else {
                 earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
-                earth_renderer->getCanvas()->drawString("MN:ND", 100, 105); // Not Detected
+                earth_renderer->getCanvas()->drawString("GB:ND", 100, 105); // Not Detected
             }
             
             // Draw GP Epoch Version
