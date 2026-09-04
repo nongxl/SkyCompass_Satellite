@@ -4,10 +4,10 @@
 compile_commands.json
 *.log
 logs.txt
-!docs/
+docs/
 prompts/
 .gitignore
 plan.txt
 *.pdf
 m5stack*
-.gitignore
+conversation_backup.jsonl
