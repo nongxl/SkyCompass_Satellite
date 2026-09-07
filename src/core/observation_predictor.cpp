@@ -270,7 +270,18 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                 stepSeconds = 240; // Reset back to coarse step
                 isRewinding = false;
                 
-                if (currentPass.isVisible && currentPass.visibleDuration > 30 && currentPass.maxBrightness <= 8.5) {
+                double east  = -sin_lon * dx + cos_lon * dy;
+                double north = -sin_lat * cos_lon * dx - sin_lat * sin_lon * dy + cos_lat * dz;
+                double az = atan2(east, north) * 180.0 / PI_VAL;
+                if (az < 0.0) az += 360.0;
+                
+                // 关键修正：确保所有物理过境（包括地影与白天过境，如哈勃）均拥有准确的物理落山时刻与落山方位
+                if (currentPass.losTime == 0 || !currentPass.isVisible) {
+                    currentPass.losTime = t;
+                    currentPass.endAz = az;
+                }
+                
+                if (currentPass.maxElevation >= 10.0f) {
                     // Populate basic satellite-wide tracking info for post-processors
                     if (tle.line1.length() >= 14) {
                         String batchStr = tle.line1.substring(9, 14);
@@ -278,96 +289,101 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                         currentPass.launchBatch[sizeof(currentPass.launchBatch) - 1] = '\0';
                     }
                     currentPass.epoch = parseTleEpoch(tle.line1);
- 
-                    MoonCalculator moonCalc(_pm);
-                    MoonPositionData moonPos = moonCalc.calculatePosition(currentPass.maxElevTime, _userLat, _userLon);
-                    
-                    double theta_deg = 999.0;
-                    if (moonPos.altitude > 0.0) {
-                        double el1_rad = currentPass.maxElevation * DEG_TO_RAD;
-                        double el2_rad = moonPos.altitude * DEG_TO_RAD;
-                        double az1_rad = currentPass.maxAz * DEG_TO_RAD;
-                        double az2_rad = moonPos.azimuth * DEG_TO_RAD;
- 
-                        double cos_theta_val = sin(el1_rad) * sin(el2_rad) + cos(el1_rad) * cos(el2_rad) * cos(az1_rad - az2_rad);
-                        if (cos_theta_val > 1.0) cos_theta_val = 1.0;
-                        if (cos_theta_val < -1.0) cos_theta_val = -1.0;
-                        theta_deg = acos(cos_theta_val) * RAD_TO_DEG;
+
+                    if (currentPass.isVisible && currentPass.visibleDuration > 30 && currentPass.maxBrightness <= 8.5) {
+                        MoonCalculator moonCalc(_pm);
+                        MoonPositionData moonPos = moonCalc.calculatePosition(currentPass.maxElevTime, _userLat, _userLon);
+                        
+                        double theta_deg = 999.0;
+                        if (moonPos.altitude > 0.0) {
+                            double el1_rad = currentPass.maxElevation * DEG_TO_RAD;
+                            double el2_rad = moonPos.altitude * DEG_TO_RAD;
+                            double az1_rad = currentPass.maxAz * DEG_TO_RAD;
+                            double az2_rad = moonPos.azimuth * DEG_TO_RAD;
+
+                            double cos_theta_val = sin(el1_rad) * sin(el2_rad) + cos(el1_rad) * cos(el2_rad) * cos(az1_rad - az2_rad);
+                            if (cos_theta_val > 1.0) cos_theta_val = 1.0;
+                            if (cos_theta_val < -1.0) cos_theta_val = -1.0;
+                            theta_deg = acos(cos_theta_val) * RAD_TO_DEG;
+                        }
+
+                        // 2. Identify single satellite events
+                        uint8_t evType = 0;
+                        int evBonus = 0;
+                        String evTitle = "";
+                        String evDesc = "";
+                        
+                        // Check RECENT_LAUNCH
+                        int launchYear = parseTleLaunchYear(tle.line1);
+                        int currentYear = getYearFromUnix(startTime);
+                        
+                        if (launchYear == currentYear && startTime >= currentPass.epoch && (startTime - currentPass.epoch) <= 14 * 86400) {
+                            int ageDays = (startTime - currentPass.epoch) / 86400;
+                            evType = 7;
+                            evBonus = 3;
+                            evTitle = "Recent Launch";
+                            evDesc = "Newly launched satellite (Age: " + String(ageDays) + " days)";
+                        }
+                        // Check MOON_PASS
+                        else if (moonPos.altitude > 0.0 && theta_deg <= 3.0) {
+                            evType = 6;
+                            evBonus = 2;
+                            char buf[64];
+                            snprintf(buf, sizeof(buf), "Close pass by the Moon (Separation: %.1f°)", theta_deg);
+                            evTitle = "Moon Pass";
+                            evDesc = buf;
+                        }
+                        // Check ZENITH_PASS
+                        else if (currentPass.maxElevation >= 70.0) {
+                            evType = 1;
+                            evBonus = 1; // Optimized: reduce to +1
+                            char buf[64];
+                            snprintf(buf, sizeof(buf), "Passes nearly directly overhead (Max El: %.1f°)", currentPass.maxElevation);
+                            evTitle = "Zenith Pass";
+                            evDesc = buf;
+                        }
+                        // Check BRIGHT_PASS
+                        else if (currentPass.maxBrightness <= 1.5) { // Optimized: tighten to <= 1.5
+                            evType = 3;
+                            evBonus = 2;
+                            char buf[64];
+                            snprintf(buf, sizeof(buf), "Exceptionally bright in the sky (Mag: %.1f)", currentPass.maxBrightness);
+                            evTitle = "Bright Pass";
+                            evDesc = buf;
+                        }
+                        // Check LONG_PASS
+                        else if (currentPass.visibleDuration >= 300.0) {
+                            evType = 2;
+                            evBonus = 1;
+                            char buf[64];
+                            snprintf(buf, sizeof(buf), "Visible for an extended duration (%.1f min)", currentPass.visibleDuration / 60.0);
+                            evTitle = "Long Pass";
+                            evDesc = buf;
+                        }
+                        
+                        currentPass.eventType = evType;
+                        currentPass.eventBonus = evBonus;
+                        currentPass.eventTitle = evTitle;
+                        currentPass.eventDesc = evDesc;
+                        
+                        currentPass.baseScore = calculateScore(currentPass.maxElevation, currentPass.visibleDuration, currentPass.maxBrightness);
+                        currentPass.score = currentPass.baseScore + evBonus;
+                        
+                        // Apply brightness capping to suppress dim satellites to high ratings
+                        if (currentPass.maxBrightness > 4.0) {
+                            if (currentPass.score > 2) currentPass.score = 2;
+                        } else if (currentPass.maxBrightness > 3.0) {
+                            if (currentPass.score > 3) currentPass.score = 3;
+                        } else if (currentPass.maxBrightness > 1.5) {
+                            if (currentPass.score > 4) currentPass.score = 4;
+                        }
+                        
+                        if (currentPass.score > 5) currentPass.score = 5;
+                        if (currentPass.score < 1) currentPass.score = 1;
+                    } else {
+                        // Pass in daytime or Earth shadow (e.g. Hubble, amateur radio)
+                        currentPass.score = 1;
                     }
- 
-                    // 2. Identify single satellite events
-                    uint8_t evType = 0;
-                    int evBonus = 0;
-                    String evTitle = "";
-                    String evDesc = "";
-                    
-                    // Check RECENT_LAUNCH
-                    int launchYear = parseTleLaunchYear(tle.line1);
-                    int currentYear = getYearFromUnix(startTime);
-                    
-                    if (launchYear == currentYear && startTime >= currentPass.epoch && (startTime - currentPass.epoch) <= 14 * 86400) {
-                        int ageDays = (startTime - currentPass.epoch) / 86400;
-                        evType = 7;
-                        evBonus = 3;
-                        evTitle = "Recent Launch";
-                        evDesc = "Newly launched satellite (Age: " + String(ageDays) + " days)";
-                    }
-                    // Check MOON_PASS
-                    else if (moonPos.altitude > 0.0 && theta_deg <= 3.0) {
-                        evType = 6;
-                        evBonus = 2;
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "Close pass by the Moon (Separation: %.1f°)", theta_deg);
-                        evTitle = "Moon Pass";
-                        evDesc = buf;
-                    }
-                    // Check ZENITH_PASS
-                    else if (currentPass.maxElevation >= 70.0) {
-                        evType = 1;
-                        evBonus = 1; // Optimized: reduce to +1
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "Passes nearly directly overhead (Max El: %.1f°)", currentPass.maxElevation);
-                        evTitle = "Zenith Pass";
-                        evDesc = buf;
-                    }
-                    // Check BRIGHT_PASS
-                    else if (currentPass.maxBrightness <= 1.5) { // Optimized: tighten to <= 1.5
-                        evType = 3;
-                        evBonus = 2;
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "Exceptionally bright in the sky (Mag: %.1f)", currentPass.maxBrightness);
-                        evTitle = "Bright Pass";
-                        evDesc = buf;
-                    }
-                    // Check LONG_PASS
-                    else if (currentPass.visibleDuration >= 300.0) {
-                        evType = 2;
-                        evBonus = 1;
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "Visible for an extended duration (%.1f min)", currentPass.visibleDuration / 60.0);
-                        evTitle = "Long Pass";
-                        evDesc = buf;
-                    }
-                    
-                    currentPass.eventType = evType;
-                    currentPass.eventBonus = evBonus;
-                    currentPass.eventTitle = evTitle;
-                    currentPass.eventDesc = evDesc;
-                    
-                    currentPass.baseScore = calculateScore(currentPass.maxElevation, currentPass.visibleDuration, currentPass.maxBrightness);
-                    currentPass.score = currentPass.baseScore + evBonus;
-                    
-                    // Apply brightness capping to suppress dim satellites to high ratings
-                    if (currentPass.maxBrightness > 4.0) {
-                        if (currentPass.score > 2) currentPass.score = 2;
-                    } else if (currentPass.maxBrightness > 3.0) {
-                        if (currentPass.score > 3) currentPass.score = 3;
-                    } else if (currentPass.maxBrightness > 1.5) {
-                        if (currentPass.score > 4) currentPass.score = 4;
-                    }
-                    
-                    if (currentPass.score > 5) currentPass.score = 5;
-                    if (currentPass.score < 1) currentPass.score = 1;
                     
                     if (currentPass.losTime >= startTime) {
                         passes.push_back(currentPass);

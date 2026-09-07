@@ -961,9 +961,9 @@ void rebuildTree(uint32_t current_unix) {
             for (int i = 0; i < recommendedPasses.size(); i++) {
                 const auto& p = recommendedPasses[i];
                 bool match = false;
-                if (c == 0 && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
-                else if (c == 1 && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
-                else if (c == 2 && p.score >= 4 && p.losTime >= current_unix) match = true;
+                if (c == 0 && p.isVisible && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
+                else if (c == 1 && p.isVisible && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
+                else if (c == 2 && p.isVisible && p.score >= 4 && p.losTime >= current_unix) match = true;
                 else if (c == 3 && p.losTime >= current_unix) match = true;
                 
                 if (match) {
@@ -1155,9 +1155,9 @@ void rebuildTreeLocal(std::vector<TreeItem>& tree, const std::vector<PassEvent>&
             for (int i = 0; i < passes.size(); i++) {
                 const auto& p = passes[i];
                 bool match = false;
-                if (c == 0 && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
-                else if (c == 1 && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
-                else if (c == 2 && p.score >= 4 && p.losTime >= current_unix) match = true;
+                if (c == 0 && p.isVisible && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
+                else if (c == 1 && p.isVisible && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
+                else if (c == 2 && p.isVisible && p.score >= 4 && p.losTime >= current_unix) match = true;
                 else if (c == 3 && p.losTime >= current_unix) match = true;
                 
                 if (match) {
@@ -2821,23 +2821,14 @@ void setup() {
             isMonoInitialized = false;
             // Initialize 3-axis Gimbal on Grove I2C (SDA=2, SCL=1)
             {
-                bool isGnssOccupyingGrove = false;
-                if (gnss) {
-                    GnssConfig gnssCfg = gnss->getConfig();
-                    if (gnssCfg.rxPin == 2) {
-                        isGnssOccupyingGrove = true;
-                    }
-                }
-                if (!isGnssOccupyingGrove) {
-                    LOG_I("APP", "Initializing 3-axis Gimbal on Grove I2C (SDA=2, SCL=1)...");
-                    gimbal.begin(&Wire, 2, 1, 400000);
-                } else {
-                    LOG_I("APP", "Grove port is occupied by GNSS. Skipping Gimbal initialization.");
-                }
+                LOG_I("APP", "Initializing 3-axis Gimbal on Grove I2C (SDA=2, SCL=1)...");
+                gimbal.begin(&Wire, 2, 1, 100000);
             }
-            if (gnss && !gnss->isModuleInitialized()) {
-                LOG_I("APP", "Cap GNSS not found, probing Grove port for GNSS...");
-                gnss->probeGrove();
+            // 锁定 Grove 端口供三轴云台舵机驱动板专用，严禁 GNSS 探针霸占导致 I2C 中断
+            if (gnss) {
+                GnssConfig gnssCfg = gnss->getConfig();
+                gnssCfg.enableGroveProbe = false;
+                gnss->setConfig(gnssCfg);
             }
 #endif 
             
@@ -4501,7 +4492,7 @@ void loop() {
                 unlockPassMutex();
                 
                 if (!isCacheValid) {
-                    Serial.printf("[Debug] Time Machine resumed but cache invalid (day crossed). Resetting prediction. baseTime=%u, targetTime=%u\n", baseTime, targetTime);
+                    // Serial.printf("[Debug] Time Machine resumed but cache invalid (day crossed). Resetting prediction. baseTime=%u, targetTime=%u\n", baseTime, targetTime);
                     lockPassMutex();
                     predictionsReady = false;
                     lastPredictionBaseTime = 0; // Invalid cache
@@ -4510,10 +4501,10 @@ void loop() {
                     unlockPassMutex();
                     triggerPrediction = true;
                 } else {
-                    Serial.printf("[Debug] Time Machine resumed, cache is valid (same day). Continuing calculation or keeping cache. baseTime=%u\n", baseTime);
+                    // Serial.printf("[Debug] Time Machine resumed, cache is valid (same day). Continuing calculation or keeping cache. baseTime=%u\n", baseTime);
                 }
             } else {
-                Serial.println("[Debug] Time Machine resumed. Panel closed, skipping cross-day recalculation checks.");
+                // Serial.println("[Debug] Time Machine resumed. Panel closed, skipping cross-day recalculation checks.");
             }
         }
     }
@@ -4544,8 +4535,8 @@ void loop() {
         isManualLocationMode = pos_manager->isManualPositionEnabled();
         
         if (abs(baseUserLat - oldLat) > 0.01 || abs(baseUserLon - oldLon) > 0.01 || abs(baseUserAlt - oldAlt) > 100.0) {
-            Serial.printf("[Debug] Cache reset due to main loop coords change: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
-                          oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
+            // Serial.printf("[Debug] Cache reset due to main loop coords change: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
+            //               oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
             lockPassMutex();
             lastPredictionBaseTime = 0; // 缓存失效
             predictionsReady = false;
@@ -4957,14 +4948,14 @@ void loop() {
 
                         // 4. Only recalculate if difference is beyond thresholds
                         if (timeCrossedDay || locShifted) {
-                            Serial.printf("[Debug] Cache reset on justR: timeCrossedDay=%d, locShifted=%d\n", timeCrossedDay, locShifted);
+                            // Serial.printf("[Debug] Cache reset on justR: timeCrossedDay=%d, locShifted=%d\n", timeCrossedDay, locShifted);
                             lockPassMutex();
                             lastPredictionBaseTime = 0; // 缓存失效
                             predictionsReady = false;
                             unlockPassMutex();
                             triggerPrediction = true;
                         } else {
-                            Serial.println("[Debug] justR reset applied silently. Coords/Time shift within thresholds.");
+                            // Serial.println("[Debug] justR reset applied silently. Coords/Time shift within thresholds.");
                         }
                     }
                 } else if (justBack) {
@@ -5035,12 +5026,12 @@ void loop() {
                         }
                         unlockPassMutex();
                         
-                        Serial.printf("[Debug] Enter Panel: predictionsReady=%d, lastPredictionBaseTime=%u, targetTime=%u, isCacheValid=%d, g_orbitCalculating=%d, triggerPrediction=%d\n", 
-                                      predictionsReady, lastPredictionBaseTime, targetTime, isCacheValid, g_orbitCalculating, triggerPrediction);
+                        // Serial.printf("[Debug] Enter Panel: predictionsReady=%d, lastPredictionBaseTime=%u, targetTime=%u, isCacheValid=%d, g_orbitCalculating=%d, triggerPrediction=%d\n", 
+                        //               predictionsReady, lastPredictionBaseTime, targetTime, isCacheValid, g_orbitCalculating, triggerPrediction);
 
                         bool needTrigger = !isCacheValid || (!predictionsReady && !g_orbitCalculating);
                         if (needTrigger && !g_orbitCalculating && !triggerPrediction) {
-                            Serial.printf("[Debug] Triggering calculation. needTrigger=%d, isCacheValid=%d, predictionsReady=%d\n", needTrigger, isCacheValid, predictionsReady);
+                            // Serial.printf("[Debug] Triggering calculation. needTrigger=%d, isCacheValid=%d, predictionsReady=%d\n", needTrigger, isCacheValid, predictionsReady);
                             lockPassMutex();
                             predictionsReady = false;
                             lastPredictionBaseTime = 0;
@@ -5727,8 +5718,8 @@ void loop() {
                     }
                     
                     if (abs(baseUserLat - oldLat) > 0.01 || abs(baseUserLon - oldLon) > 0.01 || abs(baseUserAlt - oldAlt) > 100.0) {
-                        Serial.printf("[Debug] GNSS sync cache reset: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
-                                      oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
+                        // Serial.printf("[Debug] GNSS sync cache reset: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
+                        //               oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
                         lockPassMutex();
                         lastPredictionBaseTime = 0; // 缓存失效
                         predictionsReady = false;
@@ -6472,40 +6463,188 @@ void loop() {
                     
                     float realAz = topo.az;
                     float realEl = topo.el;
-                    float realAltKm = g_satCaches[focusSatIndex].lastGeo.alt;
+                    uint32_t currentSimTime = current_unix + timeMachineOffset;
                     
-                    if (realEl > 0.0f) {
-                        gimbal.setTargetTrack(realAz, realEl, realAltKm);
+                    static int s_trackingSatIndex = -1;
+                    static bool s_inPassSession = false;
+                    static PassEvent s_lockedPass;
+                    
+                    // 切换聚焦卫星时，重置过境跟踪会话
+                    if (s_trackingSatIndex != focusSatIndex) {
+                        s_trackingSatIndex = focusSatIndex;
+                        s_inPassSession = false;
+                    }
+                    
+                    // 状态切换与退出判定：
+                    bool isPassActive = false;
+                    if (!s_inPassSession) {
+                        // 未在过境中：卫星仰角大于等于 0 即判定升出地平线
+                        if (realEl >= 0.0f) {
+                            isPassActive = true;
+                        }
                     } else {
-                        // Under horizon: search earliest future AOS for this specific satellite in recommendedPasses
-                        uint32_t currentSimTime = current_unix + timeMachineOffset;
+                        // 已在过境中：只要卫星仰角仍在地上 (realEl > 0)，或尚未到达预计降落时刻，维持过境
+                        // 一旦卫星已经落入地平线 (realEl <= 0) 且时间已过预计落山时刻，过境立即圆满结束！
+                        if (realEl > 0.0f || (s_lockedPass.losTime > 0 && currentSimTime < s_lockedPass.losTime)) {
+                            isPassActive = true;
+                        }
+                    }
+                    
+                    if (isPassActive) {
+                        // 1. 卫星在过境中：锁定单一会话，CH0基准方位与CH1拱门倾角在整个过境期间绝对恒定，严禁任何跳变！
+                        if (!s_inPassSession) {
+                            // 刚进入本次过境：尝试从推荐列表中匹配过境事件
+                            bool foundPass = false;
+                            PassEvent activePass;
+                            
+                            lockPassMutex();
+                            for (const auto& pass : recommendedPasses) {
+                                if (pass.satName == g_satellites[focusSatIndex].name) {
+                                    if (currentSimTime >= (pass.aosTime > 60 ? pass.aosTime - 60 : 0) && currentSimTime <= pass.losTime + 60) {
+                                        activePass = pass;
+                                        foundPass = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            unlockPassMutex();
+                            
+                            if (foundPass && activePass.losTime > activePass.aosTime) {
+                                s_lockedPass = activePass;
+                            } else {
+                                // 备用降级方案（如开机刚升起后台尚未完成预测）：刚性锁定当前几何方位与仰角，形成完整会话
+                                s_lockedPass.satName = g_satellites[focusSatIndex].name;
+                                s_lockedPass.startAz = realAz;
+                                s_lockedPass.maxElevation = max(realEl, 45.0f);
+                                s_lockedPass.aosTime = currentSimTime;
+                                s_lockedPass.losTime = currentSimTime + 600; // 默认10分钟
+                            }
+                            s_inPassSession = true;
+                        } else {
+                            // 已经在会话中：如果最初是降级估算的，后续在推荐列表中找到了更精准的过境，则平滑吸收时间范围，但基准方位绝不动摇
+                            if (s_lockedPass.losTime - s_lockedPass.aosTime == 600) {
+                                lockPassMutex();
+                                for (const auto& pass : recommendedPasses) {
+                                    if (pass.satName == g_satellites[focusSatIndex].name) {
+                                        if (currentSimTime >= (pass.aosTime > 60 ? pass.aosTime - 60 : 0) && currentSimTime <= pass.losTime + 60) {
+                                            s_lockedPass.aosTime = pass.aosTime;
+                                            s_lockedPass.losTime = pass.losTime;
+                                            s_lockedPass.startAz = pass.startAz;
+                                            s_lockedPass.maxElevation = pass.maxElevation;
+                                            break;
+                                        }
+                                    }
+                                }
+                                unlockPassMutex();
+                            }
+                        }
+                        
+                        // 计算过境进度 (0.0 -> 1.0 -> 0° -> 180°)
+                        float totalDur = (float)(s_lockedPass.losTime - s_lockedPass.aosTime);
+                        if (totalDur < 30.0f) totalDur = 600.0f;
+                        float ratio = (float)(currentSimTime - s_lockedPass.aosTime) / totalDur;
+                        ratio = constrain(ratio, 0.0f, 1.0f);
+                        float progressDeg = ratio * 180.0f;
+                        
+                        // 下发刚性锁定的基准方位、拱高与平滑进度（CH0 与 CH1 恒定不动，只有 CH2 平滑划过天际）
+                        gimbal.setTargetArch(s_lockedPass.startAz, s_lockedPass.maxElevation, progressDeg);
+                    } else {
+                        // 2. 卫星在地平线以下：结束本次过境会话，寻找该卫星未来最早的下一次过境并预瞄准
+                        s_inPassSession = false;
                         bool foundNext = false;
                         uint32_t earliestAos = 0xFFFFFFFF;
                         float aosAz = 90.0f;
+                        float nextMaxEl = 45.0f;
                         
+                        // 优先在推荐过境列表中检索未来过境
                         lockPassMutex();
                         for (const auto& pass : recommendedPasses) {
                             if (pass.satName == g_satellites[focusSatIndex].name && pass.aosTime > currentSimTime) {
                                 if (pass.aosTime < earliestAos) {
                                     earliestAos = pass.aosTime;
                                     aosAz = pass.startAz;
+                                    nextMaxEl = pass.maxElevation;
                                     foundNext = true;
                                 }
                             }
                         }
                         unlockPassMutex();
                         
+                        // 增强防护：若预计算列表中尚未包含（例如后台正在重算），直接对当前聚焦卫星就地向前推算最近过境
+                        if (!foundNext) {
+                            static int s_cachedFocusSat = -1;
+                            static uint32_t s_lastProbeTime = 0;
+                            static uint32_t s_cachedNextAos = 0;
+                            static float s_cachedAosAz = 90.0f;
+                            static float s_cachedNextMaxEl = 45.0f;
+                            
+                            if (s_cachedFocusSat != focusSatIndex) {
+                                s_cachedFocusSat = focusSatIndex;
+                                s_cachedNextAos = 0;
+                                s_lastProbeTime = 0;
+                            }
+                            
+                            if (s_cachedNextAos > currentSimTime) {
+                                earliestAos = s_cachedNextAos;
+                                aosAz = s_cachedAosAz;
+                                nextMaxEl = s_cachedNextMaxEl;
+                                foundNext = true;
+                            } else if (currentSimTime - s_lastProbeTime > 5) {
+                                s_lastProbeTime = currentSimTime;
+                                GeodeticCoord obsPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                                uint32_t probeT = currentSimTime + 30;
+                                uint32_t probeEnd = currentSimTime + 6 * 3600; // 探测未来 6 小时
+                                bool probeInPass = false;
+                                float pAosAz = 0.0f;
+                                float pMaxEl = 0.0f;
+                                uint32_t pAosTime = 0;
+                                
+                                while (probeT < probeEnd) {
+                                    double px = 0, py = 0, pz = 0;
+                                    if (g_satellites[focusSatIndex].calc.getTEME(probeT, px, py, pz)) {
+                                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(probeT));
+                                        ECEFCoord pEcef = CoordTransform::temeToECEF(px, py, pz, gmst);
+                                        TopocentricCoord pTopo = CoordTransform::ecefToTopocentric(obsPos, pEcef);
+                                        
+                                        if (pTopo.el >= 0.0f) {
+                                            if (!probeInPass) {
+                                                probeInPass = true;
+                                                pAosAz = pTopo.az;
+                                                pMaxEl = pTopo.el;
+                                                pAosTime = probeT;
+                                            } else {
+                                                if (pTopo.el > pMaxEl) pMaxEl = pTopo.el;
+                                            }
+                                        } else if (probeInPass) {
+                                            if (pMaxEl >= 10.0f) {
+                                                foundNext = true;
+                                                earliestAos = pAosTime;
+                                                aosAz = pAosAz;
+                                                nextMaxEl = pMaxEl;
+                                                s_cachedNextAos = earliestAos;
+                                                s_cachedAosAz = aosAz;
+                                                s_cachedNextMaxEl = nextMaxEl;
+                                                break;
+                                            }
+                                            probeInPass = false;
+                                        }
+                                    }
+                                    probeT += 60; // 60秒快速巡航探测
+                                }
+                            }
+                        }
+                        
                         if (foundNext) {
-                            gimbal.setTargetPrePoint(aosAz);
+                            gimbal.setTargetPrePointArch(aosAz, nextMaxEl);
                         } else {
-                            gimbal.setStandby();
+                            gimbal.setHold();
                         }
                     }
                 } else {
-                    gimbal.setStandby();
+                    gimbal.setHold();
                 }
             } else {
-                gimbal.setStandby();
+                gimbal.setHold();
             }
         }
         

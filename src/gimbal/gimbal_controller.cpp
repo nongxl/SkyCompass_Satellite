@@ -6,9 +6,10 @@ GimbalController::GimbalController() :
     _currentmA(0.0f), 
     _fwVersion(0),
     _lastStatusTick(0),
-    _curAzAngle(90.0f), _curElAngle(90.0f), _curAltAngle(90.0f),
-    _tarAzAngle(90.0f), _tarElAngle(90.0f), _tarAltAngle(90.0f),
+    _curAzAngle(90.0f), _curInclineAngle(90.0f), _curProgressAngle(90.0f),
+    _tarAzAngle(90.0f), _tarInclineAngle(90.0f), _tarProgressAngle(90.0f),
     _lastTick(0),
+    _initStartTime(0),
     _lerpFactor(0.08f),
     _maxDegPerSec(5.0f),
     _lastLogTick(0) {}
@@ -23,110 +24,155 @@ bool GimbalController::begin(TwoWire *wire, uint8_t sda, uint8_t scl, uint32_t f
         _servo.setAllPinMode(SERVO_CTL_MODE);
         delay(20);
         
-        // 软启动初始值
+        // 软启动初始值（三轴全 90 度，便于硬件归中对齐）
         _curAzAngle = 90.0f;
-        _curElAngle = 90.0f;
-        _curAltAngle = 90.0f;
+        _curInclineAngle = 90.0f;
+        _curProgressAngle = 90.0f;
         _tarAzAngle = 90.0f;
-        _tarElAngle = 90.0f;
-        _tarAltAngle = 90.0f;
+        _tarInclineAngle = 90.0f;
+        _tarProgressAngle = 90.0f;
         
+        // 立即向硬件下发 90 度控制信号锁定零位
         _servo.setServoAngle(GIMBAL_CH_AZ, 90);
-        _servo.setServoAngle(GIMBAL_CH_EL, 90);
-        _servo.setServoAngle(GIMBAL_CH_ALT, 90);
+        _servo.setServoAngle(GIMBAL_CH_INCLINE, 90);
+        _servo.setServoAngle(GIMBAL_CH_PROGRESS, 90);
         
         _state = GIMBAL_STATE_INITIALIZING;
+        _initStartTime = millis();
         setLEDsByState();
+        
+        log_i("*******************************************************");
+        log_i("[Gimbal] >>> INITIALIZING: 3 Servos Locked at 90° for Alignment <<<");
+        log_i("*******************************************************");
+    } else {
+        log_i("[Gimbal] Servo Driver Board NOT DETECTED on Grove port (Offline)");
     }
     _lastTick = millis();
     return _isOnline;
 }
 
 void GimbalController::updateStatus() {
-    if (millis() - _lastStatusTick > 2000) {
+    if (millis() - _lastStatusTick > 3000) {
         _lastStatusTick = millis();
-        bool conn = _servo.isConnected();
-        if (conn != _isOnline) {
-            _isOnline = conn;
-            if (_isOnline) {
+        // 在线状态下保持总线纯净，不进行高频侵入式探测；仅在掉线时尝试探测重连
+        if (!_isOnline) {
+            bool conn = _servo.isConnected();
+            if (conn) {
+                _isOnline = true;
                 _servo.setAllPinMode(SERVO_CTL_MODE);
                 _fwVersion = _servo.getFirmwareVersion();
                 // 恢复位置
                 _servo.setServoAngle(GIMBAL_CH_AZ, (uint8_t)constrain(_curAzAngle, 0, 180));
-                _servo.setServoAngle(GIMBAL_CH_EL, (uint8_t)constrain(_curElAngle, 0, 180));
-                _servo.setServoAngle(GIMBAL_CH_ALT, (uint8_t)constrain(_curAltAngle, 0, 180));
+                _servo.setServoAngle(GIMBAL_CH_INCLINE, (uint8_t)constrain(_curInclineAngle, 0, 180));
+                _servo.setServoAngle(GIMBAL_CH_PROGRESS, (uint8_t)constrain(_curProgressAngle, 0, 180));
                 setLEDsByState();
+                log_i("[Gimbal] Hardware re-connected!");
             }
-        }
-        if (_isOnline) {
-            _currentmA = _servo.getCurrent() * 1000.0f; // 转换为 mA
-        } else {
-            _currentmA = 0.0f;
         }
     }
 }
 
-void GimbalController::apply180DegreeLimit(float az, float el, float alt, float &outAz, float &outEl, float &outAlt) {
-    // 规范化方位角到 [0, 360)
-    while (az < 0) az += 360.0f;
-    while (az >= 360.0f) az -= 360.0f;
+void GimbalController::calculateArchAngles(float baseAz, float maxEl, float progressDeg, float &outAz, float &outIncline, float &outProgress) {
+    // 规范化 baseAz 到 [0, 360)
+    while (baseAz < 0) baseAz += 360.0f;
+    while (baseAz >= 360.0f) baseAz -= 360.0f;
 
-    // 方位轴舵机限位及头顶穿越镜像转换
-    if (az <= 180.0f) {
-        outAz = az;
-        outEl = el;
+    // 白色横梁是两端对称的长条直梁，旋转范围 0-180 度即可覆盖 360 度所有过境走向
+    if (baseAz <= 180.0f) {
+        outAz = baseAz;
+        outProgress = progressDeg; // 正向划过拱门 (0° -> 180°)
     } else {
-        outAz = az - 180.0f;
-        outEl = 180.0f - el; // 越过头顶对侧指向
+        outAz = baseAz - 180.0f;
+        outProgress = 180.0f - progressDeg; // 对侧反向划过拱门 (180° -> 0°)
     }
 
-    // 卫星高度转换：取 [350km - 1500km] 对比映射到 [30° - 150°] 舵机角，如果过低归为30度，过高归为150度
-    if (alt <= 0.0f) {
-        outAlt = 90.0f; // 默认
-    } else {
-        outAlt = 30.0f + ((alt - 350.0f) / (1500.0f - 350.0f)) * (150.0f - 30.0f);
-        outAlt = constrain(outAlt, 30.0f, 150.0f);
-    }
+    // 拱门倾角：最大仰角直接映射，限制在 0° - 90° 之间
+    outIncline = constrain(maxEl, 0.0f, 90.0f);
 
-    // 仰角及方位做硬件硬限制限制
+    // 硬件限位
     outAz = constrain(outAz, 0.0f, 180.0f);
-    outEl = constrain(outEl, 0.0f, 180.0f);
+    outProgress = constrain(outProgress, 0.0f, 180.0f);
+}
+
+void GimbalController::setTargetArch(float baseAz, float maxElevation, float progressDeg) {
+    // 开机 90° 对齐自检期间受保护，严禁被打断
+    if (_state == GIMBAL_STATE_INITIALIZING) return;
+
+    float tarAz, tarIncline, tarProgress;
+    calculateArchAngles(baseAz, maxElevation, progressDeg, tarAz, tarIncline, tarProgress);
+    
+    _tarAzAngle = tarAz;
+    _tarInclineAngle = tarIncline;
+    _tarProgressAngle = tarProgress;
+    
+    if (_state != GIMBAL_STATE_TRACKING) {
+        log_i("[Gimbal] State changed from %d to TRACKING (Arch BaseAz: %.1f, MaxEl: %.1f)", 
+              _state, baseAz, maxElevation);
+        _state = GIMBAL_STATE_TRACKING;
+        _maxDegPerSec = 15.0f; // 跟踪模式下允许响应稍快
+        setLEDsByState();
+    }
+}
+
+void GimbalController::setTargetPrePointArch(float aosAz, float maxElevation) {
+    // 开机 90° 对齐自检期间受保护，严禁被打断
+    if (_state == GIMBAL_STATE_INITIALIZING) return;
+
+    float tarAz, tarIncline, tarProgress;
+    calculateArchAngles(aosAz, maxElevation, 0.0f, tarAz, tarIncline, tarProgress);
+    
+    _tarAzAngle = tarAz;
+    _tarInclineAngle = tarIncline;
+    _tarProgressAngle = tarProgress; // 静止停在拱门起跑线 (0° 或 180°)
+    
+    if (_state != GIMBAL_STATE_PREPOINT) {
+        log_i("[Gimbal] State changed from %d to PREPOINT (AOS Az: %.1f, MaxEl: %.1f)", 
+              _state, aosAz, maxElevation);
+        _state = GIMBAL_STATE_PREPOINT;
+        _maxDegPerSec = 3.0f; // 极慢角速度，静默预定目标
+        setLEDsByState();
+    }
 }
 
 void GimbalController::setTargetTrack(float realAz, float realEl, float realAltKm) {
-    _tarAltAngle = 90.0f;
-    apply180DegreeLimit(realAz, realEl, realAltKm, _tarAzAngle, _tarElAngle, _tarAltAngle);
-    
-    if (_state != GIMBAL_STATE_TRACKING) {
-        Serial.printf("[Gimbal] State changed from %d to TRACKING\n", _state);
-        _state = GIMBAL_STATE_TRACKING;
-        _maxDegPerSec = 10.0f; // 跟踪模式下允许响应稍快，但仍限制暴冲
-        setLEDsByState();
-    }
+    float maxEl = max(realEl, 45.0f);
+    float progress = (realEl > 0.0f ? (realEl / maxEl) * 90.0f : 0.0f);
+    setTargetArch(realAz, maxEl, progress);
 }
 
 void GimbalController::setTargetPrePoint(float aosAz) {
-    // 预瞄准状态下仰角平放为0，高度轴居中90
-    _tarAltAngle = 90.0f;
-    apply180DegreeLimit(aosAz, 0.0f, 0.0f, _tarAzAngle, _tarElAngle, _tarAltAngle);
+    setTargetPrePointArch(aosAz, 45.0f);
+}
+
+void GimbalController::setStandby() {
+    // 开机 90° 对齐自检期间受保护，严禁被打断
+    if (_state == GIMBAL_STATE_INITIALIZING) return;
+
+    _tarAzAngle = 90.0f;       // 白色横梁居中归位 (90°)
+    _tarInclineAngle = 90.0f;   // 黑色拱门竖直立起归位 (90°，绝不擅自向0°放平)
+    _tarProgressAngle = 90.0f; // 星位指针直指拱顶归位 (90°)
     
-    if (_state != GIMBAL_STATE_PREPOINT) {
-        Serial.printf("[Gimbal] State changed from %d to PREPOINT (AOS Az: %.1f)\n", _state, aosAz);
-        _state = GIMBAL_STATE_PREPOINT;
-        _maxDegPerSec = 2.0f; // 极慢角速度，静默预定目标
+    if (_state != GIMBAL_STATE_STANDBY) {
+        log_i("[Gimbal] State changed from %d to STANDBY (All 3-Axis Locked at 90°)", _state);
+        _state = GIMBAL_STATE_STANDBY;
+        _maxDegPerSec = 3.0f;
         setLEDsByState();
     }
 }
 
-void GimbalController::setStandby() {
-    _tarAzAngle = 90.0f;
-    _tarElAngle = 90.0f;
-    _tarAltAngle = 90.0f;
+void GimbalController::setHold() {
+    // 开机 90° 对齐自检期间受保护，严禁被打断
+    if (_state == GIMBAL_STATE_INITIALIZING) return;
+
+    // 冻结目标角度为当前实际角度，完全保持静止不动
+    _tarAzAngle = _curAzAngle;
+    _tarInclineAngle = _curInclineAngle;
+    _tarProgressAngle = _curProgressAngle;
     
-    if (_state != GIMBAL_STATE_STANDBY) {
-        Serial.printf("[Gimbal] State changed from %d to STANDBY\n", _state);
-        _state = GIMBAL_STATE_STANDBY;
-        _maxDegPerSec = 3.0f;
+    if (_state != GIMBAL_STATE_HOLD) {
+        log_i("[Gimbal] State changed from %d to HOLD (Stationary at Az:%.1f, Inc:%.1f, Prog:%.1f)", 
+              _state, _curAzAngle, _curInclineAngle, _curProgressAngle);
+        _state = GIMBAL_STATE_HOLD;
         setLEDsByState();
     }
 }
@@ -149,22 +195,27 @@ void GimbalController::processLerp(float dt) {
     };
 
     lerpStep(_curAzAngle, _tarAzAngle);
-    lerpStep(_curElAngle, _tarElAngle);
-    lerpStep(_curAltAngle, _tarAltAngle);
+    lerpStep(_curInclineAngle, _tarInclineAngle);
+    lerpStep(_curProgressAngle, _tarProgressAngle);
 }
 
 void GimbalController::updateHardwareServos() {
     if (!_isOnline) return;
-    _servo.setServoAngle(GIMBAL_CH_AZ, (uint8_t)constrain(_curAzAngle, 0, 180));
-    _servo.setServoAngle(GIMBAL_CH_EL, (uint8_t)constrain(_curElAngle, 0, 180));
-    _servo.setServoAngle(GIMBAL_CH_ALT, (uint8_t)constrain(_curAltAngle, 0, 180));
+    uint8_t a0 = (uint8_t)constrain(_curAzAngle, 0, 180);
+    uint8_t a1 = (uint8_t)constrain(_curInclineAngle, 0, 180);
+    uint8_t a2 = (uint8_t)constrain(_curProgressAngle, 0, 180);
+
+    static uint8_t s_last0 = 255, s_last1 = 255, s_last2 = 255;
+    if (a0 != s_last0) { _servo.setServoAngle(GIMBAL_CH_AZ, a0); s_last0 = a0; }
+    if (a1 != s_last1) { _servo.setServoAngle(GIMBAL_CH_INCLINE, a1); s_last1 = a1; }
+    if (a2 != s_last2) { _servo.setServoAngle(GIMBAL_CH_PROGRESS, a2); s_last2 = a2; }
 }
 
 void GimbalController::setLEDsByState() {
     if (!_isOnline) return;
     switch (_state) {
         case GIMBAL_STATE_INITIALIZING:
-            // 自检：金黄色循环流水
+            // 自检：金黄色
             for (int i = 0; i < 8; i++) {
                 _servo.setLEDColor(i, 0xFF7A00);
             }
@@ -202,21 +253,32 @@ void GimbalController::tick() {
     float dt = (now - _lastTick) / 1000.0f;
     _lastTick = now;
     if (dt <= 0.0f) dt = 0.001f;
-    if (dt > 0.5f) dt = 0.5f; // 防止系统在重计算等大卡顿时角度跳变
+    if (dt > 0.5f) dt = 0.5f; // 防止大卡顿时跳变
     
     if (_isOnline) {
-        // 自检动画结束后才能转为普通状态
+        // 开机自检对齐：开机前 8 秒死死锁定在 90 度，不响应任何其他指令
         if (_state == GIMBAL_STATE_INITIALIZING) {
-            // 开机慢速滑行归中
+            _curAzAngle = 90.0f;
+            _curInclineAngle = 90.0f;
+            _curProgressAngle = 90.0f;
             _tarAzAngle = 90.0f;
-            _tarElAngle = 90.0f;
-            _tarAltAngle = 90.0f;
-            _maxDegPerSec = 1.5f; // 极慢
-            processLerp(dt);
+            _tarInclineAngle = 90.0f;
+            _tarProgressAngle = 90.0f;
             updateHardwareServos();
             
-            if (fabs(_curAzAngle - 90.0f) < 1.0f && fabs(_curElAngle - 90.0f) < 1.0f) {
-                _state = GIMBAL_STATE_STANDBY;
+            unsigned long elapsed = now - _initStartTime;
+            if (elapsed < 8000) {
+                if (now - _lastLogTick > 1000) {
+                    _lastLogTick = now;
+                    int rem = (8000 - elapsed) / 1000;
+                    log_i("[Gimbal] >>> INITIALIZING: 3-Axis Locked at 90° for Alignment (Remaining: %d s) <<<", rem);
+                }
+            } else {
+                log_i("[Gimbal] Initialization complete! System is in HOLD (All 3-Axis Locked at 90°).");
+                _state = GIMBAL_STATE_HOLD;
+                _tarAzAngle = 90.0f;
+                _tarInclineAngle = 90.0f;
+                _tarProgressAngle = 90.0f;
                 setLEDsByState();
             }
         } else {
@@ -246,25 +308,28 @@ void GimbalController::tick() {
         }
     }
     
-    // 周期性调试日志 (每1000毫秒)
-    if (now - _lastLogTick > 1000) {
+    // 周期性状态日志 (每1500毫秒)
+    if (now - _lastLogTick > 1500) {
         _lastLogTick = now;
         if (_isOnline) {
             if (_state == GIMBAL_STATE_TRACKING) {
-                Serial.printf("[Gimbal] TRACKING | Target -> Az:%.1f, El:%.1f, Alt:%.1f | Out -> Az:%.1f, El:%.1f, Alt:%.1f | Curr: %.0fmA\n",
-                    _tarAzAngle, _tarElAngle, _tarAltAngle, _curAzAngle, _curElAngle, _curAltAngle, _currentmA);
+                log_i("[Gimbal] TRACKING | Target Arch -> BaseAz:%.1f, Incline:%.1f, Prog:%.1f | Out -> Az:%.1f, Inc:%.1f, Prog:%.1f",
+                    _tarAzAngle, _tarInclineAngle, _tarProgressAngle, _curAzAngle, _curInclineAngle, _curProgressAngle);
             } else if (_state == GIMBAL_STATE_PREPOINT) {
-                Serial.printf("[Gimbal] PREPOINT | Target AOS -> Az:%.1f | Out -> Az:%.1f, El:%.1f | Curr: %.0fmA\n",
-                    _tarAzAngle, _curAzAngle, _curElAngle, _currentmA);
-            } else if (_state == GIMBAL_STATE_STANDBY) {
-                Serial.printf("[Gimbal] STANDBY | Out -> Az:%.1f, El:%.1f, Alt:%.1f | Curr: %.0fmA\n",
-                    _curAzAngle, _curElAngle, _curAltAngle, _currentmA);
-            } else if (_state == GIMBAL_STATE_INITIALIZING) {
-                Serial.printf("[Gimbal] INITIALIZING | Out -> Az:%.1f, El:%.1f, Alt:%.1f\n",
-                    _curAzAngle, _curElAngle, _curAltAngle);
+                log_i("[Gimbal] PREPOINT | Target -> BaseAz:%.1f, Incline:%.1f | Out -> Az:%.1f, Inc:%.1f, Prog:%.1f",
+                    _tarAzAngle, _tarInclineAngle, _curAzAngle, _curInclineAngle, _curProgressAngle);
+            } else if (_state == GIMBAL_STATE_STANDBY || _state == GIMBAL_STATE_HOLD) {
+                log_i("[Gimbal] HOLD | Stationary at -> Az:%.1f, Inc:%.1f, Prog:%.1f",
+                    _curAzAngle, _curInclineAngle, _curProgressAngle);
             }
         } else {
-            Serial.println("[Gimbal] OFFLINE");
+            static unsigned long lastOfflineLog = 0;
+            if (now - lastOfflineLog > 5000) {
+                lastOfflineLog = now;
+                log_i("[Gimbal] OFFLINE (Check Grove port wiring)");
+            }
         }
     }
 }
+
+

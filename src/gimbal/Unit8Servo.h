@@ -5,6 +5,8 @@
 #include <Wire.h>
 
 #define UNIT_8SERVO_DEFAULT_ADDR        0x25
+#define PCA9685_DEFAULT_ADDR            0x40
+
 #define UNIT_8SERVO_MODE_REG            0x00
 #define UNIT_8SERVO_OUTPUT_CTL_REG      0x10
 #define UNIT_8SERVO_DIGITAL_INPUT_REG   0x20
@@ -18,6 +20,16 @@
 #define UNIT_8SERVO_BOOTLOADER_REG      0xFD
 #define UNIT_8SERVO_FW_VERSION_REG      0xFE
 #define UNIT_8SERVO_I2C_ADDR_REG        0xFF
+
+#define PCA9685_MODE1_REG               0x00
+#define PCA9685_PRESCALE_REG            0xFE
+#define PCA9685_LED0_ON_L_REG           0x06
+
+typedef enum {
+    DRIVER_TYPE_NONE = 0,
+    DRIVER_TYPE_UNIT8SERVO, // M5Stack Unit 8Servos (0x25)
+    DRIVER_TYPE_PCA9685     // M5Stack Module SERVO2 (0x40)
+} servo_driver_type_t;
 
 typedef enum {
     DIGITAL_INPUT_MODE = 0,
@@ -39,15 +51,18 @@ private:
     TwoWire *_wire;
     uint8_t _sda;
     uint8_t _scl;
+    servo_driver_type_t _driverType;
 
     bool writeBytes(uint8_t reg, const uint8_t *buffer, uint8_t length);
     bool readBytes(uint8_t reg, uint8_t *buffer, uint8_t length);
+    bool initPCA9685();
 
 public:
-    Unit8Servo(uint8_t addr = UNIT_8SERVO_DEFAULT_ADDR);
+    Unit8Servo(uint8_t addr = 0);
     
-    bool begin(TwoWire *wire = &Wire, uint8_t sda = 2, uint8_t scl = 1, uint32_t freq = 400000);
+    bool begin(TwoWire *wire = &Wire, uint8_t sda = 2, uint8_t scl = 1, uint32_t freq = 100000);
     bool isConnected();
+    servo_driver_type_t getDriverType() const { return _driverType; }
 
     bool setAllPinMode(servo_pin_mode_t mode);
     bool setPinMode(uint8_t pin, servo_pin_mode_t mode);
@@ -66,3 +81,4 @@ public:
 };
 
 #endif
+
