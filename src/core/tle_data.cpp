@@ -133,6 +133,55 @@ TLEData TLEManager::getNGRST_TLE() {
     return ngrst;
 }
 
+TLEData TLEManager::getHerschel_TLE() {
+    TLEData herschel;
+    herschel.name = "HERSCHEL";
+    
+    // 动态生成接近当前系统时间的历元（Epoch），避免 dsspace 解析器卡看门狗，并使 GP Age 显示为 0d 左右。
+    time_t now = time(nullptr);
+    if (now < 1700000000) {
+        now = 1785096183;
+    }
+    struct tm* tm_utc = gmtime(&now);
+    int year = tm_utc->tm_year % 100; // 两位年份，例如 26
+    int yday = tm_utc->tm_yday + 1;   // 一年中的天数，1~366
+    
+    char l1_buf[80];
+    // 目录号 34937，国际标识符 2009-026A -> 09026A
+    snprintf(l1_buf, sizeof(l1_buf), "1 34937U 09026A   %02d%03d.00000000  .00000000  00000-0  00000-0 0  999", year, yday);
+    
+    // 计算 Line 1 校验和
+    int sum = 0;
+    for (int i = 0; i < 68; i++) {
+        char c = l1_buf[i];
+        if (c >= '0' && c <= '9') sum += (c - '0');
+        else if (c == '-') sum += 1;
+    }
+    l1_buf[68] = '0' + (sum % 10);
+    l1_buf[69] = '\0';
+    
+    herschel.line1 = String(l1_buf);
+    
+    // Line 2 原始串（日-地 L2 利萨如轨道模拟，周期约 1 年，与 JWST 相同）
+    herschel.line2 = "2 34937  23.4392   0.0000 0000000   0.0000   0.0000  0.00273700    00";
+    
+    // 计算 Line 2 校验和并补齐
+    sum = 0;
+    for (int i = 0; i < 68; i++) {
+        char c = herschel.line2[i];
+        if (c >= '0' && c <= '9') sum += (c - '0');
+        else if (c == '-') sum += 1;
+    }
+    char l2_buf[80];
+    strncpy(l2_buf, herschel.line2.c_str(), 68);
+    l2_buf[68] = '0' + (sum % 10);
+    l2_buf[69] = '\0';
+    herschel.line2 = String(l2_buf);
+    
+    herschel.baseScore = 0;
+    return herschel;
+}
+
 TLEData TLEManager::getSO50_TLE() {
     TLEData so50;
     so50.name = "SO-50";

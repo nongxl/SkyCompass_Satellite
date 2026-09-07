@@ -307,9 +307,15 @@ void autoAssignIconAndColor(const String& name, SatIconType& icon, uint16_t& col
         color = TFT_RED;
     }
     // 6. Telescope / Observatories
-    else if (nameUpper.indexOf("HUBBLE") != -1 || nameUpper.indexOf("JWST") != -1 || nameUpper.indexOf("ROMAN") != -1 || nameUpper.indexOf("NGRST") != -1 || nameUpper.indexOf("TELESCOPE") != -1) {
+    else if (nameUpper.indexOf("HUBBLE") != -1 || nameUpper.indexOf("JWST") != -1 || nameUpper.indexOf("ROMAN") != -1 || nameUpper.indexOf("NGRST") != -1 || nameUpper.indexOf("HERSCHEL") != -1 || nameUpper.indexOf("TELESCOPE") != -1) {
         icon = ICON_TELESCOPE;
-        color = (nameUpper.indexOf("ROMAN") != -1 || nameUpper.indexOf("NGRST") != -1) ? TFT_MAGENTA : TFT_CYAN;
+        if (nameUpper.indexOf("ROMAN") != -1 || nameUpper.indexOf("NGRST") != -1) {
+            color = TFT_MAGENTA;
+        } else if (nameUpper.indexOf("HERSCHEL") != -1) {
+            color = TFT_YELLOW;
+        } else {
+            color = TFT_CYAN;
+        }
     }
     // 7. Communication
     else if (nameUpper.indexOf("IRIDIUM") != -1 || nameUpper.indexOf("STARLINK") != -1 || nameUpper.indexOf("ONEWEB") != -1 || nameUpper.indexOf("SO-") != -1 || nameUpper.indexOf("AO-") != -1) {
@@ -2311,6 +2317,16 @@ void networkTaskImpl(void* parameter) {
                 updated = true;
                 continue;
             }
+            if (noradId == 34937) {
+                // Herschel uses hardcoded TLE — no network needed
+                TLEData hTle = TLEManager::getHerschel_TLE();
+                lockSatMutex();
+                g_satellites[i].tle  = hTle;
+                g_satellites[i].calc.init(hTle);
+                unlockSatMutex();
+                updated = true;
+                continue;
+            }
 
             TLEData cached;
             uint32_t cacheTime = 0;
@@ -2949,6 +2965,7 @@ void setup() {
                     else if (norad == 20580) g_satellites[i].tle = TLEManager::getHubble_TLE();
                     else if (norad == 50463) g_satellites[i].tle = TLEManager::getJWST_TLE();
                     else if (norad == 100532) g_satellites[i].tle = TLEManager::getNGRST_TLE();
+                    else if (norad == 34937) g_satellites[i].tle = TLEManager::getHerschel_TLE();
                     else if (norad == 27607) g_satellites[i].tle = TLEManager::getSO50_TLE();
                     else if (norad == 43017) g_satellites[i].tle = TLEManager::getAO91_TLE();
                     unlockSatMutex();
@@ -3851,6 +3868,20 @@ void drawSatSelectPage() {
                     snprintf(statusBuf, sizeof(statusBuf), "\nEstado: En transito a L2 (Llegada fin de sep 2026)");
                 } else {
                     snprintf(statusBuf, sizeof(statusBuf), "\nStatus: In-transit to L2 (Arrival late Sep 2026)");
+                }
+                specBlock += String(statusBuf);
+            }
+            
+            if (selSat.noradId == 34937) {
+                char statusBuf[96];
+                if (currL == LANG_ZH) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\n运行状态: 已退役(液氦耗尽停止工作)");
+                } else if (currL == LANG_JA) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\n運用状態: 退役(液体ヘリウム枯渇)");
+                } else if (currL == LANG_ES) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\nEstado: Retirado (Helio agotado)");
+                } else {
+                    snprintf(statusBuf, sizeof(statusBuf), "\nStatus: Retired (Helium depleted)");
                 }
                 specBlock += String(statusBuf);
             }

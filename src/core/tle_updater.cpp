@@ -165,6 +165,10 @@ bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle, WiFiClient* shar
         outTle = TLEManager::getNGRST_TLE();
         return true;
     }
+    if (noradId == 34937) {
+        outTle = TLEManager::getHerschel_TLE();
+        return true;
+    }
     
     OrbitRecord record;
     int httpCode = 0;
