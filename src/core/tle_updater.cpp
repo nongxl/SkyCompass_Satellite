@@ -14,8 +14,12 @@ void TLEUpdater::begin() {
 
 static uint32_t parseTleEpoch(const String& line1) {
     if (line1.length() < 32) return 0;
-    String yrStr = line1.substring(18, 20);
-    String dayStr = line1.substring(20, 32);
+    int offset = 0;
+    if (line1.length() >= 9 && line1[8] == 'U') {
+        offset = 1; // 容错非标 6 位目录号导致的 1 列后移
+    }
+    String yrStr = line1.substring(18 + offset, 20 + offset);
+    String dayStr = line1.substring(20 + offset, 32 + offset);
     int yr = yrStr.toInt();
     double days = dayStr.toDouble();
     
@@ -155,6 +159,10 @@ bool TLEUpdater::saveToCache(int noradId, const TLEData& tle, uint32_t timestamp
 bool TLEUpdater::fetchFromNetwork(int noradId, TLEData& outTle, WiFiClient* sharedClient, String* outError) {
     if (noradId == 50463) {
         outTle = TLEManager::getJWST_TLE();
+        return true;
+    }
+    if (noradId == 100532) {
+        outTle = TLEManager::getNGRST_TLE();
         return true;
     }
     

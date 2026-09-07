@@ -19,6 +19,7 @@ public:
     static TLEData getTiangong_TLE();
     static TLEData getHubble_TLE();
     static TLEData getJWST_TLE();
+    static TLEData getNGRST_TLE();
     static TLEData getSO50_TLE();
     static TLEData getAO91_TLE();
     

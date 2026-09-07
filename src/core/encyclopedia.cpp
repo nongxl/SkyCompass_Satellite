@@ -109,6 +109,27 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         false  // defaultSelected
     },
+    // 100532 NGRST (Roman Space Telescope)
+    {
+        100532,
+        "NGRST (Roman)",
+        Category::ASTRONOMY,
+        ICON_TELESCOPE,
+        "南希·格蕾丝·罗曼空间望远镜（原WFIRST）。NASA研制的大视场红外巡天望远镜，2026年8月30日由猎鹰重型发射，正奔赴日-地L2点（预计9月底入轨）。视场为哈勃的100倍，用于探测暗能量、系外行星及验证广义相对论时空曲率。",
+        "Nancy Grace Roman Space Telescope (NGRST, formerly WFIRST). Launched Aug 30, 2026, cruising to Sun-Earth L2 (arrival late Sep). NASA's wide-field IR observatory has a 100x Hubble FOV to explore dark energy, exoplanets, and spacetime curvature.",
+        "ナンシー・グレース・ローマン宇宙望遠鏡（NGRST、旧WFIRST）。2026年8月30日にFalcon Heavyで打ち上げられ太陽-地球L2点へ巡航中（9月下旬投入予定）。ハッブルの100倍の視野で暗黒エネルギーや系外惑星を探査する。",
+        "Telescopio Espacial Nancy Grace Roman (NGRST, antes WFIRST). Lanzado el 30 de ago de 2026, en transito a L2 Sol-Tierra (llegada fin de sep). Observatorio infrarrojo con campo 100x mayor que Hubble para estudiar energia oscura y exoplanetas.",
+        FLAG_SCIENCE,
+        TFT_MAGENTA,
+        0,
+        10.0,
+        SAT_TYPE_VISUAL,
+        "",
+        "",
+        "",
+        "",
+        false  // defaultSelected
+    },
     // 53807 BlueWalker 3
     {
         53807,

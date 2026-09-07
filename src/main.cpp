@@ -143,8 +143,12 @@ SunCalculator* sun_calc = nullptr;
 // 全局变量定义
 static uint32_t parseTleEpoch(const String& line1) {
     if (line1.length() < 32) return 0;
-    String yrStr = line1.substring(18, 20);
-    String dayStr = line1.substring(20, 32);
+    int offset = 0;
+    if (line1.length() >= 9 && line1[8] == 'U') {
+        offset = 1; // 容错非标 6 位目录号导致的 1 列后移
+    }
+    String yrStr = line1.substring(18 + offset, 20 + offset);
+    String dayStr = line1.substring(20 + offset, 32 + offset);
     int yr = yrStr.toInt();
     double days = dayStr.toDouble();
     
@@ -303,9 +307,9 @@ void autoAssignIconAndColor(const String& name, SatIconType& icon, uint16_t& col
         color = TFT_RED;
     }
     // 6. Telescope / Observatories
-    else if (nameUpper.indexOf("HUBBLE") != -1 || nameUpper.indexOf("JWST") != -1 || nameUpper.indexOf("TELESCOPE") != -1) {
+    else if (nameUpper.indexOf("HUBBLE") != -1 || nameUpper.indexOf("JWST") != -1 || nameUpper.indexOf("ROMAN") != -1 || nameUpper.indexOf("NGRST") != -1 || nameUpper.indexOf("TELESCOPE") != -1) {
         icon = ICON_TELESCOPE;
-        color = TFT_CYAN;
+        color = (nameUpper.indexOf("ROMAN") != -1 || nameUpper.indexOf("NGRST") != -1) ? TFT_MAGENTA : TFT_CYAN;
     }
     // 7. Communication
     else if (nameUpper.indexOf("IRIDIUM") != -1 || nameUpper.indexOf("STARLINK") != -1 || nameUpper.indexOf("ONEWEB") != -1 || nameUpper.indexOf("SO-") != -1 || nameUpper.indexOf("AO-") != -1) {
@@ -671,7 +675,7 @@ void getRepresentativeOrbitParams(const String& line2, float& inclination, float
 }
 String recentLaunchErrorMsg = "";
 bool recentLaunchBypassed = false;
-const int MAX_SATELLITES = 70;
+const int MAX_SATELLITES = 75;
 SatRealtimeCache g_satCaches[MAX_SATELLITES];
 int NUM_BUILTIN_SATELLITES = 0;
 int NUM_SATELLITES = 0;
@@ -2297,6 +2301,16 @@ void networkTaskImpl(void* parameter) {
                 updated = true;
                 continue;
             }
+            if (noradId == 100532) {
+                // NGRST (Roman) uses hardcoded TLE — no network needed
+                TLEData rTle = TLEManager::getNGRST_TLE();
+                lockSatMutex();
+                g_satellites[i].tle  = rTle;
+                g_satellites[i].calc.init(rTle);
+                unlockSatMutex();
+                updated = true;
+                continue;
+            }
 
             TLEData cached;
             uint32_t cacheTime = 0;
@@ -2934,6 +2948,7 @@ void setup() {
                     else if (norad == 48274) g_satellites[i].tle = TLEManager::getTiangong_TLE();
                     else if (norad == 20580) g_satellites[i].tle = TLEManager::getHubble_TLE();
                     else if (norad == 50463) g_satellites[i].tle = TLEManager::getJWST_TLE();
+                    else if (norad == 100532) g_satellites[i].tle = TLEManager::getNGRST_TLE();
                     else if (norad == 27607) g_satellites[i].tle = TLEManager::getSO50_TLE();
                     else if (norad == 43017) g_satellites[i].tle = TLEManager::getAO91_TLE();
                     unlockSatMutex();
@@ -3822,6 +3837,20 @@ void drawSatSelectPage() {
                     snprintf(statusBuf, sizeof(statusBuf), "\nEstado: Inactivo/Silencioso");
                 } else {
                     snprintf(statusBuf, sizeof(statusBuf), "\nStatus: Inactive/Silent");
+                }
+                specBlock += String(statusBuf);
+            }
+            
+            if (selSat.noradId == 100532) {
+                char statusBuf[96];
+                if (currL == LANG_ZH) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\n运行状态: 往L2转移轨道巡航中(预计9月底入轨)");
+                } else if (currL == LANG_JA) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\n運用状態: 地球-L2遷移軌道巡航中(9月下旬投入予定)");
+                } else if (currL == LANG_ES) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\nEstado: En transito a L2 (Llegada fin de sep 2026)");
+                } else {
+                    snprintf(statusBuf, sizeof(statusBuf), "\nStatus: In-transit to L2 (Arrival late Sep 2026)");
                 }
                 specBlock += String(statusBuf);
             }
