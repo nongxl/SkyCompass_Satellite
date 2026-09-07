@@ -206,10 +206,10 @@ struct NetworkActiveGuard {
     ~NetworkActiveGuard() { g_networkActive = false; }
 };
 
-// 内存安全检查阈值：ESP32-S3 Wi-Fi 驱动底层需要内部 DMA RAM 分配 4 个 RX buffer
-// 启动任务栈（8-10KB）+ Wi-Fi 协议栈 (~35-40KB) + HTTP 解析至少需要保证 48KB 可用堆和 28KB 连续块
-static const size_t MIN_SAFE_HEAP_FOR_NETWORK = 48000;
-static const size_t MIN_SAFE_BLOCK_FOR_NETWORK = 28000;
+// 内存安全检查阈值：确保有足够内部 RAM 分配任务栈 (8-10KB) 与 Wi-Fi 驱动 RX buffer
+// 任务栈需要连续 8-10KB (MaxBlock >= 12KB)，总可用堆至少保持在 38KB 以上
+static const size_t MIN_SAFE_HEAP_FOR_NETWORK = 38000;
+static const size_t MIN_SAFE_BLOCK_FOR_NETWORK = 12000;
 
 inline bool isSystemMemorySafeForNetwork() {
     size_t freeH = ESP.getFreeHeap();
@@ -3234,15 +3234,6 @@ void drawSatSelectPage() {
         return TFT_LIGHTGRAY;
     };
 
-    if (!g_networkActive) {
-        if (downloadErrorMsg == I18N::get(TXT_SYS_BUSY)) {
-            downloadErrorMsg = "";
-        }
-        if (recentLaunchErrorMsg == I18N::get(TXT_SYS_BUSY)) {
-            recentLaunchErrorMsg = "";
-        }
-    }
-
     static bool lastDownloading = false;
     if (lastDownloading && !recentLaunchDownloading) {
         recentLaunchDownloadFinishedMs = millis();
@@ -5439,10 +5430,12 @@ void loop() {
                         if (justC && currentSatTab == TAB_ENCYCLOPEDIA && satSelectedIndex >= 0 && satSelectedIndex < NUM_SATELLITES) {
                             if (g_networkActive) {
                                 downloadErrorMsg = I18N::get(TXT_SYS_BUSY);
+                                downloadFinishedMs = millis();
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
                             } else if (!isSystemMemorySafeForNetwork()) {
                                 downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
+                                downloadFinishedMs = millis();
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
                             } else {
@@ -5452,6 +5445,7 @@ void loop() {
                                 BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 8192, (void*)(intptr_t)satSelectedIndex, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
+                                    downloadFinishedMs = millis();
                                     drawSatSelectPage();
                                     pushCanvasWithFilter();
                                 }
@@ -5459,11 +5453,13 @@ void loop() {
                         } else if (!justC) { // Prevent C from triggering WiFi toggle in other tabs
                             if (g_networkActive) {
                                 downloadErrorMsg = I18N::get(TXT_SYS_BUSY);
+                                downloadFinishedMs = millis();
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
                             } else if (!HalWifi::isConnected()) {
                                 if (!isSystemMemorySafeForNetwork()) {
                                     downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
+                                    downloadFinishedMs = millis();
                                     drawSatSelectPage();
                                     pushCanvasWithFilter();
                                 } else {
@@ -5474,6 +5470,7 @@ void loop() {
                                     BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 10240, NULL, 1, NULL, 0);
                                     if (res != pdPASS) {
                                         downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
+                                        downloadFinishedMs = millis();
                                         drawSatSelectPage();
                                         pushCanvasWithFilter();
                                     }
@@ -5482,6 +5479,9 @@ void loop() {
                                 WiFi.disconnect(true);
                                 WiFi.mode(WIFI_OFF);
                                 downloadErrorMsg = I18N::get(TXT_WIFI_DISCONNECTED);
+                                downloadFinishedMs = millis();
+                                drawSatSelectPage();
+                                pushCanvasWithFilter();
                             }
                         }
                     }
@@ -5597,10 +5597,12 @@ void loop() {
                             if ((noradInput.length() == 5 || noradInput.length() == 6) && !isDownloadingCustom) {
                                 if (g_networkActive) {
                                     downloadErrorMsg = I18N::get(TXT_SYS_BUSY);
+                                    downloadFinishedMs = millis();
                                     drawSatSelectPage();
                                     pushCanvasWithFilter();
                                 } else if (!isSystemMemorySafeForNetwork()) {
                                     downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
+                                    downloadFinishedMs = millis();
                                     drawSatSelectPage();
                                     pushCanvasWithFilter();
                                 } else {
@@ -5614,6 +5616,9 @@ void loop() {
                                     if (res != pdPASS) {
                                         isDownloadingCustom = false;
                                         downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
+                                        downloadFinishedMs = millis();
+                                        drawSatSelectPage();
+                                        pushCanvasWithFilter();
                                     }
                                 }
                             }

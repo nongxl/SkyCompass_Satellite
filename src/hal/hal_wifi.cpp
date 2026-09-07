@@ -10,7 +10,7 @@ void HalWifi::begin(const char* ssid, const char* password) {
     
     // 内存安全防护：ESP32 Wi-Fi 底层驱动启动需要分配内部 DMA RX 缓冲
     // 若可用堆或最大连续块严重不足，强行初始化会导致 esp_wifi_init 257 (NO_MEM) 崩溃
-    if (ESP.getFreeHeap() < 38000 || ESP.getMaxAllocHeap() < 24000) {
+    if (ESP.getFreeHeap() < 30000 || ESP.getMaxAllocHeap() < 8000) {
         LOG_W("APP", "WiFi begin aborted: insufficient memory (Free: %u, MaxBlock: %u)", 
               (unsigned int)ESP.getFreeHeap(), (unsigned int)ESP.getMaxAllocHeap());
         return;
