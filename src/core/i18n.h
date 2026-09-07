@@ -162,6 +162,7 @@ enum TextId {
     
     // Status Feedback / Error Msg / Banner info
     TXT_SYS_BUSY,
+    TXT_LOW_MEMORY,
     TXT_TASK_INIT_FAILED,
     TXT_CONNECTING_WIFI,
     TXT_WIFI_DISCONNECTED,

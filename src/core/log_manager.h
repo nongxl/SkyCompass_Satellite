@@ -5,6 +5,8 @@
 #include <esp32-hal-log.h>
 
 #define LOG_I(tag, format, ...) log_i("[%s] " format, tag, ##__VA_ARGS__)
+#define LOG_W(tag, format, ...) log_w("[%s] " format, tag, ##__VA_ARGS__)
+#define LOG_E(tag, format, ...) log_e("[%s] " format, tag, ##__VA_ARGS__)
 
 /**
  * @brief 日志管理器类

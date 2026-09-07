@@ -205,6 +205,22 @@ struct NetworkActiveGuard {
     NetworkActiveGuard() { g_networkActive = true; }
     ~NetworkActiveGuard() { g_networkActive = false; }
 };
+
+// 内存安全检查阈值：ESP32-S3 Wi-Fi 驱动底层需要内部 DMA RAM 分配 4 个 RX buffer
+// 启动任务栈（8-10KB）+ Wi-Fi 协议栈 (~35-40KB) + HTTP 解析至少需要保证 48KB 可用堆和 28KB 连续块
+static const size_t MIN_SAFE_HEAP_FOR_NETWORK = 48000;
+static const size_t MIN_SAFE_BLOCK_FOR_NETWORK = 28000;
+
+inline bool isSystemMemorySafeForNetwork() {
+    size_t freeH = ESP.getFreeHeap();
+    size_t maxB = ESP.getMaxAllocHeap();
+    if (freeH < MIN_SAFE_HEAP_FOR_NETWORK || maxB < MIN_SAFE_BLOCK_FOR_NETWORK) {
+        LOG_W("APP", "Insufficient memory for network ops! Free: %u, MaxBlock: %u", (unsigned int)freeH, (unsigned int)maxB);
+        return false;
+    }
+    return true;
+}
+
 extern TaskHandle_t predictorTaskHandle;
 
 struct PredictorTaskSuspendGuard {
@@ -3043,7 +3059,7 @@ void setup() {
             
             // Start network task on Core 0 to handle WiFi and TLE fetching in background
             manualWifiToggle = false;
-            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
+            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 10240, NULL, 1, NULL, 0);
 
             g_loadingStatusText = (currL_boot == LANG_ZH) ? "加载完成，准备就绪！" : ((currL_boot == LANG_JA) ? "ロード完了、準備完了！" : ((currL_boot == LANG_ES) ? "¡Listo!" : "Ready!"));
             g_loadingProgress = 100;
@@ -5073,10 +5089,14 @@ void loop() {
                 } else if (justW) {
                     if (!g_networkActive) {
                         if (!HalWifi::isConnected()) {
-                            manualWifiToggle = true;
-                            BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
-                            if (res != pdPASS) {
-                                LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
+                            if (!isSystemMemorySafeForNetwork()) {
+                                LOG_W("APP", "Cannot start NetworkTask from main view: insufficient memory");
+                            } else {
+                                manualWifiToggle = true;
+                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 10240, NULL, 1, NULL, 0);
+                                if (res != pdPASS) {
+                                    LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
+                                }
                             }
                         } else {
                             WiFi.disconnect(true);
@@ -5281,7 +5301,7 @@ void loop() {
                             
                             manualWifiToggle = true; // Stay connected since user explicitly set it up
                             BaseType_t res = xTaskCreatePinnedToCore(
-                                networkTask, "NetworkTask", 16384, params, 1, NULL, 0
+                                networkTask, "NetworkTask", 10240, params, 1, NULL, 0
                             );
                             if (res != pdPASS) {
                                 LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
@@ -5389,6 +5409,12 @@ void loop() {
                             recentLaunchDownloadFinishedMs = millis();
                             drawSatSelectPage();
                             pushCanvasWithFilter();
+                        } else if (!isSystemMemorySafeForNetwork()) {
+                            recentLaunchErrorMsg = I18N::get(TXT_LOW_MEMORY);
+                            recentLaunchDownloadSuccess = false;
+                            recentLaunchDownloadFinishedMs = millis();
+                            drawSatSelectPage();
+                            pushCanvasWithFilter();
                         } else if (!recentLaunchDownloading) {
                             if (justC) {
                                 if (LittleFS.exists("/recent_last_update.txt")) {
@@ -5415,6 +5441,10 @@ void loop() {
                                 downloadErrorMsg = I18N::get(TXT_SYS_BUSY);
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
+                            } else if (!isSystemMemorySafeForNetwork()) {
+                                downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
+                                drawSatSelectPage();
+                                pushCanvasWithFilter();
                             } else {
                                 downloadErrorMsg = I18N::get(TXT_REFRESHING_GP);
                                 drawSatSelectPage();
@@ -5432,15 +5462,21 @@ void loop() {
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
                             } else if (!HalWifi::isConnected()) {
-                                manualWifiToggle = true;
-                                downloadErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
-                                drawSatSelectPage();
-                                pushCanvasWithFilter();
-                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
-                                if (res != pdPASS) {
-                                    downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
+                                if (!isSystemMemorySafeForNetwork()) {
+                                    downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
                                     drawSatSelectPage();
                                     pushCanvasWithFilter();
+                                } else {
+                                    manualWifiToggle = true;
+                                    downloadErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
+                                    drawSatSelectPage();
+                                    pushCanvasWithFilter();
+                                    BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 10240, NULL, 1, NULL, 0);
+                                    if (res != pdPASS) {
+                                        downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
+                                        drawSatSelectPage();
+                                        pushCanvasWithFilter();
+                                    }
                                 }
                             } else {
                                 WiFi.disconnect(true);
@@ -5559,16 +5595,26 @@ void loop() {
                             satSelectedIndex = 0;
                         } else if (justEnter) {
                             if ((noradInput.length() == 5 || noradInput.length() == 6) && !isDownloadingCustom) {
-                                isDownloadingCustom = true;
-                                downloadErrorMsg = "";
-                                drawSatSelectPage();
-                                pushCanvasWithFilter();
-                                
-                                int id = noradInput.toInt();
-                                BaseType_t res = xTaskCreatePinnedToCore(downloadCustomSatTask, "DownloadCustomSatTask", 8192, (void*)(intptr_t)id, 1, NULL, 0);
-                                if (res != pdPASS) {
-                                    isDownloadingCustom = false;
-                                    downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
+                                if (g_networkActive) {
+                                    downloadErrorMsg = I18N::get(TXT_SYS_BUSY);
+                                    drawSatSelectPage();
+                                    pushCanvasWithFilter();
+                                } else if (!isSystemMemorySafeForNetwork()) {
+                                    downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
+                                    drawSatSelectPage();
+                                    pushCanvasWithFilter();
+                                } else {
+                                    isDownloadingCustom = true;
+                                    downloadErrorMsg = "";
+                                    drawSatSelectPage();
+                                    pushCanvasWithFilter();
+                                    
+                                    int id = noradInput.toInt();
+                                    BaseType_t res = xTaskCreatePinnedToCore(downloadCustomSatTask, "DownloadCustomSatTask", 8192, (void*)(intptr_t)id, 1, NULL, 0);
+                                    if (res != pdPASS) {
+                                        isDownloadingCustom = false;
+                                        downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
+                                    }
                                 }
                             }
                         } else {

@@ -52,24 +52,7 @@ bool GimbalController::begin(TwoWire *wire, uint8_t sda, uint8_t scl, uint32_t f
 }
 
 void GimbalController::updateStatus() {
-    if (millis() - _lastStatusTick > 3000) {
-        _lastStatusTick = millis();
-        // 在线状态下保持总线纯净，不进行高频侵入式探测；仅在掉线时尝试探测重连
-        if (!_isOnline) {
-            bool conn = _servo.isConnected();
-            if (conn) {
-                _isOnline = true;
-                _servo.setAllPinMode(SERVO_CTL_MODE);
-                _fwVersion = _servo.getFirmwareVersion();
-                // 恢复位置
-                _servo.setServoAngle(GIMBAL_CH_AZ, (uint8_t)constrain(_curAzAngle, 0, 180));
-                _servo.setServoAngle(GIMBAL_CH_INCLINE, (uint8_t)constrain(_curInclineAngle, 0, 180));
-                _servo.setServoAngle(GIMBAL_CH_PROGRESS, (uint8_t)constrain(_curProgressAngle, 0, 180));
-                setLEDsByState();
-                log_i("[Gimbal] Hardware re-connected!");
-            }
-        }
-    }
+    // 仅在硬件在线时维护状态，离线时不进行任何I2C侵入式重连探测
 }
 
 void GimbalController::calculateArchAngles(float baseAz, float maxEl, float progressDeg, float &outAz, float &outIncline, float &outProgress) {
@@ -247,6 +230,11 @@ void GimbalController::setLEDsByState() {
 }
 
 void GimbalController::tick() {
+    // 若开机未检测到舵机硬件或硬件离线，完全退出，不进行任何I2C总线探测和CPU运算
+    if (!_isOnline) {
+        return;
+    }
+    
     updateStatus();
     
     unsigned long now = millis();
@@ -255,54 +243,52 @@ void GimbalController::tick() {
     if (dt <= 0.0f) dt = 0.001f;
     if (dt > 0.5f) dt = 0.5f; // 防止大卡顿时跳变
     
-    if (_isOnline) {
-        // 开机自检对齐：开机前 8 秒死死锁定在 90 度，不响应任何其他指令
-        if (_state == GIMBAL_STATE_INITIALIZING) {
-            _curAzAngle = 90.0f;
-            _curInclineAngle = 90.0f;
-            _curProgressAngle = 90.0f;
+    // 开机自检对齐：开机前 8 秒死死锁定在 90 度，不响应任何其他指令
+    if (_state == GIMBAL_STATE_INITIALIZING) {
+        _curAzAngle = 90.0f;
+        _curInclineAngle = 90.0f;
+        _curProgressAngle = 90.0f;
+        _tarAzAngle = 90.0f;
+        _tarInclineAngle = 90.0f;
+        _tarProgressAngle = 90.0f;
+        updateHardwareServos();
+        
+        unsigned long elapsed = now - _initStartTime;
+        if (elapsed < 8000) {
+            if (now - _lastLogTick > 1000) {
+                _lastLogTick = now;
+                int rem = (8000 - elapsed) / 1000;
+                log_i("[Gimbal] >>> INITIALIZING: 3-Axis Locked at 90° for Alignment (Remaining: %d s) <<<", rem);
+            }
+        } else {
+            log_i("[Gimbal] Initialization complete! System is in HOLD (All 3-Axis Locked at 90°).");
+            _state = GIMBAL_STATE_HOLD;
             _tarAzAngle = 90.0f;
             _tarInclineAngle = 90.0f;
             _tarProgressAngle = 90.0f;
-            updateHardwareServos();
+            setLEDsByState();
+        }
+    } else {
+        processLerp(dt);
+        updateHardwareServos();
+        
+        // 针对预瞄准等状态进行周期LED状态呼吸
+        static unsigned long lastBreathe = 0;
+        static float breatheDir = 1.0f;
+        static float breatheVal = 0.5f;
+        if (now - lastBreathe > 40) {
+            lastBreathe = now;
+            breatheVal += breatheDir * 0.03f;
+            if (breatheVal >= 1.0f) { breatheVal = 1.0f; breatheDir = -1.0f; }
+            else if (breatheVal <= 0.2f) { breatheVal = 0.2f; breatheDir = 1.0f; }
             
-            unsigned long elapsed = now - _initStartTime;
-            if (elapsed < 8000) {
-                if (now - _lastLogTick > 1000) {
-                    _lastLogTick = now;
-                    int rem = (8000 - elapsed) / 1000;
-                    log_i("[Gimbal] >>> INITIALIZING: 3-Axis Locked at 90° for Alignment (Remaining: %d s) <<<", rem);
-                }
-            } else {
-                log_i("[Gimbal] Initialization complete! System is in HOLD (All 3-Axis Locked at 90°).");
-                _state = GIMBAL_STATE_HOLD;
-                _tarAzAngle = 90.0f;
-                _tarInclineAngle = 90.0f;
-                _tarProgressAngle = 90.0f;
-                setLEDsByState();
-            }
-        } else {
-            processLerp(dt);
-            updateHardwareServos();
-            
-            // 针对预瞄准等状态进行周期LED状态呼吸
-            static unsigned long lastBreathe = 0;
-            static float breatheDir = 1.0f;
-            static float breatheVal = 0.5f;
-            if (now - lastBreathe > 40) {
-                lastBreathe = now;
-                breatheVal += breatheDir * 0.03f;
-                if (breatheVal >= 1.0f) { breatheVal = 1.0f; breatheDir = -1.0f; }
-                else if (breatheVal <= 0.2f) { breatheVal = 0.2f; breatheDir = 1.0f; }
-                
-                if (_state == GIMBAL_STATE_PREPOINT) {
-                    // 呼吸橙色
-                    uint8_t r = (uint8_t)(255 * breatheVal);
-                    uint8_t g = (uint8_t)(69 * breatheVal);
-                    uint32_t color = ((uint32_t)r << 16) | ((uint32_t)g << 8);
-                    for (int i = 0; i < 8; i++) {
-                        _servo.setLEDColor(i, color);
-                    }
+            if (_state == GIMBAL_STATE_PREPOINT) {
+                // 呼吸橙色
+                uint8_t r = (uint8_t)(255 * breatheVal);
+                uint8_t g = (uint8_t)(69 * breatheVal);
+                uint32_t color = ((uint32_t)r << 16) | ((uint32_t)g << 8);
+                for (int i = 0; i < 8; i++) {
+                    _servo.setLEDColor(i, color);
                 }
             }
         }
@@ -311,23 +297,15 @@ void GimbalController::tick() {
     // 周期性状态日志 (每1500毫秒)
     if (now - _lastLogTick > 1500) {
         _lastLogTick = now;
-        if (_isOnline) {
-            if (_state == GIMBAL_STATE_TRACKING) {
-                log_i("[Gimbal] TRACKING | Target Arch -> BaseAz:%.1f, Incline:%.1f, Prog:%.1f | Out -> Az:%.1f, Inc:%.1f, Prog:%.1f",
-                    _tarAzAngle, _tarInclineAngle, _tarProgressAngle, _curAzAngle, _curInclineAngle, _curProgressAngle);
-            } else if (_state == GIMBAL_STATE_PREPOINT) {
-                log_i("[Gimbal] PREPOINT | Target -> BaseAz:%.1f, Incline:%.1f | Out -> Az:%.1f, Inc:%.1f, Prog:%.1f",
-                    _tarAzAngle, _tarInclineAngle, _curAzAngle, _curInclineAngle, _curProgressAngle);
-            } else if (_state == GIMBAL_STATE_STANDBY || _state == GIMBAL_STATE_HOLD) {
-                log_i("[Gimbal] HOLD | Stationary at -> Az:%.1f, Inc:%.1f, Prog:%.1f",
-                    _curAzAngle, _curInclineAngle, _curProgressAngle);
-            }
-        } else {
-            static unsigned long lastOfflineLog = 0;
-            if (now - lastOfflineLog > 5000) {
-                lastOfflineLog = now;
-                log_i("[Gimbal] OFFLINE (Check Grove port wiring)");
-            }
+        if (_state == GIMBAL_STATE_TRACKING) {
+            log_i("[Gimbal] TRACKING | Target Arch -> BaseAz:%.1f, Incline:%.1f, Prog:%.1f | Out -> Az:%.1f, Inc:%.1f, Prog:%.1f",
+                _tarAzAngle, _tarInclineAngle, _tarProgressAngle, _curAzAngle, _curInclineAngle, _curProgressAngle);
+        } else if (_state == GIMBAL_STATE_PREPOINT) {
+            log_i("[Gimbal] PREPOINT | Target -> BaseAz:%.1f, Incline:%.1f | Out -> Az:%.1f, Inc:%.1f, Prog:%.1f",
+                _tarAzAngle, _tarInclineAngle, _curAzAngle, _curInclineAngle, _curProgressAngle);
+        } else if (_state == GIMBAL_STATE_STANDBY || _state == GIMBAL_STATE_HOLD) {
+            log_i("[Gimbal] HOLD | Stationary at -> Az:%.1f, Inc:%.1f, Prog:%.1f",
+                _curAzAngle, _curInclineAngle, _curProgressAngle);
         }
     }
 }

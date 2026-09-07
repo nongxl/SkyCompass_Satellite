@@ -159,6 +159,7 @@ static const char* const t_en[TXT_MAX] = {
     
     // Status Feedback / Error Msg / Banner info
     "System Busy... Wait.",
+    "Low Memory, please wait...",
     "Task Init Failed!",
     "Connecting WiFi...",
     "WiFi Disconnected.",
@@ -328,6 +329,7 @@ static const char* const t_zh[TXT_MAX] = {
     
     // Status Feedback / Error Msg / Banner info
     "系统繁忙，请稍候...",
+    "内存不足，请稍候...",
     "任务初始化失败！",
     "正在连接无线网络...",
     "无线网络已断开。",
@@ -497,6 +499,7 @@ static const char* const t_ja[TXT_MAX] = {
     
     // Status Feedback / Error Msg / Banner info
     "システム処理中...",
+    "メモリ不足，お待ちください...",
     "タスク初期化失敗！",
     "WiFi接続中...",
     "WiFi切断。",
@@ -666,6 +669,7 @@ static const char* const t_es[TXT_MAX] = {
     
     // Status Feedback / Error Msg / Banner info
     "Sistema ocupado... Espere.",
+    "Memoria baja, espere...",
     "Error al iniciar tarea!",
     "Conectando a WiFi...",
     "WiFi desconectado.",
