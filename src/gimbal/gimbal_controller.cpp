@@ -60,22 +60,23 @@ void GimbalController::calculateArchAngles(float baseAz, float maxEl, float prog
     while (baseAz < 0) baseAz += 360.0f;
     while (baseAz >= 360.0f) baseAz -= 360.0f;
 
-    // 俯视屏幕与俯视浑仪几何严格一致：
-    // 开机 90° 时长梁横跨正东(3点)-正西(9点)。
-    // 航迹基准角 baseAz (0°=正北/12点, 90°=正东/3点, 180°=正南/6点, 270°=正西/9点)
-    // 舵机物理特性：给 90° 时长梁指向东西(3点-9点)，给 0° 时顺时针转至正北(12点-6点)，给 180° 时转至对侧。
-    // 因此，以 90°(正东) 为基准时的物理长梁方位输出为：outAz = fmod(baseAz, 180.0f)
-    // 针对机械舵机旋转方向与罗盘顺逆时针相反的物理特性，沿南北轴解除镜像：
-    float azMod = fmod(baseAz, 180.0f);
-    if (azMod < 0.0f) azMod += 180.0f;
-    outAz = 180.0f - azMod;
-
-    // 滑块飞行方向（恢复为顺向 progressDeg，从 7点西南飞向 1点东北）：
-    outProgress = progressDeg;
-
-    // 拱门倾角：开机 90° 为垂直天顶，当前朝向右边时需要向左倾斜：
-    // 当最大仰角为 maxEl (如45°) 时，朝向左边对应的舵机输出为 maxEl (0°~90°)
-    outIncline = constrain(maxEl, 0.0f, 90.0f);
+    // 180° 对称折叠与刚体联动补偿算法：
+    // 白色长梁两端对称，只能旋转 0°~180°。
+    // 当 baseAz 在对向半球 (> 180°) 时，长梁物理掉头 180°，因此安装在梁上的 CH1(倾角) 和 CH2(滑块) 必须同步翻转，
+    // 从而保证空间绝对朝向（拱门倾斜侧向、卫星升起滑向降落的方向）100% 恒定不变！
+    if (baseAz <= 180.0f) {
+        // 正向半球 (0° ~ 180°)
+        outAz = 180.0f - baseAz;
+        outIncline = constrain(maxEl, 0.0f, 90.0f);
+        outProgress = progressDeg;
+    } else {
+        // 对向半球 (180° ~ 360°)，长梁掉头折叠到对侧补角：
+        outAz = 180.0f - (baseAz - 180.0f); // 即 360.0f - baseAz
+        // 因为长梁原地旋转了 180°，左右侧向翻转，CH1 拱门倾角必须反相翻转到对侧：
+        outIncline = constrain(180.0f - maxEl, 90.0f, 180.0f);
+        // 因为长梁两端掉头，起落点对调，CH2 卫星滑块必须反向推进以保持空间顺向飞行：
+        outProgress = 180.0f - progressDeg;
+    }
 
     // 硬件限位保护
     outAz = constrain(outAz, 0.0f, 180.0f);
