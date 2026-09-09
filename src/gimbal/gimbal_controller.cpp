@@ -65,13 +65,13 @@ void GimbalController::calculateArchAngles(float baseAz, float maxEl, float prog
     // 航迹基准角 baseAz (0°=正北/12点, 90°=正东/3点, 180°=正南/6点, 270°=正西/9点)
     // 舵机物理特性：给 90° 时长梁指向东西(3点-9点)，给 0° 时顺时针转至正北(12点-6点)，给 180° 时转至对侧。
     // 因此，以 90°(正东) 为基准时的物理长梁方位输出为：outAz = fmod(baseAz, 180.0f)
-    // 为确保屏幕上看到的 7点->1点 轨道在浑仪上同样呈现 7点->1点：
+    // 针对机械舵机旋转方向与罗盘顺逆时针相反的物理特性，沿南北轴解除镜像：
     float azMod = fmod(baseAz, 180.0f);
     if (azMod < 0.0f) azMod += 180.0f;
-    outAz = azMod;
+    outAz = 180.0f - azMod;
 
-    // 滑块进度（从 0° AOS 起飞端滑向 180° LOS 降落端）：
-    outProgress = progressDeg;
+    // 滑块飞行方向反转（与长梁解除镜像后同步，确保从 7点飞向 1点）：
+    outProgress = 180.0f - progressDeg;
 
     // 拱门倾角：最大仰角直接映射，限制在 0° - 90° 之间
     outIncline = constrain(maxEl, 0.0f, 90.0f);
