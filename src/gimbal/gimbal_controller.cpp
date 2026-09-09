@@ -60,21 +60,19 @@ void GimbalController::calculateArchAngles(float baseAz, float maxEl, float prog
     while (baseAz < 0) baseAz += 360.0f;
     while (baseAz >= 360.0f) baseAz -= 360.0f;
 
-    // 白色横梁两端对称（A端初始指向3点东，B端初始指向9点西，CH2从A滑向B）
-    // 物理舵机逆时针增加与罗盘顺时针相反，因此物理映射存在镜像反相关系：
-    // 当升起方位 AOS Az 在 [0°, 180°] 时（偏东半球升起）：
-    //   A端直接指向升起方位，经极性反相映射：outAz = 180.0f - baseAz
-    //   滑块从 A端 (0°) 顺向滑到 B端 (180°)：outProgress = progressDeg
-    // 当升起方位 AOS Az 在 (180°, 360°) 时（偏西半球升起，如 DFH-1 从 7点钟西南升起）：
-    //   由于舵机行程限制，横梁转至对侧补角，使 B端指向升起方位：outAz = 180.0f - (baseAz - 180.0f) = 360.0f - baseAz
-    //   此时卫星从 B端 (180°) 升起滑向 A端 (0°)，滑块必须反向滑行：outProgress = 180.0f - progressDeg
+    // 白色横梁两端对称覆盖 360° 走向：
+    // 横梁轴线由 0°~180° 完全确定：
+    //   当基准方位 baseAz <= 180° 时，长梁直接指向 baseAz；
+    //   当 baseAz > 180° 时，对称对侧走向为 baseAz - 180°。
     if (baseAz <= 180.0f) {
-        outAz = 180.0f - baseAz;
-        outProgress = progressDeg;
+        outAz = baseAz;
     } else {
-        outAz = 360.0f - baseAz;
-        outProgress = 180.0f - progressDeg;
+        outAz = baseAz - 180.0f;
     }
+    
+    // 滑块进度（从 0° AOS 起飞滑向 180° LOS 降落）：
+    // 之前反转为 (180 - progressDeg) 导致卫星倒着飞（东北->西南），现修正为正向飞行
+    outProgress = progressDeg;
 
     // 拱门倾角：最大仰角直接映射，限制在 0° - 90° 之间
     outIncline = constrain(maxEl, 0.0f, 90.0f);
