@@ -6567,6 +6567,16 @@ void loop() {
         // Update 3-axis Gimbal Targets based on active sat view focus
         if (gimbal.isOnline()) {
             if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+                if (!g_satCaches[focusSatIndex].lastGeoValid) {
+                    double tx = 0, ty = 0, tz = 0;
+                    if (g_satellites[focusSatIndex].calc.getTEME(simTime, tx, ty, tz)) {
+                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(simTime));
+                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                        g_satCaches[focusSatIndex].lastGeo = CoordTransform::ecefToGeodetic(ecef);
+                        g_satCaches[focusSatIndex].lastGeoValid = true;
+                    }
+                }
+                
                 if (g_satCaches[focusSatIndex].lastGeoValid) {
                     GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
                     ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_satCaches[focusSatIndex].lastGeo);

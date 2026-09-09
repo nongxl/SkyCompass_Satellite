@@ -271,27 +271,6 @@ void GimbalController::tick() {
     } else {
         processLerp(dt);
         updateHardwareServos();
-        
-        // 针对预瞄准等状态进行周期LED状态呼吸
-        static unsigned long lastBreathe = 0;
-        static float breatheDir = 1.0f;
-        static float breatheVal = 0.5f;
-        if (now - lastBreathe > 40) {
-            lastBreathe = now;
-            breatheVal += breatheDir * 0.03f;
-            if (breatheVal >= 1.0f) { breatheVal = 1.0f; breatheDir = -1.0f; }
-            else if (breatheVal <= 0.2f) { breatheVal = 0.2f; breatheDir = 1.0f; }
-            
-            if (_state == GIMBAL_STATE_PREPOINT) {
-                // 呼吸橙色
-                uint8_t r = (uint8_t)(255 * breatheVal);
-                uint8_t g = (uint8_t)(69 * breatheVal);
-                uint32_t color = ((uint32_t)r << 16) | ((uint32_t)g << 8);
-                for (int i = 0; i < 8; i++) {
-                    _servo.setLEDColor(i, color);
-                }
-            }
-        }
     }
     
     // 周期性状态日志 (每1500毫秒)
