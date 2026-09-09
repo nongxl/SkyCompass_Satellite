@@ -70,14 +70,16 @@ void GimbalController::calculateArchAngles(float baseAz, float maxEl, float prog
     if (azMod < 0.0f) azMod += 180.0f;
     outAz = 180.0f - azMod;
 
-    // 滑块飞行方向反转（与长梁解除镜像后同步，确保从 7点飞向 1点）：
-    outProgress = 180.0f - progressDeg;
+    // 滑块飞行方向（恢复为顺向 progressDeg，从 7点西南飞向 1点东北）：
+    outProgress = progressDeg;
 
-    // 拱门倾角：最大仰角直接映射，限制在 0° - 90° 之间
-    outIncline = constrain(maxEl, 0.0f, 90.0f);
+    // 拱门倾角：开机 90° 为垂直天顶，原先 0°~90° 导致拱门倾斜朝向反面（东北侧）；
+    // 现反相为 (180° - maxEl)，让拱门准确倾斜倒向西南侧（定位点左边）：
+    outIncline = constrain(180.0f - maxEl, 90.0f, 180.0f);
 
     // 硬件限位保护
     outAz = constrain(outAz, 0.0f, 180.0f);
+    outIncline = constrain(outIncline, 0.0f, 180.0f);
     outProgress = constrain(outProgress, 0.0f, 180.0f);
 }
 
