@@ -233,8 +233,8 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                 continue;
             }
             
-            // AOS condition: reaches 10 degrees elevation
-            if (el >= 10.0) {
+            // AOS condition: reaches horizon (el >= 0.0 degrees)
+            if (el >= 0.0) {
                 double east  = -sin_lon * dx + cos_lon * dy;
                 double north = -sin_lat * cos_lon * dx - sin_lat * sin_lon * dy + cos_lat * dz;
                 double az = atan2(east, north) * 180.0 / PI_VAL;
