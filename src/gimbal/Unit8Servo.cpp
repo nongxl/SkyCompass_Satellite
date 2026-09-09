@@ -151,11 +151,31 @@ bool Unit8Servo::setServoAngle(uint8_t pin, uint8_t angle) {
 }
 
 bool Unit8Servo::setServoPulse(uint8_t pin, uint16_t pulse) {
-    if (pin > 7) return false;
-    uint8_t data[2];
-    data[0] = pulse & 0xFF;         // 低位
-    data[1] = (pulse >> 8) & 0xFF;  // 高位
-    return writeBytes(UNIT_8SERVO_SERVO_PULSE_16B_REG + pin * 2, data, 2);
+    if (pulse < 500) pulse = 500;
+    if (pulse > 2500) pulse = 2500;
+
+    if (_driverType == DRIVER_TYPE_PCA9685) {
+        if (pin > 15) return false;
+        // 50Hz 周期为 20000us，对应 PCA9685 4096 个计数刻度
+        // ticks = round(pulse * 4096 / 20000) = round(pulse * 0.2048)
+        uint16_t offCount = (uint16_t)(((uint32_t)pulse * 4096 + 10000) / 20000);
+        if (offCount > 4095) offCount = 4095;
+
+        uint8_t reg = PCA9685_LED0_ON_L_REG + 4 * pin;
+        _wire->beginTransmission(_addr);
+        _wire->write(reg);
+        _wire->write(0x00); // ON_L
+        _wire->write(0x00); // ON_H
+        _wire->write((uint8_t)(offCount & 0xFF));        // OFF_L
+        _wire->write((uint8_t)((offCount >> 8) & 0x0F)); // OFF_H
+        return (_wire->endTransmission() == 0);
+    } else {
+        if (pin > 7) return false;
+        uint8_t data[2];
+        data[0] = pulse & 0xFF;         // 低位
+        data[1] = (pulse >> 8) & 0xFF;  // 高位
+        return writeBytes(UNIT_8SERVO_SERVO_PULSE_16B_REG + pin * 2, data, 2);
+    }
 }
 
 bool Unit8Servo::setPWM(uint8_t pin, uint8_t pwm) {

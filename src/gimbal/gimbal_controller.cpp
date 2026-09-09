@@ -32,10 +32,10 @@ bool GimbalController::begin(TwoWire *wire, uint8_t sda, uint8_t scl, uint32_t f
         _tarInclineAngle = 90.0f;
         _tarProgressAngle = 90.0f;
         
-        // 立即向硬件下发 90 度控制信号锁定零位
-        _servo.setServoAngle(GIMBAL_CH_AZ, 90);
-        _servo.setServoAngle(GIMBAL_CH_INCLINE, 90);
-        _servo.setServoAngle(GIMBAL_CH_PROGRESS, 90);
+        // 立即向硬件下发 1500us (90 度中位) 控制信号锁定零位
+        _servo.setServoPulse(GIMBAL_CH_AZ, 1500);
+        _servo.setServoPulse(GIMBAL_CH_INCLINE, 1500);
+        _servo.setServoPulse(GIMBAL_CH_PROGRESS, 1500);
         
         _state = GIMBAL_STATE_INITIALIZING;
         _initStartTime = millis();
@@ -163,35 +163,55 @@ void GimbalController::setHold() {
 void GimbalController::processLerp(float dt) {
     float maxStep = _maxDegPerSec * dt;
     
-    auto lerpStep = [&](float &cur, float tar) {
+    // 真线性恒速插补：以恒定线速度向目标移动，无非线性指数衰减，转动平滑且匀速
+    auto linearStep = [&](float &cur, float tar) {
         float diff = tar - cur;
-        if (fabs(diff) > 0.05f) {
-            // 平滑滤波
-            float step = diff * _lerpFactor;
-            // 速度饱和限制
-            if (step > maxStep) step = maxStep;
-            else if (step < -maxStep) step = -maxStep;
-            cur += step;
+        if (fabs(diff) > 0.02f) {
+            if (diff > maxStep) {
+                cur += maxStep;
+            } else if (diff < -maxStep) {
+                cur -= maxStep;
+            } else {
+                cur = tar;
+            }
         } else {
             cur = tar;
         }
     };
 
-    lerpStep(_curAzAngle, _tarAzAngle);
-    lerpStep(_curInclineAngle, _tarInclineAngle);
-    lerpStep(_curProgressAngle, _tarProgressAngle);
+    linearStep(_curAzAngle, _tarAzAngle);
+    linearStep(_curInclineAngle, _tarInclineAngle);
+    linearStep(_curProgressAngle, _tarProgressAngle);
 }
 
 void GimbalController::updateHardwareServos() {
     if (!_isOnline) return;
-    uint8_t a0 = (uint8_t)constrain(_curAzAngle, 0, 180);
-    uint8_t a1 = (uint8_t)constrain(_curInclineAngle, 0, 180);
-    uint8_t a2 = (uint8_t)constrain(_curProgressAngle, 0, 180);
 
-    static uint8_t s_last0 = 255, s_last1 = 255, s_last2 = 255;
-    if (a0 != s_last0) { _servo.setServoAngle(GIMBAL_CH_AZ, a0); s_last0 = a0; }
-    if (a1 != s_last1) { _servo.setServoAngle(GIMBAL_CH_INCLINE, a1); s_last1 = a1; }
-    if (a2 != s_last2) { _servo.setServoAngle(GIMBAL_CH_PROGRESS, a2); s_last2 = a2; }
+    // 将浮点角度 [0.0°, 180.0°] 映射为高精度微秒级脉冲 [500us, 2500us]
+    // 2000 个细分台阶，相比 8-bit 整数角度 (180 阶) 分辨率提升 11 倍
+    auto angleToPulse = [](float deg) -> uint16_t {
+        float clamped = constrain(deg, 0.0f, 180.0f);
+        return (uint16_t)(500.0f + (clamped / 180.0f) * 2000.0f + 0.5f);
+    };
+
+    uint16_t p0 = angleToPulse(_curAzAngle);
+    uint16_t p1 = angleToPulse(_curInclineAngle);
+    uint16_t p2 = angleToPulse(_curProgressAngle);
+
+    static uint16_t s_lastP0 = 0, s_lastP1 = 0, s_lastP2 = 0;
+    // 采用 2us 动态死区（约 0.18° 变动阈值），既保证极致细腻丝滑，又避免无意义的 I2C 总线频繁刷写
+    if (abs((int)p0 - (int)s_lastP0) >= 2) {
+        _servo.setServoPulse(GIMBAL_CH_AZ, p0);
+        s_lastP0 = p0;
+    }
+    if (abs((int)p1 - (int)s_lastP1) >= 2) {
+        _servo.setServoPulse(GIMBAL_CH_INCLINE, p1);
+        s_lastP1 = p1;
+    }
+    if (abs((int)p2 - (int)s_lastP2) >= 2) {
+        _servo.setServoPulse(GIMBAL_CH_PROGRESS, p2);
+        s_lastP2 = p2;
+    }
 }
 
 void GimbalController::setLEDsByState() {
