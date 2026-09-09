@@ -73,9 +73,9 @@ void GimbalController::calculateArchAngles(float baseAz, float maxEl, float prog
     // 滑块飞行方向（恢复为顺向 progressDeg，从 7点西南飞向 1点东北）：
     outProgress = progressDeg;
 
-    // 拱门倾角：开机 90° 为垂直天顶，原先 0°~90° 导致拱门倾斜朝向反面（东北侧）；
-    // 现反相为 (180° - maxEl)，让拱门准确倾斜倒向西南侧（定位点左边）：
-    outIncline = constrain(180.0f - maxEl, 90.0f, 180.0f);
+    // 拱门倾角：开机 90° 为垂直天顶，当前朝向右边时需要向左倾斜：
+    // 当最大仰角为 maxEl (如45°) 时，朝向左边对应的舵机输出为 maxEl (0°~90°)
+    outIncline = constrain(maxEl, 0.0f, 90.0f);
 
     // 硬件限位保护
     outAz = constrain(outAz, 0.0f, 180.0f);
