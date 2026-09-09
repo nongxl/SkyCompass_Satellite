@@ -6692,9 +6692,10 @@ void loop() {
                         unlockPassMutex();
                         
                         // 增强防护：若预计算列表中尚未包含（例如后台正在重算），直接对当前聚焦卫星就地向前推算最近过境
+                        // 注意：若用户正在按键调节时间 (lastTimeAdjustMillis != 0)，严禁执行耗时推算，保证调时绝对丝滑
                         if (!foundNext) {
                             static int s_cachedFocusSat = -1;
-                            static uint32_t s_lastProbeTime = 0;
+                            static uint32_t s_lastProbeMs = 0;
                             static uint32_t s_cachedNextAos = 0;
                             static float s_cachedAosAz = 90.0f;
                             static float s_cachedNextMaxEl = 45.0f;
@@ -6702,7 +6703,7 @@ void loop() {
                             if (s_cachedFocusSat != focusSatIndex) {
                                 s_cachedFocusSat = focusSatIndex;
                                 s_cachedNextAos = 0;
-                                s_lastProbeTime = 0;
+                                s_lastProbeMs = 0;
                             }
                             
                             if (s_cachedNextAos > currentSimTime) {
@@ -6710,10 +6711,10 @@ void loop() {
                                 aosAz = s_cachedAosAz;
                                 nextMaxEl = s_cachedNextMaxEl;
                                 foundNext = true;
-                            } else if (currentSimTime - s_lastProbeTime > 5) {
-                                s_lastProbeTime = currentSimTime;
+                            } else if (lastTimeAdjustMillis == 0 && (millis() - s_lastProbeMs > 3000)) {
+                                s_lastProbeMs = millis();
                                 GeodeticCoord obsPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                                uint32_t probeT = currentSimTime + 30;
+                                uint32_t probeT = currentSimTime + 60;
                                 uint32_t probeEnd = currentSimTime + 6 * 3600; // 探测未来 6 小时
                                 bool probeInPass = false;
                                 float pAosAz = 0.0f;
@@ -6750,7 +6751,7 @@ void loop() {
                                             probeInPass = false;
                                         }
                                     }
-                                    probeT += 60; // 60秒快速巡航探测
+                                    probeT += 120; // 120秒快速巡航探测，计算量减半
                                 }
                             }
                         }
