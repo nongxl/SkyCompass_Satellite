@@ -60,18 +60,17 @@ void GimbalController::calculateArchAngles(float baseAz, float maxEl, float prog
     while (baseAz < 0) baseAz += 360.0f;
     while (baseAz >= 360.0f) baseAz -= 360.0f;
 
-    // 白色横梁两端对称覆盖 360° 走向：
-    // 横梁轴线由 0°~180° 完全确定：
-    //   当基准方位 baseAz <= 180° 时，长梁直接指向 baseAz；
-    //   当 baseAz > 180° 时，对称对侧走向为 baseAz - 180°。
-    if (baseAz <= 180.0f) {
-        outAz = baseAz;
-    } else {
-        outAz = baseAz - 180.0f;
-    }
-    
-    // 滑块进度（从 0° AOS 起飞滑向 180° LOS 降落）：
-    // 之前反转为 (180 - progressDeg) 导致卫星倒着飞（东北->西南），现修正为正向飞行
+    // 俯视屏幕与俯视浑仪几何严格一致：
+    // 开机 90° 时长梁横跨正东(3点)-正西(9点)。
+    // 航迹基准角 baseAz (0°=正北/12点, 90°=正东/3点, 180°=正南/6点, 270°=正西/9点)
+    // 舵机物理特性：给 90° 时长梁指向东西(3点-9点)，给 0° 时顺时针转至正北(12点-6点)，给 180° 时转至对侧。
+    // 因此，以 90°(正东) 为基准时的物理长梁方位输出为：outAz = fmod(baseAz, 180.0f)
+    // 为确保屏幕上看到的 7点->1点 轨道在浑仪上同样呈现 7点->1点：
+    float azMod = fmod(baseAz, 180.0f);
+    if (azMod < 0.0f) azMod += 180.0f;
+    outAz = azMod;
+
+    // 滑块进度（从 0° AOS 起飞端滑向 180° LOS 降落端）：
     outProgress = progressDeg;
 
     // 拱门倾角：最大仰角直接映射，限制在 0° - 90° 之间
@@ -117,7 +116,7 @@ void GimbalController::setTargetPrePointArch(float aosAz, float maxElevation) {
         log_i("[Gimbal] State changed from %d to PREPOINT (AOS Az: %.1f, MaxEl: %.1f)", 
               _state, aosAz, maxElevation);
         _state = GIMBAL_STATE_PREPOINT;
-        _maxDegPerSec = 3.0f; // 极慢角速度，静默预定目标
+        _maxDegPerSec = 12.0f; // 提升预瞄准转动速度（由 3°/s 提速到 12°/s），顺滑且快速就位
         setLEDsByState();
     }
 }
