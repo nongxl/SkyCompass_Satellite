@@ -6766,6 +6766,7 @@ void loop() {
                     static int s_trackingSatIndex = -1;
                     static bool s_inPassSession = false;
                     static PassEvent s_lockedPass;
+                    static float s_lockedHeading = 90.0f;
                     
                     // 切换聚焦卫星时，重置过境跟踪会话
                     if (s_trackingSatIndex != focusSatIndex) {
@@ -6874,6 +6875,8 @@ void loop() {
                                 s_lockedPass.aosTime = tAos;
                                 s_lockedPass.losTime = tLos;
                             }
+                            uint32_t tMid = (s_lockedPass.aosTime + s_lockedPass.losTime) / 2;
+                            s_lockedHeading = getSatTrackHeading(tMid);
                             s_inPassSession = true;
                         }
                         
@@ -6884,11 +6887,8 @@ void loop() {
                         ratio = constrain(ratio, 0.0f, 1.0f);
                         float progressDeg = ratio * 180.0f;
                         
-                        // 计算真实飞行航向角 Track Heading
-                        float trackHeading = getSatTrackHeading(currentSimTime);
-                        
                         // 下发刚性锁定的轨道航向走向、拱高与平滑进度（CH0 与 CH1 恒定不动，只有 CH2 平滑划过天际）
-                        gimbal.setTargetArch(trackHeading, s_lockedPass.maxElevation, progressDeg, s_lockedPass.maxAz);
+                        gimbal.setTargetArch(s_lockedHeading, s_lockedPass.maxElevation, progressDeg, s_lockedPass.maxAz);
                     } else {
                         // 2. 卫星在地平线以下：结束本次过境会话，寻找该卫星未来最早的下一次过境并预瞄准
                         s_inPassSession = false;
