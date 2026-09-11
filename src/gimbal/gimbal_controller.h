@@ -55,7 +55,7 @@ private:
 
     void updateHardwareServos();
     void processLerp(float dt);
-    void calculateArchAngles(float baseAz, float maxEl, float progressDeg, float maxAz, float &outAz, float &outIncline, float &outProgress);
+    void calculateArchAngles(float trackHeading, float maxEl, float progressDeg, float satAz, float &outAz, float &outIncline, float &outProgress);
     void updateStatus();
     void setLEDsByState();
 
@@ -65,9 +65,9 @@ public:
     bool begin(TwoWire *wire = &Wire, uint8_t sda = 2, uint8_t scl = 1, uint32_t freq = 400000);
     void tick();
     
-    // 轨道拱门专用输入接口
-    void setTargetArch(float baseAz, float maxElevation, float progressDeg, float maxAz = 90.0f);
-    void setTargetPrePointArch(float aosAz, float maxElevation, float maxAz = 90.0f);
+    // 轨道拱门专用输入接口 (trackHeading 为轨道天面飞行航向角，satAz 为卫星侧向方位角)
+    void setTargetArch(float trackHeading, float maxElevation, float progressDeg, float satAz = 90.0f);
+    void setTargetPrePointArch(float trackHeading, float maxElevation, float satAz = 90.0f);
     
     // 兼容传统输入接口
     void setTargetTrack(float realAz, float realEl, float realAltKm);

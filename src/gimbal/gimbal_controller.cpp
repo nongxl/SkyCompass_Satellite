@@ -55,24 +55,24 @@ void GimbalController::updateStatus() {
     // 仅在硬件在线时维护状态，离线时不进行任何I2C侵入式重连探测
 }
 
-void GimbalController::calculateArchAngles(float baseAz, float maxEl, float progressDeg, float maxAz, float &outAz, float &outIncline, float &outProgress) {
-    // 规范化 baseAz 到 [0, 360)
-    while (baseAz < 0) baseAz += 360.0f;
-    while (baseAz >= 360.0f) baseAz -= 360.0f;
+void GimbalController::calculateArchAngles(float trackHeading, float maxEl, float progressDeg, float satAz, float &outAz, float &outIncline, float &outProgress) {
+    // 规范化 trackHeading 到 [0, 360)
+    while (trackHeading < 0) trackHeading += 360.0f;
+    while (trackHeading >= 360.0f) trackHeading -= 360.0f;
     
-    // 规范化 maxAz 到 [0, 360)
-    while (maxAz < 0) maxAz += 360.0f;
-    while (maxAz >= 360.0f) maxAz -= 360.0f;
+    // 规范化 satAz 到 [0, 360)
+    while (satAz < 0) satAz += 360.0f;
+    while (satAz >= 360.0f) satAz -= 360.0f;
 
     // 1. CH1 理想空间侧向倾角计算 (Ideal Arch Incline)：
     // 实测物理规律：
     // CH1 = 90° 为天顶垂直立起；
     // CH1 < 90° 为向正北倾倒；
     // CH1 > 90° 为向正南倾倒。
-    // 最高点方位 maxAz: 若 cos(maxAz) >= 0 (即 maxAz 在 270°~90°，偏北天区)，则拱门倒向正北；
-    // 若 cos(maxAz) < 0 (maxAz 在 90°~270°，偏南天区)，则拱门倒向正南。
-    float maxAzRad = maxAz * 0.0174532925f; // DEG_TO_RAD
-    bool isLeaningNorth = (cosf(maxAzRad) >= 0.0f);
+    // 侧向判定 satAz: 若 cos(satAz) >= 0 (即 satAz 在 270°~90°，偏北天区)，则拱门倒向正北；
+    // 若 cos(satAz) < 0 (satAz 在 90°~270°，偏南天区)，则拱门倒向正南。
+    float satAzRad = satAz * 0.0174532925f; // DEG_TO_RAD
+    bool isLeaningNorth = (cosf(satAzRad) >= 0.0f);
     
     float clampedEl = constrain(maxEl, 0.0f, 90.0f);
     float idealIncline;
@@ -84,24 +84,25 @@ void GimbalController::calculateArchAngles(float baseAz, float maxEl, float prog
         idealIncline = 180.0f - clampedEl;
     }
 
-    // 2. CH0 (走向) 与长梁 180° 对向折叠刚体联动：
+    // 2. CH0 (长梁走向) 与航向 TrackHeading 严格对齐：
     // 实测物理规律：
     // CH0 = 180° 指向正北 (0°)；
     // CH0 = 90°  指向正东 (90°)；
     // CH0 = 0°   指向正南 (180°)。
-    // 线性方程：CH0 = 180° - Az
-    bool isOppositeHemisphere = (baseAz > 180.0f);
+    // 线性方程：CH0 = 180° - TrackHeading
+    bool isOppositeHemisphere = (trackHeading > 180.0f);
     if (!isOppositeHemisphere) {
-        // 正向东半球 (0° ~ 180°)：长梁指示端直对升起点
-        outAz = 180.0f - baseAz;
+        // 航向飞向东半球 (0° ~ 180°)：
+        // 长梁指示端指向去向 (Heading)，滑块 0° 位于来向，滑块向 180° 推进
+        outAz = 180.0f - trackHeading;
         outIncline = idealIncline;
-        outProgress = progressDeg; // 滑块从指示端(0°)顺向滑向(180°)
+        outProgress = progressDeg; // 滑块顺向推进 (0° -> 180°)
     } else {
-        // 对向西半球 (180° ~ 360°)：长梁掉头 180° 对齐升起点
-        outAz = 360.0f - baseAz; // 即 180° - (baseAz - 180°)
-        // 长梁掉头导致安装在其上的舵机底座左右/起止翻转，必须联动补角反相补偿：
+        // 航向飞向西半球 (180° ~ 360°)：
+        // 长梁掉头 180° 补偿，滑块反相推进
+        outAz = 360.0f - trackHeading; // 即 180° - (trackHeading - 180°)
         outIncline = 180.0f - idealIncline;
-        outProgress = 180.0f - progressDeg; // 滑块从远端(180°)滑向(0°)
+        outProgress = 180.0f - progressDeg; // 滑块从远端滑回 (180° -> 0°)
     }
 
     // 硬件限位保护
@@ -110,40 +111,40 @@ void GimbalController::calculateArchAngles(float baseAz, float maxEl, float prog
     outProgress = constrain(outProgress, 0.0f, 180.0f);
 }
 
-void GimbalController::setTargetArch(float baseAz, float maxElevation, float progressDeg, float maxAz) {
+void GimbalController::setTargetArch(float trackHeading, float maxElevation, float progressDeg, float satAz) {
     // 开机 90° 对齐自检期间受保护，严禁被打断
     if (_state == GIMBAL_STATE_INITIALIZING || _state == GIMBAL_STATE_TEST) return;
 
     float tarAz, tarIncline, tarProgress;
-    calculateArchAngles(baseAz, maxElevation, progressDeg, maxAz, tarAz, tarIncline, tarProgress);
+    calculateArchAngles(trackHeading, maxElevation, progressDeg, satAz, tarAz, tarIncline, tarProgress);
     
     _tarAzAngle = tarAz;
     _tarInclineAngle = tarIncline;
     _tarProgressAngle = tarProgress;
     
     if (_state != GIMBAL_STATE_TRACKING) {
-        log_i("[Gimbal] State changed from %d to TRACKING (Arch BaseAz: %.1f, MaxEl: %.1f, MaxAz: %.1f)", 
-              _state, baseAz, maxElevation, maxAz);
+        log_i("[Gimbal] State changed from %d to TRACKING (TrackHeading: %.1f, MaxEl: %.1f, SatAz: %.1f)", 
+              _state, trackHeading, maxElevation, satAz);
         _state = GIMBAL_STATE_TRACKING;
         _maxDegPerSec = 15.0f; // 跟踪模式下允许响应稍快
         setLEDsByState();
     }
 }
 
-void GimbalController::setTargetPrePointArch(float aosAz, float maxElevation, float maxAz) {
+void GimbalController::setTargetPrePointArch(float trackHeading, float maxElevation, float satAz) {
     // 开机 90° 对齐自检期间受保护，严禁被打断
     if (_state == GIMBAL_STATE_INITIALIZING || _state == GIMBAL_STATE_TEST) return;
 
     float tarAz, tarIncline, tarProgress;
-    calculateArchAngles(aosAz, maxElevation, 0.0f, maxAz, tarAz, tarIncline, tarProgress);
+    calculateArchAngles(trackHeading, maxElevation, 0.0f, satAz, tarAz, tarIncline, tarProgress);
     
     _tarAzAngle = tarAz;
     _tarInclineAngle = tarIncline;
     _tarProgressAngle = tarProgress; // 静止停在拱门起跑线 (0° 或 180°)
     
     if (_state != GIMBAL_STATE_PREPOINT) {
-        log_i("[Gimbal] State changed from %d to PREPOINT (AOS Az: %.1f, MaxEl: %.1f, MaxAz: %.1f)", 
-              _state, aosAz, maxElevation, maxAz);
+        log_i("[Gimbal] State changed from %d to PREPOINT (TrackHeading: %.1f, MaxEl: %.1f, SatAz: %.1f)", 
+              _state, trackHeading, maxElevation, satAz);
         _state = GIMBAL_STATE_PREPOINT;
         _maxDegPerSec = 12.0f; // 提升预瞄准转动速度，顺滑且快速就位
         setLEDsByState();

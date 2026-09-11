@@ -6788,10 +6788,42 @@ void loop() {
                         }
                     }
                     
+                    // 解算当前聚焦卫星在天平面的真实飞行航向角 Track Heading
+                    auto getSatTrackHeading = [&](uint32_t t) -> float {
+                        double x0 = 0, y0 = 0, z0 = 0;
+                        double x1 = 0, y1 = 0, z1 = 0;
+                        if (g_satellites[focusSatIndex].calc.getTEME(t, x0, y0, z0) &&
+                            g_satellites[focusSatIndex].calc.getTEME(t + 15, x1, y1, z1)) {
+                            double g0 = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
+                            double g1 = CoordTransform::getGMST(CoordTransform::unixToJulian(t + 15));
+                            ECEFCoord ec0 = CoordTransform::temeToECEF(x0, y0, z0, g0);
+                            ECEFCoord ec1 = CoordTransform::temeToECEF(x1, y1, z1, g1);
+                            GeodeticCoord obs = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                            TopocentricCoord tp0 = CoordTransform::ecefToTopocentric(obs, ec0);
+                            TopocentricCoord tp1 = CoordTransform::ecefToTopocentric(obs, ec1);
+                            
+                            float r0 = cosf(tp0.el * DEG_TO_RAD);
+                            float e0 = r0 * sinf(tp0.az * DEG_TO_RAD);
+                            float n0 = r0 * cosf(tp0.az * DEG_TO_RAD);
+                            
+                            float r1 = cosf(tp1.el * DEG_TO_RAD);
+                            float e1 = r1 * sinf(tp1.az * DEG_TO_RAD);
+                            float n1 = r1 * cosf(tp1.az * DEG_TO_RAD);
+                            
+                            float de = e1 - e0;
+                            float dn = n1 - n0;
+                            if (fabsf(de) > 1e-5f || fabsf(dn) > 1e-5f) {
+                                float hdg = atan2f(de, dn) * RAD_TO_DEG;
+                                if (hdg < 0.0f) hdg += 360.0f;
+                                return hdg;
+                            }
+                        }
+                        return 90.0f;
+                    };
+
                     if (isPassActive) {
-                        // 1. 卫星在过境中：锁定单一会话，CH0基准方位与CH1拱门倾角在整个过境期间绝对恒定，严禁任何跳变！
+                        // 1. 卫星在过境中：锁定单一会话，CH0基准走向与CH1拱门倾角在整个过境期间绝对恒定，严禁任何跳变！
                         if (!s_inPassSession) {
-                            // 刚进入本次过境：尝试从推荐列表中匹配过境事件
                             bool foundPass = false;
                             PassEvent activePass;
                             
@@ -6810,42 +6842,53 @@ void loop() {
                             if (foundPass && activePass.losTime > activePass.aosTime) {
                                 s_lockedPass = activePass;
                             } else {
-                                // 备用降级方案（如开机刚升起后台尚未完成预测）：刚性锁定当前几何方位与仰角，形成完整会话
+                                // 就地推算精准过境，避免错误固定当前坐标
                                 s_lockedPass.satName = g_satellites[focusSatIndex].name;
-                                s_lockedPass.startAz = realAz;
-                                s_lockedPass.maxElevation = max(realEl, 45.0f);
-                                s_lockedPass.aosTime = currentSimTime;
-                                s_lockedPass.losTime = currentSimTime + 600; // 默认10分钟
-                            }
-                            s_inPassSession = true;
-                        } else {
-                            // 已经在会话中：如果最初是降级估算的，后续在推荐列表中找到了更精准的过境，则平滑吸收时间范围，但基准方位绝不动摇
-                            if (s_lockedPass.losTime - s_lockedPass.aosTime == 600) {
-                                lockPassMutex();
-                                for (const auto& pass : recommendedPasses) {
-                                    if (pass.satName == g_satellites[focusSatIndex].name) {
-                                        if (currentSimTime >= (pass.aosTime > 60 ? pass.aosTime - 60 : 0) && currentSimTime <= pass.losTime + 60) {
-                                            s_lockedPass.aosTime = pass.aosTime;
-                                            s_lockedPass.losTime = pass.losTime;
-                                            s_lockedPass.startAz = pass.startAz;
-                                            s_lockedPass.maxElevation = pass.maxElevation;
-                                            break;
-                                        }
+                                s_lockedPass.maxElevation = max(realEl, 15.0f);
+                                s_lockedPass.maxAz = realAz;
+                                
+                                uint32_t tAos = currentSimTime;
+                                for (int k = 1; k <= 45; k++) {
+                                    uint32_t tb = currentSimTime - k * 20;
+                                    double bx=0, by=0, bz=0;
+                                    if (g_satellites[focusSatIndex].calc.getTEME(tb, bx, by, bz)) {
+                                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(tb));
+                                        ECEFCoord bec = CoordTransform::temeToECEF(bx, by, bz, gmst);
+                                        TopocentricCoord btp = CoordTransform::ecefToTopocentric(observerPos, bec);
+                                        if (btp.el < 0.0f) { tAos = tb; break; }
+                                        if (btp.el > s_lockedPass.maxElevation) { s_lockedPass.maxElevation = btp.el; s_lockedPass.maxAz = btp.az; }
                                     }
                                 }
-                                unlockPassMutex();
+                                uint32_t tLos = currentSimTime + 600;
+                                for (int k = 1; k <= 45; k++) {
+                                    uint32_t tf = currentSimTime + k * 20;
+                                    double fx=0, fy=0, fz=0;
+                                    if (g_satellites[focusSatIndex].calc.getTEME(tf, fx, fy, fz)) {
+                                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(tf));
+                                        ECEFCoord fec = CoordTransform::temeToECEF(fx, fy, fz, gmst);
+                                        TopocentricCoord ftp = CoordTransform::ecefToTopocentric(observerPos, fec);
+                                        if (ftp.el < 0.0f) { tLos = tf; break; }
+                                        if (ftp.el > s_lockedPass.maxElevation) { s_lockedPass.maxElevation = ftp.el; s_lockedPass.maxAz = ftp.az; }
+                                    }
+                                }
+                                s_lockedPass.aosTime = tAos;
+                                s_lockedPass.losTime = tLos;
                             }
+                            s_inPassSession = true;
                         }
                         
-                        // 计算过境进度 (0.0 -> 1.0 -> 0° -> 180°)
+                        // 计算过境平滑进度 (0.0 -> 1.0 -> 0° -> 180°)
                         float totalDur = (float)(s_lockedPass.losTime - s_lockedPass.aosTime);
                         if (totalDur < 30.0f) totalDur = 600.0f;
                         float ratio = (float)(currentSimTime - s_lockedPass.aosTime) / totalDur;
                         ratio = constrain(ratio, 0.0f, 1.0f);
                         float progressDeg = ratio * 180.0f;
                         
-                        // 下发刚性锁定的基准方位、拱高与平滑进度（CH0 与 CH1 恒定不动，只有 CH2 平滑划过天际）
-                        gimbal.setTargetArch(s_lockedPass.startAz, s_lockedPass.maxElevation, progressDeg, s_lockedPass.maxAz);
+                        // 计算真实飞行航向角 Track Heading
+                        float trackHeading = getSatTrackHeading(currentSimTime);
+                        
+                        // 下发刚性锁定的轨道航向走向、拱高与平滑进度（CH0 与 CH1 恒定不动，只有 CH2 平滑划过天际）
+                        gimbal.setTargetArch(trackHeading, s_lockedPass.maxElevation, progressDeg, s_lockedPass.maxAz);
                     } else {
                         // 2. 卫星在地平线以下：结束本次过境会话，寻找该卫星未来最早的下一次过境并预瞄准
                         s_inPassSession = false;
@@ -6936,7 +6979,8 @@ void loop() {
                         }
                         
                         if (foundNext) {
-                            gimbal.setTargetPrePointArch(aosAz, nextMaxEl, nextMaxAz);
+                            float nextHeading = getSatTrackHeading(earliestAos);
+                            gimbal.setTargetPrePointArch(nextHeading, nextMaxEl, nextMaxAz);
                         } else {
                             gimbal.setHold();
                         }
