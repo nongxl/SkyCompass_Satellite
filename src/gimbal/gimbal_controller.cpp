@@ -159,12 +159,64 @@ void GimbalController::setHold() {
     _tarInclineAngle = _curInclineAngle;
     _tarProgressAngle = _curProgressAngle;
     
-    if (_state != GIMBAL_STATE_HOLD) {
+    if (_state != GIMBAL_STATE_HOLD && _state != GIMBAL_STATE_TEST) {
         log_i("[Gimbal] State changed from %d to HOLD (Stationary at Az:%.1f, Inc:%.1f, Prog:%.1f)", 
               _state, _curAzAngle, _curInclineAngle, _curProgressAngle);
         _state = GIMBAL_STATE_HOLD;
         setLEDsByState();
     }
+}
+
+void GimbalController::enterManualTest() {
+    _state = GIMBAL_STATE_TEST;
+    _tarAzAngle = _curAzAngle;
+    _tarInclineAngle = _curInclineAngle;
+    _tarProgressAngle = _curProgressAngle;
+    _maxDegPerSec = 45.0f; // 测试模式下插补响应更迅速
+    setLEDsByState();
+    log_i("[Gimbal] >>> ENTER SERVO TEST MODE (Current: Az=%.1f, Inc=%.1f, Prog=%.1f) <<<", 
+          _curAzAngle, _curInclineAngle, _curProgressAngle);
+}
+
+void GimbalController::exitManualTest() {
+    _state = GIMBAL_STATE_HOLD;
+    _tarAzAngle = _curAzAngle;
+    _tarInclineAngle = _curInclineAngle;
+    _tarProgressAngle = _curProgressAngle;
+    setLEDsByState();
+    log_i("[Gimbal] <<< EXIT SERVO TEST MODE -> Back to HOLD (Az=%.1f, Inc=%.1f, Prog=%.1f) >>>",
+          _curAzAngle, _curInclineAngle, _curProgressAngle);
+}
+
+void GimbalController::setManualTestAngle(uint8_t ch, float angleDeg, bool immediate) {
+    float clamped = constrain(angleDeg, 0.0f, 180.0f);
+    if (ch == GIMBAL_CH_AZ) {
+        _tarAzAngle = clamped;
+        if (immediate) _curAzAngle = clamped;
+    } else if (ch == GIMBAL_CH_INCLINE) {
+        _tarInclineAngle = clamped;
+        if (immediate) _curInclineAngle = clamped;
+    } else if (ch == GIMBAL_CH_PROGRESS) {
+        _tarProgressAngle = clamped;
+        if (immediate) _curProgressAngle = clamped;
+    }
+    
+    if (immediate) {
+        updateHardwareServos();
+    }
+}
+
+float GimbalController::getChannelAngle(uint8_t ch) const {
+    if (ch == GIMBAL_CH_AZ) return _curAzAngle;
+    if (ch == GIMBAL_CH_INCLINE) return _curInclineAngle;
+    if (ch == GIMBAL_CH_PROGRESS) return _curProgressAngle;
+    return 90.0f;
+}
+
+uint16_t GimbalController::getChannelPulse(uint8_t ch) const {
+    float deg = getChannelAngle(ch);
+    float clamped = constrain(deg, 0.0f, 180.0f);
+    return (uint16_t)(500.0f + (clamped / 180.0f) * 2000.0f + 0.5f);
 }
 
 void GimbalController::processLerp(float dt) {
@@ -241,6 +293,16 @@ void GimbalController::setLEDsByState() {
             for (int i = 0; i < 8; i++) {
                 if (i < 3) {
                     _servo.setLEDColor(i, 0x00FF00); // 绿色高亮
+                } else {
+                    _servo.setLEDColor(i, 0x000000);
+                }
+            }
+            break;
+        case GIMBAL_STATE_TEST:
+            // 测试模式：前三轴高亮青蓝色 (Cyan: 0x00FFFF)，其余灭
+            for (int i = 0; i < 8; i++) {
+                if (i < 3) {
+                    _servo.setLEDColor(i, 0x00FFFF);
                 } else {
                     _servo.setLEDColor(i, 0x000000);
                 }

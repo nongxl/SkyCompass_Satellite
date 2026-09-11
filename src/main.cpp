@@ -115,10 +115,13 @@ enum AppState {
     STATE_MAIN,
     STATE_WIFI_SETUP,
     STATE_SAT_SELECT,
-    STATE_LANG_SELECT
+    STATE_LANG_SELECT,
+    STATE_SERVO_TEST
 };
 AppState appState = STATE_MAIN;
 int langSelectedIndex = 0;
+int activeServoTestChannel = 0; // 0: CH0(基座长梁), 1: CH1(拱门倾角), 2: CH2(星位滑块)
+void drawServoTestPage();
 void saveCustomSatellites();
 
 std::vector<WiFiNetwork> wifiNetworks;
@@ -3234,6 +3237,104 @@ void drawWiFiSetupPage() {
     }
 }
 
+void drawServoTestPage() {
+    auto canvas = earth_renderer->getCanvas();
+    uint16_t width = canvas->width();
+    uint16_t height = canvas->height();
+    
+    // 背景深灰黑
+    canvas->fillRect(0, 0, width, height, canvas->color565(12, 16, 22));
+    
+    bool isZh = (I18N::getLanguage() == LANG_ZH);
+    canvas->setFont(I18N::getFont());
+    canvas->setTextSize(1);
+    
+    // 顶部标题栏
+    canvas->fillRect(0, 0, width, 20, canvas->color565(18, 32, 52));
+    canvas->drawFastHLine(0, 20, width, canvas->color565(40, 75, 120));
+    
+    canvas->setTextColor(canvas->color565(0, 230, 255));
+    canvas->drawString(isZh ? "浑仪舵机测试标定 (Shift退出)" : "Gimbal Servo Test (Shift to Exit)", 6, 4);
+    
+    // 在线状态与电流
+    if (gimbal.isOnline()) {
+        char statBuf[32];
+        snprintf(statBuf, sizeof(statBuf), "ON %.0fmA", gimbal.getCurrentmA());
+        canvas->setTextColor(TFT_GREEN);
+        canvas->drawString(statBuf, width - 68, 4);
+    } else {
+        canvas->setTextColor(TFT_RED);
+        canvas->drawString("OFFLINE", width - 56, 4);
+    }
+    
+    // 三个通道名称定义
+    const char* chNamesZh[3] = {"CH0 基座走向 (Base Az)", "CH1 拱门倾角 (Incline)", "CH2 轨道滑块 (Progress)"};
+    const char* chNamesEn[3] = {"CH0 Base Azimuth", "CH1 Arch Incline", "CH2 Orbit Progress"};
+    
+    // 绘制三个通道卡片 (y = 23, 49, 75，每个高度 24)
+    int cardY[3] = {23, 49, 75};
+    int cardH = 24;
+    
+    for (int i = 0; i < 3; i++) {
+        int y = cardY[i];
+        bool isSelected = (activeServoTestChannel == i);
+        
+        // 背景与边框
+        if (isSelected) {
+            canvas->fillRect(4, y, width - 8, cardH, canvas->color565(22, 45, 75));
+            canvas->drawRect(4, y, width - 8, cardH, canvas->color565(0, 230, 180));
+            canvas->setTextColor(canvas->color565(0, 255, 200));
+            canvas->drawString(">", 8, y + 4);
+        } else {
+            canvas->fillRect(4, y, width - 8, cardH, canvas->color565(18, 22, 28));
+            canvas->drawRect(4, y, width - 8, cardH, canvas->color565(40, 45, 55));
+            canvas->setTextColor(canvas->color565(160, 175, 190));
+        }
+        
+        // 通道名称
+        canvas->drawString(isZh ? chNamesZh[i] : chNamesEn[i], 18, y + 4);
+        
+        // 角度与脉冲
+        float curAngle = gimbal.getChannelAngle(i);
+        uint16_t curPulse = gimbal.getChannelPulse(i);
+        
+        char valBuf[32];
+        snprintf(valBuf, sizeof(valBuf), "%5.1f\xC2\xB0 %4dus", curAngle, curPulse);
+        if (isSelected) {
+            canvas->setTextColor(TFT_YELLOW);
+        } else {
+            canvas->setTextColor(canvas->color565(180, 190, 200));
+        }
+        canvas->drawString(valBuf, width - 110, y + 4);
+        
+        // 进度条 (宽 85, 高 3)
+        int barX = width - 95;
+        int barY = y + 17;
+        int barW = 85;
+        int barH = 3;
+        canvas->fillRect(barX, barY, barW, barH, canvas->color565(35, 40, 50));
+        int fillW = constrain((int)((curAngle / 180.0f) * barW), 0, barW);
+        if (fillW > 0) {
+            canvas->fillRect(barX, barY, fillW, barH, isSelected ? canvas->color565(0, 230, 255) : canvas->color565(70, 110, 160));
+        }
+        // 标尺中点 90° 刻度小竖线
+        canvas->drawFastVLine(barX + barW / 2, barY - 1, barH + 2, canvas->color565(120, 130, 140));
+    }
+    
+    // 底部按键提示栏 (y = 102 ~ 134)
+    canvas->drawFastHLine(0, 101, width, canvas->color565(40, 55, 75));
+    canvas->fillRect(0, 102, width, 33, canvas->color565(10, 14, 20));
+    
+    canvas->setTextColor(canvas->color565(170, 190, 210));
+    if (isZh) {
+        canvas->drawString("[0/1/2]或[; .]选通道  [, /]微调-+5\xC2\xB0", 6, 104);
+        canvas->drawString("[Z]0\xC2\xB0 [X]90\xC2\xB0 [C]180\xC2\xB0 [A]45\xC2\xB0 [S]135\xC2\xB0 [Shift]退出", 6, 118);
+    } else {
+        canvas->drawString("[0/1/2]or[; .]Channel  [, /]Step -/+5\xC2\xB0", 6, 104);
+        canvas->drawString("[Z]0\xC2\xB0 [X]90\xC2\xB0 [C]180\xC2\xB0 [A]45\xC2\xB0 [S]135\xC2\xB0 [Shift]Exit", 6, 118);
+    }
+}
+
 void drawSatSelectPage() {
     auto getBannerTextColor = [](const String& msg) -> uint16_t {
         String lower = msg;
@@ -4722,6 +4823,7 @@ void loop() {
         static bool lastN = false;
         static bool lastD = false;
         static bool lastTab = false;
+        static bool lastShift = false;
         static bool lastL = false;
         static bool lastSpace = false;
 
@@ -4747,6 +4849,7 @@ void loop() {
         bool currN = M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed('N');
         bool currD = M5Cardputer.Keyboard.isKeyPressed('d') || M5Cardputer.Keyboard.isKeyPressed('D');
         bool currTab = M5Cardputer.Keyboard.isKeyPressed(KEY_TAB);
+        bool currShift = M5Cardputer.Keyboard.isKeyPressed(KEY_LEFT_SHIFT) || M5Cardputer.Keyboard.keysState().shift;
         bool currL = M5Cardputer.Keyboard.isKeyPressed('l') || M5Cardputer.Keyboard.isKeyPressed('L');
         bool currSpace = M5Cardputer.Keyboard.isKeyPressed(' ');
 
@@ -4772,17 +4875,18 @@ void loop() {
         bool justN = currN && !lastN;
         bool justD = currD && !lastD;
         bool justTab = currTab && !lastTab;
+        bool justShift = currShift && !lastShift;
         bool justL = currL && !lastL;
         bool justSpace = currSpace && !lastSpace;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justTab || justL || justSpace;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justTab || justShift || justL || justSpace;
 
         if (showHelp) {
             if (millis() < 3000) {
                 showHelp = false;
             } else if (hasAnyKeyJustPressed) {
                 showHelp = false;
-                currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = currTab = currL = currSpace = false;
-                justSemi = justDot = justComma = justSlash = justO = justV = justEnter = justBack = justEsc = justTick = justBracketL = justBracketR = justC = justR = justW = justS = justH = justG = justY = justN = justD = justTab = false;
+                currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = currTab = currShift = currL = currSpace = false;
+                justSemi = justDot = justComma = justSlash = justO = justV = justEnter = justBack = justEsc = justTick = justBracketL = justBracketR = justC = justR = justW = justS = justH = justG = justY = justN = justD = justTab = justShift = false;
                 hasAnyKeyJustPressed = false;
             }
         }
@@ -4931,13 +5035,48 @@ void loop() {
                     }
                 }
             }
+        } else if (appState == STATE_SERVO_TEST) {
+            char currentKey = 0;
+            if (M5Cardputer.Keyboard.isKeyPressed(',')) currentKey = ',';
+            else if (M5Cardputer.Keyboard.isKeyPressed('/')) currentKey = '/';
+
+            if (currentKey != 0) {
+                if (lastKey != currentKey) {
+                    lastKey = currentKey;
+                    keyHoldStartTime = millis();
+                    lastKeyRepeat = millis();
+                    float cur = gimbal.getChannelAngle(activeServoTestChannel);
+                    if (currentKey == ',') cur -= 5.0f;
+                    else if (currentKey == '/') cur += 5.0f;
+                    gimbal.setManualTestAngle(activeServoTestChannel, cur, true);
+                    log_i("[ServoTest] CH%d -> %.1f deg (%d us)", activeServoTestChannel, 
+                          gimbal.getChannelAngle(activeServoTestChannel), 
+                          gimbal.getChannelPulse(activeServoTestChannel));
+                } else {
+                    unsigned long heldTime = millis() - keyHoldStartTime;
+                    if (heldTime > 250) {
+                        if (millis() - lastKeyRepeat >= 50) {
+                            lastKeyRepeat = millis();
+                            float cur = gimbal.getChannelAngle(activeServoTestChannel);
+                            if (currentKey == ',') cur -= 2.0f;
+                            else if (currentKey == '/') cur += 2.0f;
+                            gimbal.setManualTestAngle(activeServoTestChannel, cur, true);
+                        }
+                    }
+                }
+            } else {
+                lastKey = 0;
+            }
         }
 
         
         // Handle discrete keyboard input
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
             if (appState == STATE_MAIN) {
-                if (justTab) {
+                if (justShift) {
+                    appState = STATE_SERVO_TEST;
+                    gimbal.enterManualTest();
+                } else if (justTab) {
                     int nextMode = (earth_renderer->getVisualMode() + 1) % 2;
                     earth_renderer->setVisualMode(nextMode);
                 } else if (justC) {
@@ -5754,6 +5893,36 @@ void loop() {
                 } else if (justDot) { // DOWN
                     langSelectedIndex = (langSelectedIndex + 1) % 4;
                 }
+            } else if (appState == STATE_SERVO_TEST) {
+                if (justShift || justEsc || justTick || justBack) {
+                    gimbal.exitManualTest();
+                    appState = STATE_MAIN;
+                } else if (M5Cardputer.Keyboard.isKeyPressed('0')) {
+                    activeServoTestChannel = 0;
+                } else if (M5Cardputer.Keyboard.isKeyPressed('1')) {
+                    activeServoTestChannel = 1;
+                } else if (M5Cardputer.Keyboard.isKeyPressed('2')) {
+                    activeServoTestChannel = 2;
+                } else if (justSemi) { // 轮换上一个通道
+                    activeServoTestChannel = (activeServoTestChannel - 1 + 3) % 3;
+                } else if (justDot) { // 轮换下一个通道
+                    activeServoTestChannel = (activeServoTestChannel + 1) % 3;
+                } else if (justC) { // 快捷置 180°
+                    gimbal.setManualTestAngle(activeServoTestChannel, 180.0f, true);
+                    log_i("[ServoTest] CH%d -> 180.0 deg (2500 us)", activeServoTestChannel);
+                } else if (M5Cardputer.Keyboard.isKeyPressed('x') || M5Cardputer.Keyboard.isKeyPressed('X')) { // 快捷置 90° (中点)
+                    gimbal.setManualTestAngle(activeServoTestChannel, 90.0f, true);
+                    log_i("[ServoTest] CH%d -> 90.0 deg (1500 us)", activeServoTestChannel);
+                } else if (M5Cardputer.Keyboard.isKeyPressed('z') || M5Cardputer.Keyboard.isKeyPressed('Z')) { // 快捷置 0°
+                    gimbal.setManualTestAngle(activeServoTestChannel, 0.0f, true);
+                    log_i("[ServoTest] CH%d -> 0.0 deg (500 us)", activeServoTestChannel);
+                } else if (M5Cardputer.Keyboard.isKeyPressed('a') || M5Cardputer.Keyboard.isKeyPressed('A')) { // 快捷置 45°
+                    gimbal.setManualTestAngle(activeServoTestChannel, 45.0f, true);
+                    log_i("[ServoTest] CH%d -> 45.0 deg (1000 us)", activeServoTestChannel);
+                } else if (justS) { // 快捷置 135°
+                    gimbal.setManualTestAngle(activeServoTestChannel, 135.0f, true);
+                    log_i("[ServoTest] CH%d -> 135.0 deg (2000 us)", activeServoTestChannel);
+                }
             }
         }
 
@@ -5780,6 +5949,7 @@ void loop() {
         lastN = currN;
         lastD = currD;
         lastTab = currTab;
+        lastShift = currShift;
         lastL = currL;
         lastSpace = currSpace;
         
@@ -5796,6 +5966,11 @@ void loop() {
             return;
         } else if (appState == STATE_SAT_SELECT) {
             drawSatSelectPage();
+            pushCanvasWithFilter();
+            updateChainMonoDisplay();
+            return;
+        } else if (appState == STATE_SERVO_TEST) {
+            drawServoTestPage();
             pushCanvasWithFilter();
             updateChainMonoDisplay();
             return;
@@ -6565,7 +6740,7 @@ void loop() {
             }
         
         // Update 3-axis Gimbal Targets based on active sat view focus
-        if (gimbal.isOnline()) {
+        if (gimbal.isOnline() && appState != STATE_SERVO_TEST) {
             if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
                 if (!g_satCaches[focusSatIndex].lastGeoValid) {
                     double tx = 0, ty = 0, tz = 0;

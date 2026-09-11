@@ -20,7 +20,8 @@ enum GimbalState {
     GIMBAL_STATE_PREPOINT,     // 预瞄准下一次过境AOS与拱高
     GIMBAL_STATE_TRACKING,     // 实时过境跟踪 (CH2移动，CH0/CH1锁定)
     GIMBAL_STATE_STANDBY,      // 闲时待命
-    GIMBAL_STATE_HOLD          // 非sat view模式原地静止锁定
+    GIMBAL_STATE_HOLD,         // 非sat view模式原地静止锁定
+    GIMBAL_STATE_TEST          // 手动舵机测试与标定模式
 };
 
 class GimbalController {
@@ -73,6 +74,13 @@ public:
     void setTargetPrePoint(float aosAz);
     void setStandby();
     void setHold();
+    
+    // 舵机手动标定与测试接口
+    void enterManualTest();
+    void exitManualTest();
+    void setManualTestAngle(uint8_t ch, float angleDeg, bool immediate = true);
+    float getChannelAngle(uint8_t ch) const;
+    uint16_t getChannelPulse(uint8_t ch) const;
     
     // 状态查询
     bool isOnline() const { return _isOnline; }
