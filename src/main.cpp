@@ -6845,7 +6845,7 @@ void loop() {
                         float progressDeg = ratio * 180.0f;
                         
                         // 下发刚性锁定的基准方位、拱高与平滑进度（CH0 与 CH1 恒定不动，只有 CH2 平滑划过天际）
-                        gimbal.setTargetArch(s_lockedPass.startAz, s_lockedPass.maxElevation, progressDeg);
+                        gimbal.setTargetArch(s_lockedPass.startAz, s_lockedPass.maxElevation, progressDeg, s_lockedPass.maxAz);
                     } else {
                         // 2. 卫星在地平线以下：结束本次过境会话，寻找该卫星未来最早的下一次过境并预瞄准
                         s_inPassSession = false;
@@ -6853,6 +6853,7 @@ void loop() {
                         uint32_t earliestAos = 0xFFFFFFFF;
                         float aosAz = 90.0f;
                         float nextMaxEl = 45.0f;
+                        float nextMaxAz = 90.0f;
                         
                         // 优先在推荐过境列表中检索未来过境
                         lockPassMutex();
@@ -6862,6 +6863,7 @@ void loop() {
                                     earliestAos = pass.aosTime;
                                     aosAz = pass.startAz;
                                     nextMaxEl = pass.maxElevation;
+                                    nextMaxAz = pass.maxAz;
                                     foundNext = true;
                                 }
                             }
@@ -6934,7 +6936,7 @@ void loop() {
                         }
                         
                         if (foundNext) {
-                            gimbal.setTargetPrePointArch(aosAz, nextMaxEl);
+                            gimbal.setTargetPrePointArch(aosAz, nextMaxEl, nextMaxAz);
                         } else {
                             gimbal.setHold();
                         }

@@ -55,7 +55,7 @@ private:
 
     void updateHardwareServos();
     void processLerp(float dt);
-    void calculateArchAngles(float baseAz, float maxEl, float progressDeg, float &outAz, float &outIncline, float &outProgress);
+    void calculateArchAngles(float baseAz, float maxEl, float progressDeg, float maxAz, float &outAz, float &outIncline, float &outProgress);
     void updateStatus();
     void setLEDsByState();
 
@@ -66,8 +66,8 @@ public:
     void tick();
     
     // 轨道拱门专用输入接口
-    void setTargetArch(float baseAz, float maxElevation, float progressDeg);
-    void setTargetPrePointArch(float aosAz, float maxElevation);
+    void setTargetArch(float baseAz, float maxElevation, float progressDeg, float maxAz = 90.0f);
+    void setTargetPrePointArch(float aosAz, float maxElevation, float maxAz = 90.0f);
     
     // 兼容传统输入接口
     void setTargetTrack(float realAz, float realEl, float realAltKm);
