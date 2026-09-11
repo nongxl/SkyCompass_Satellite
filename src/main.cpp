@@ -3267,9 +3267,9 @@ void drawServoTestPage() {
         canvas->drawString("OFFLINE", width - 56, 4);
     }
     
-    // 三个通道名称定义
-    const char* chNamesZh[3] = {"CH0 基座走向 (Base Az)", "CH1 拱门倾角 (Incline)", "CH2 轨道滑块 (Progress)"};
-    const char* chNamesEn[3] = {"CH0 Base Azimuth", "CH1 Arch Incline", "CH2 Orbit Progress"};
+    // 三个通道名称定义 (精简防止与角度重叠)
+    const char* chNamesZh[3] = {"CH0 走向", "CH1 倾角", "CH2 星位"};
+    const char* chNamesEn[3] = {"CH0 Base", "CH1 Inc ", "CH2 Prog"};
     
     // 绘制三个通道卡片 (y = 23, 49, 75，每个高度 24)
     int cardY[3] = {23, 49, 75};
@@ -3291,34 +3291,36 @@ void drawServoTestPage() {
             canvas->setTextColor(canvas->color565(160, 175, 190));
         }
         
-        // 通道名称
+        // 列 1: 通道名称 (x = 18 ~ 70)
         canvas->drawString(isZh ? chNamesZh[i] : chNamesEn[i], 18, y + 4);
         
-        // 角度与脉冲
         float curAngle = gimbal.getChannelAngle(i);
         uint16_t curPulse = gimbal.getChannelPulse(i);
         
-        char valBuf[32];
-        snprintf(valBuf, sizeof(valBuf), "%5.1f\xC2\xB0 %4dus", curAngle, curPulse);
-        if (isSelected) {
-            canvas->setTextColor(TFT_YELLOW);
-        } else {
-            canvas->setTextColor(canvas->color565(180, 190, 200));
-        }
-        canvas->drawString(valBuf, width - 110, y + 4);
+        // 列 2: 角度数值 (x = 75 ~ 118)
+        char angleBuf[16];
+        snprintf(angleBuf, sizeof(angleBuf), "%5.1f\xC2\xB0", curAngle);
+        canvas->setTextColor(isSelected ? TFT_YELLOW : canvas->color565(0, 230, 255));
+        canvas->drawString(angleBuf, 75, y + 4);
         
-        // 进度条 (宽 85, 高 3)
-        int barX = width - 95;
-        int barY = y + 17;
-        int barW = 85;
-        int barH = 3;
+        // 列 3: 微秒脉宽 (x = 124 ~ 168)
+        char pulseBuf[16];
+        snprintf(pulseBuf, sizeof(pulseBuf), "%4dus", curPulse);
+        canvas->setTextColor(isSelected ? TFT_WHITE : canvas->color565(160, 170, 180));
+        canvas->drawString(pulseBuf, 124, y + 4);
+        
+        // 列 4: 进度条 (x = 172 ~ 230, 宽 58, 高 5)
+        int barX = 172;
+        int barY = y + 9;
+        int barW = 58;
+        int barH = 5;
         canvas->fillRect(barX, barY, barW, barH, canvas->color565(35, 40, 50));
         int fillW = constrain((int)((curAngle / 180.0f) * barW), 0, barW);
         if (fillW > 0) {
             canvas->fillRect(barX, barY, fillW, barH, isSelected ? canvas->color565(0, 230, 255) : canvas->color565(70, 110, 160));
         }
         // 标尺中点 90° 刻度小竖线
-        canvas->drawFastVLine(barX + barW / 2, barY - 1, barH + 2, canvas->color565(120, 130, 140));
+        canvas->drawFastVLine(barX + barW / 2, barY - 1, barH + 2, canvas->color565(150, 160, 170));
     }
     
     // 底部按键提示栏 (y = 102 ~ 134)
