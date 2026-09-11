@@ -71,16 +71,20 @@ void GimbalController::calculateArchAngles(float trackHeading, float maxEl, floa
     // CH1 > 90° 为向正南倾倒。
     // 侧向判定 satAz: 若 cos(satAz) >= 0 (即 satAz 在 270°~90°，偏北天区)，则拱门倒向正北；
     // 若 cos(satAz) < 0 (satAz 在 90°~270°，偏南天区)，则拱门倒向正南。
+    // 硬件结构与观测意义保护：
+    // 1. 浑仪结构限制：CH1 拱门角度低于 30°（或高于 150°）会卡到底部白色水平大梁造成机械干涉打齿；
+    // 2. 天文观测限制：过境仰角低于 30° 时轨道太贴近地平线，受地面建筑/树木遮挡和大气消光影响无实际观测意义。
+    // 因此将有效仰角刚性限制在 30° ~ 90° 区间。
     float satAzRad = satAz * 0.0174532925f; // DEG_TO_RAD
     bool isLeaningNorth = (cosf(satAzRad) >= 0.0f);
     
-    float clampedEl = constrain(maxEl, 0.0f, 90.0f);
+    float clampedEl = constrain(maxEl, 30.0f, 90.0f);
     float idealIncline;
     if (isLeaningNorth) {
-        // 偏北倒：仰角越低越接近 0°
+        // 偏北倒：仰角范围 [30°, 90°]
         idealIncline = clampedEl;
     } else {
-        // 偏南倒：仰角越低越接近 180°
+        // 偏南倒：仰角范围 [90°, 150°]
         idealIncline = 180.0f - clampedEl;
     }
 
@@ -105,9 +109,9 @@ void GimbalController::calculateArchAngles(float trackHeading, float maxEl, floa
         outProgress = 180.0f - progressDeg; // 滑块从远端滑回 (180° -> 0°)
     }
 
-    // 硬件限位保护
+    // 硬件限位保护（CH1 严格限制在 30° ~ 150°，防止卡到底部大梁）
     outAz = constrain(outAz, 0.0f, 180.0f);
-    outIncline = constrain(outIncline, 0.0f, 180.0f);
+    outIncline = constrain(outIncline, 30.0f, 150.0f);
     outProgress = constrain(outProgress, 0.0f, 180.0f);
 }
 
@@ -221,6 +225,8 @@ void GimbalController::setManualTestAngle(uint8_t ch, float angleDeg, bool immed
         _tarAzAngle = clamped;
         if (immediate) _curAzAngle = clamped;
     } else if (ch == GIMBAL_CH_INCLINE) {
+        // CH1 框架结构限制：角度不能低于 30°（或高于 150°），避免卡到底部大梁
+        clamped = constrain(angleDeg, 30.0f, 150.0f);
         _tarInclineAngle = clamped;
         if (immediate) _curInclineAngle = clamped;
     } else if (ch == GIMBAL_CH_PROGRESS) {
