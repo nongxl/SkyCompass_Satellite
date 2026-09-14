@@ -73,6 +73,21 @@
   - **SPACE_STATION (Space Stations)**: For the complex multi-radio payloads of the ISS, it custom-renders dual-channel Doppler shift frequencies for APRS (145.825 MHz) and SSTV (145.800 MHz) simultaneously. For space stations without active HAM operations (e.g. Tiangong), it displays no amateur radio capability.
   - **VISUAL (Visual-only Spacecrafts)**: Such as the Hubble Space Telescope, JWST, and rocket bodies. Displays `No Amateur Radio Capability` explicitly, without generating fake radio data.
   - **HISTORICAL (Inactive Monuments)**: Such as China's first satellite Dong Fang Hong I (DFH-1). Shows the launch date (1970) and inactive status. It hides the radio frequency panel completely in both tracking and non-tracking screens.
+- **Magnetometer-Free Solar Shadow Alignment System & 3D Sight Line**:
+  - **Overcoming Hardware Limitations**: Addressing the lack of an onboard magnetometer (compass) on standard Cardputer hardware, the system derives the real-time Subsolar Point and local Solar Azimuth $Az_{\text{sun}}$ from UTC time and GPS coordinates. It renders a dark-gray ground shadow conforming smoothly to the 3D spherical Earth globe (shadow length $1 / \tan(SunEl)$ dynamically adjusts with elevation angle; automatically hidden at night).
+  - **Tactical Alignment Operation**: Outdoors, the operator simply aligns the on-screen 3D shadow line parallel to their physical shadow on the ground, bringing the 3D globe's orientation into **full physical alignment** with the real world.
+  - **3D Sight Line & Elevation Arc**: In Sat View tracking mode, when the satellite is above the horizon ($El > 0^\circ$), a neon-cyan dynamic laser sight line connects the observer to the spacecraft, accompanied by an `El: 42deg` elevation badge. With shadow alignment, operators can directly point their handheld Yagi antenna towards the target satellite in the sky!
+- **Orbital Arch Gimbal System (Ancient Armillary Sphere Inspired)**:
+  Bridging ancient Chinese armillary sphere mechanics with modern orbital dynamics, this feature drives a 3-axis Lego arch gimbal via Grove I2C (Unit 8Servos / PCA9685):
+
+  <p align="center">
+    <img src="docs/gimbal_lego_demo.gif" alt="Orbital Arch Lego Gimbal Demonstration" width="600" />
+  </p>
+
+  - **CH0 (Base Azimuth / Track Heading Axis)**: Aligns rigidly with the satellite's instantaneous orbital ground track heading during passes without drift.
+  - **CH1 (Celestial Arch Elevation Axis)**: Controls the tilt angle corresponding to the pass peak elevation and northern/southern celestial hemisphere. **[Mechanical Clearance Protection]**: Due to servo horn offset on one side, CH1 range is constrained to **30° ~ 180°** to prevent binding against the base beam while maximizing physical travel.
+  - **CH2 (Satellite Pointer Travel Axis)**: Represents the spacecraft body, sweeping smoothly across the arch from AOS to LOS.
+  - **Dedicated Debug Mode**: Press **`aA (Shift)`** anytime on the main screen to enter Servo Test Mode (`0/1/2` select channel, `,` and `/` fine-step, `Z/X/C/A/S` quick presets).
 
 
 ## Technical Details: Orbital Propagations & Visibility Predictions
