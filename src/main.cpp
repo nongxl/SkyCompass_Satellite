@@ -46,14 +46,18 @@ enum MonoState {
 };
 
 #include "core/mono_animator.h"
+#include "core/hardware_config.h"
+#include "ui/hardware_wizard_view.h"
 
-// Set to 1 if you have an external M5Chain Mono 8x8 screen module attached to Grove Port.
-// Set to 0 (default) to keep Grove port free, which prevents keyboard I2C/UART sharing conflicts on Cardputer.
-#define ENABLE_CHAIN_MONO 1
-
+// 硬件外设由 HardwareConfig 动态管理并根据 NVS 配置定向初始化
 bool isMonoInitialized = false;
 uint8_t mono_id = 0;
 uint8_t operation_status = 0;
+
+HardwareWizardView hardware_wizard;
+
+#include "gimbal/gimbal_controller.h"
+GimbalController gimbal;
 
 #include "core/mono_icons.h"
 
@@ -112,10 +116,14 @@ enum AppState {
     STATE_MAIN,
     STATE_WIFI_SETUP,
     STATE_SAT_SELECT,
-    STATE_LANG_SELECT
+    STATE_LANG_SELECT,
+    STATE_SERVO_TEST,
+    STATE_HW_WIZARD
 };
 AppState appState = STATE_MAIN;
 int langSelectedIndex = 0;
+int activeServoTestChannel = 0; // 0: CH0(基座长梁), 1: CH1(拱门倾角), 2: CH2(星位滑块)
+void drawServoTestPage();
 void saveCustomSatellites();
 
 std::vector<WiFiNetwork> wifiNetworks;
@@ -140,8 +148,12 @@ SunCalculator* sun_calc = nullptr;
 // 全局变量定义
 static uint32_t parseTleEpoch(const String& line1) {
     if (line1.length() < 32) return 0;
-    String yrStr = line1.substring(18, 20);
-    String dayStr = line1.substring(20, 32);
+    int offset = 0;
+    if (line1.length() >= 9 && line1[8] == 'U') {
+        offset = 1; // 容错非标 6 位目录号导致的 1 列后移
+    }
+    String yrStr = line1.substring(18 + offset, 20 + offset);
+    String dayStr = line1.substring(20 + offset, 32 + offset);
     int yr = yrStr.toInt();
     double days = dayStr.toDouble();
     
@@ -202,6 +214,22 @@ struct NetworkActiveGuard {
     NetworkActiveGuard() { g_networkActive = true; }
     ~NetworkActiveGuard() { g_networkActive = false; }
 };
+
+// 内存安全检查阈值：确保有足够内部 RAM 分配任务栈 (8-10KB) 与 Wi-Fi 驱动 RX buffer
+// 任务栈需要连续 8-10KB (MaxBlock >= 12KB)，总可用堆至少保持在 38KB 以上
+static const size_t MIN_SAFE_HEAP_FOR_NETWORK = 38000;
+static const size_t MIN_SAFE_BLOCK_FOR_NETWORK = 12000;
+
+inline bool isSystemMemorySafeForNetwork() {
+    size_t freeH = ESP.getFreeHeap();
+    size_t maxB = ESP.getMaxAllocHeap();
+    if (freeH < MIN_SAFE_HEAP_FOR_NETWORK || maxB < MIN_SAFE_BLOCK_FOR_NETWORK) {
+        LOG_W("APP", "Insufficient memory for network ops! Free: %u, MaxBlock: %u", (unsigned int)freeH, (unsigned int)maxB);
+        return false;
+    }
+    return true;
+}
+
 extern TaskHandle_t predictorTaskHandle;
 
 struct PredictorTaskSuspendGuard {
@@ -284,9 +312,15 @@ void autoAssignIconAndColor(const String& name, SatIconType& icon, uint16_t& col
         color = TFT_RED;
     }
     // 6. Telescope / Observatories
-    else if (nameUpper.indexOf("HUBBLE") != -1 || nameUpper.indexOf("JWST") != -1 || nameUpper.indexOf("TELESCOPE") != -1) {
+    else if (nameUpper.indexOf("HUBBLE") != -1 || nameUpper.indexOf("JWST") != -1 || nameUpper.indexOf("ROMAN") != -1 || nameUpper.indexOf("NGRST") != -1 || nameUpper.indexOf("HERSCHEL") != -1 || nameUpper.indexOf("TELESCOPE") != -1) {
         icon = ICON_TELESCOPE;
-        color = TFT_CYAN;
+        if (nameUpper.indexOf("ROMAN") != -1 || nameUpper.indexOf("NGRST") != -1) {
+            color = TFT_MAGENTA;
+        } else if (nameUpper.indexOf("HERSCHEL") != -1) {
+            color = TFT_YELLOW;
+        } else {
+            color = TFT_CYAN;
+        }
     }
     // 7. Communication
     else if (nameUpper.indexOf("IRIDIUM") != -1 || nameUpper.indexOf("STARLINK") != -1 || nameUpper.indexOf("ONEWEB") != -1 || nameUpper.indexOf("SO-") != -1 || nameUpper.indexOf("AO-") != -1) {
@@ -652,7 +686,7 @@ void getRepresentativeOrbitParams(const String& line2, float& inclination, float
 }
 String recentLaunchErrorMsg = "";
 bool recentLaunchBypassed = false;
-const int MAX_SATELLITES = 70;
+const int MAX_SATELLITES = 75;
 SatRealtimeCache g_satCaches[MAX_SATELLITES];
 int NUM_BUILTIN_SATELLITES = 0;
 int NUM_SATELLITES = 0;
@@ -958,9 +992,9 @@ void rebuildTree(uint32_t current_unix) {
             for (int i = 0; i < recommendedPasses.size(); i++) {
                 const auto& p = recommendedPasses[i];
                 bool match = false;
-                if (c == 0 && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
-                else if (c == 1 && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
-                else if (c == 2 && p.score >= 4 && p.losTime >= current_unix) match = true;
+                if (c == 0 && p.isVisible && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
+                else if (c == 1 && p.isVisible && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
+                else if (c == 2 && p.isVisible && p.score >= 4 && p.losTime >= current_unix) match = true;
                 else if (c == 3 && p.losTime >= current_unix) match = true;
                 
                 if (match) {
@@ -1152,9 +1186,9 @@ void rebuildTreeLocal(std::vector<TreeItem>& tree, const std::vector<PassEvent>&
             for (int i = 0; i < passes.size(); i++) {
                 const auto& p = passes[i];
                 bool match = false;
-                if (c == 0 && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
-                else if (c == 1 && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
-                else if (c == 2 && p.score >= 4 && p.losTime >= current_unix) match = true;
+                if (c == 0 && p.isVisible && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
+                else if (c == 1 && p.isVisible && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
+                else if (c == 2 && p.isVisible && p.score >= 4 && p.losTime >= current_unix) match = true;
                 else if (c == 3 && p.losTime >= current_unix) match = true;
                 
                 if (match) {
@@ -2278,6 +2312,26 @@ void networkTaskImpl(void* parameter) {
                 updated = true;
                 continue;
             }
+            if (noradId == 100532) {
+                // NGRST (Roman) uses hardcoded TLE — no network needed
+                TLEData rTle = TLEManager::getNGRST_TLE();
+                lockSatMutex();
+                g_satellites[i].tle  = rTle;
+                g_satellites[i].calc.init(rTle);
+                unlockSatMutex();
+                updated = true;
+                continue;
+            }
+            if (noradId == 34937) {
+                // Herschel uses hardcoded TLE — no network needed
+                TLEData hTle = TLEManager::getHerschel_TLE();
+                lockSatMutex();
+                g_satellites[i].tle  = hTle;
+                g_satellites[i].calc.init(hTle);
+                unlockSatMutex();
+                updated = true;
+                continue;
+            }
 
             TLEData cached;
             uint32_t cacheTime = 0;
@@ -2637,6 +2691,14 @@ void setup() {
     earth_renderer = new EarthRenderer(&M5Cardputer.Display);
     earth_renderer->begin();
 
+    // 检查是否为首次开机（无硬件配置记录）
+    HardwareConfig::getInstance().load();
+    if (!HardwareConfig::getInstance().isConfigured()) {
+        LOG_I("APP", "[HW] First boot detected (unconfigured). Launching Hardware Setup Wizard...");
+        appState = STATE_HW_WIZARD;
+        hardware_wizard.reset();
+    }
+
     // Draw initial loading screen instantly to avoid black screen during setup
     drawStartupScreen(18);
 
@@ -2690,86 +2752,73 @@ void setup() {
                 g_satellites[i].type = entries[i].type;
             }
 
-            // Initialize Position & Sun Calculator
-            pos_manager = new PositionManager(gnss);
-            pos_manager->begin(); 
-            
-            // Initialize Chain Mono on Serial2 (Grove Port) early so it lights up during boot progress
-#if ENABLE_CHAIN_MONO
-            bool skipMonoProbe = false;
-            if (gnss && !skipMonoProbe) {
-                GnssConfig gnssCfg = gnss->getConfig();
-                if (gnssCfg.rxPin == 2) {
-                    skipMonoProbe = true;
-                    LOG_I("APP", "Grove port is occupied by GNSS (pin 2/1). Skipping Chain Mono probe.");
-                }
+            // -----------------------------------------------------------------
+            // 精准定向硬件外设初始化（由 HardwareConfig 动态驱动，彻底消除引脚争抢）
+            // -----------------------------------------------------------------
+            auto& hw = HardwareConfig::getInstance();
+            hw.load();
+
+            // 1. GNSS 模块定向点火
+            if (hw.isEnabled(HW_MOD_CAP_LORA1262)) {
+                LOG_I("APP", "[HW] Cap LoRa-1262 GNSS selected. Starting GNSS on RX=15, TX=13...");
+                pos_manager = new PositionManager(gnss);
+                pos_manager->begin();
+            } else if (hw.isEnabled(HW_MOD_UNIT_GPSV11)) {
+                LOG_I("APP", "[HW] Unit GPS v1.1 selected. Probing GNSS on Grove port (RX=2, TX=1)...");
+                pos_manager = new PositionManager(gnss);
+                gnss->probeGrove();
+                pos_manager->begin();
+            } else {
+                LOG_I("APP", "[HW] No GNSS module configured. Running in standalone cached/manual position mode.");
+                pos_manager = new PositionManager(nullptr);
+                pos_manager->begin();
+                if (gnss) gnss->disable();
             }
 
-            bool foundChain = false;
-            uint8_t usedRx = 2;
-            uint8_t usedTx = 1;
-            uint16_t device_nums = 0;
-            
-            if (!skipMonoProbe) {
-                LOG_I("APP", "Initializing Chain Mono on Serial2 (Auto-detecting pins)...");
+            // 2. Unit 8Servos 浑仪云台舵机初始化
+            if (hw.isEnabled(HW_MOD_UNIT_8SERVOS)) {
+                if (hw.isEnabled(HW_MOD_CAP_LORA1262)) {
+                    // 有 Cap 时，统一走 Cap 上的 HY2.0-4P 扩展口 (I2C: SDA=8, SCL=9)
+                    LOG_I("APP", "[HW] Initializing 3-axis Gimbal on Cap HY2.0 port (Wire: SDA=8, SCL=9)...");
+                    gimbal.begin(&Wire, 8, 9, 100000);
+                } else {
+                    // 无 Cap 时，走机身侧面 Grove 接口 (Wire: SDA=2, SCL=1)
+                    LOG_I("APP", "[HW] Initializing 3-axis Gimbal on Body Grove port (Wire: SDA=2, SCL=1)...");
+                    gimbal.begin(&Wire, 2, 1, 100000);
+                }
+            } else {
+                LOG_I("APP", "[HW] Unit 8Servos is disabled.");
+            }
+
+            // 3. Chain Mono 8x8 像素副屏初始化
+            if (hw.isEnabled(HW_MOD_CHAIN_MONO)) {
+                LOG_I("APP", "[HW] Initializing Chain Mono on Body Grove port (Serial2: 115200)...");
                 
-                // CRITICAL: GPIO 1/2 are shared between Grove port (Serial2) and internal I²C (IMU).
-                // Suspend IMU task before driving these pins with UART to prevent I²C bus corruption
-                // which would cause the IMU to output garbage data and the globe to jump around.
                 if (imuTaskHandle != NULL) {
                     vTaskSuspend(imuTaskHandle);
-                    LOG_I("APP", "IMU task suspended for Grove bus probing");
                 }
+                
+                uint16_t device_nums = 0;
+                bool foundChain = false;
+                uint8_t usedRx = 2, usedTx = 1;
                 
                 M5Chain.begin(&Serial2, 115200, 2, 1);
-                delay(100);
-                int retry = 2;
-                while (retry > 0) {
+                delay(80);
+                if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
+                    foundChain = true;
+                } else {
+                    Serial2.end();
+                    delay(40);
+                    M5Chain.begin(&Serial2, 115200, 1, 2);
+                    delay(80);
                     if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
                         foundChain = true;
-                        usedRx = 2;
-                        usedTx = 1;
-                        break;
+                        usedRx = 1; usedTx = 2;
                     }
-                    retry--;
-                    if (retry > 0) delay(50);
-                }
-                
-                if (!foundChain) {
-                    LOG_I("APP", "Chain Mono not found on RX=2,TX=1. Swapping pins (RX=1,TX=2) and retrying...");
-                    Serial2.end();
-                    delay(50);
-                    M5Chain.begin(&Serial2, 115200, 1, 2);
-                    delay(100);
-                    retry = 2;
-                    while (retry > 0) {
-                        if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
-                            foundChain = true;
-                            usedRx = 1;
-                            usedTx = 2;
-                            break;
-                        }
-                        retry--;
-                        if (retry > 0) delay(50);
-                    }
-                }
-                
-                // Restore I²C bus and resume IMU task regardless of probe result.
-                // If Chain Mono was not found, release GPIO 1/2 back to I²C.
-                // If Chain Mono was found, Wire.begin() re-asserts I²C so other I²C devices still work.
-                if (!foundChain) {
-                    Serial2.end(); // Release GPIO 1/2 from UART
-                    LOG_I("APP", "Chain Mono not found. Released GPIO 1/2. Restoring I²C bus.");
-                }
-                Wire.begin(8, 9, 100000); // Re-assert internal I²C master explicitly on GPIO 8 (SDA) / GPIO 9 (SCL)
-                delay(10);    // Short stabilisation before resuming IMU reads
-                if (imuTaskHandle != NULL) {
-                    vTaskResume(imuTaskHandle);
-                    LOG_I("APP", "IMU task resumed after Grove bus probing");
                 }
                 
                 if (foundChain) {
-                    LOG_I("APP", "Chain Mono successfully detected on RX=%d, TX=%d! Device count: %d", usedRx, usedTx, device_nums);
+                    LOG_I("APP", "[HW] Chain Mono detected on RX=%d, TX=%d! Devices: %d", usedRx, usedTx, device_nums);
                     device_info_t *infos = (device_info_t *)malloc(sizeof(device_info_t) * device_nums);
                     if (infos != nullptr) {
                         memset(infos, 0, sizeof(device_info_t) * device_nums);
@@ -2787,40 +2836,24 @@ void setup() {
                         }
                         free(infos);
                     }
-                }
-            }
-            
-            if (isMonoInitialized) {
-                LOG_I("APP", "Chain Mono found on Grove port. ID: %d", mono_id);
-                M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
-                M5Chain.setMonoRotation(mono_id, MONO_ROTATION_0, &operation_status);
-                M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_7, &operation_status);
-                M5Chain.setMonoClear(mono_id, &operation_status);
-                
-                if (gnss) {
-                    GnssConfig gnssCfg = gnss->getConfig();
-                    gnssCfg.enableGroveProbe = false;
-                    gnss->setConfig(gnssCfg);
-                }
-            } else {
-                if (!skipMonoProbe) {
-                    LOG_I("APP", "Chain Mono module not detected. Releasing Grove pins.");
-                    Serial2.end();
-                    if (gnss && !gnss->isModuleInitialized()) {
-                        LOG_I("APP", "Cap GNSS not found, probing Grove port for GNSS...");
-                        gnss->probeGrove();
+                    if (isMonoInitialized) {
+                        M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
+                        M5Chain.setMonoRotation(mono_id, MONO_ROTATION_0, &operation_status);
+                        M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_7, &operation_status);
+                        M5Chain.setMonoClear(mono_id, &operation_status);
                     }
                 } else {
-                    LOG_I("APP", "Skipped Chain Mono probe as Grove is occupied by GNSS.");
+                    LOG_I("APP", "[HW] Chain Mono not responding on Grove port, releasing pins.");
+                    Serial2.end();
                 }
-            }
-#else
-            isMonoInitialized = false;
-            if (gnss && !gnss->isModuleInitialized()) {
-                LOG_I("APP", "Cap GNSS not found, probing Grove port for GNSS...");
-                gnss->probeGrove();
-            }
-#endif 
+                
+                Wire.begin(8, 9, 100000);
+                if (imuTaskHandle != NULL) {
+                    vTaskResume(imuTaskHandle);
+                }
+            } else {
+                isMonoInitialized = false;
+            } 
             
             Language currL = I18N::getLanguage();
             g_loadingStatusText = (currL == LANG_ZH) ? "初始化传感器与外设..." : ((currL == LANG_JA) ? "センサー・外来機器の初期化中..." : ((currL == LANG_ES) ? "Inicializando sensores..." : "Initializing Hardware..."));
@@ -2908,6 +2941,8 @@ void setup() {
                     else if (norad == 48274) g_satellites[i].tle = TLEManager::getTiangong_TLE();
                     else if (norad == 20580) g_satellites[i].tle = TLEManager::getHubble_TLE();
                     else if (norad == 50463) g_satellites[i].tle = TLEManager::getJWST_TLE();
+                    else if (norad == 100532) g_satellites[i].tle = TLEManager::getNGRST_TLE();
+                    else if (norad == 34937) g_satellites[i].tle = TLEManager::getHerschel_TLE();
                     else if (norad == 27607) g_satellites[i].tle = TLEManager::getSO50_TLE();
                     else if (norad == 43017) g_satellites[i].tle = TLEManager::getAO91_TLE();
                     unlockSatMutex();
@@ -3033,7 +3068,7 @@ void setup() {
             
             // Start network task on Core 0 to handle WiFi and TLE fetching in background
             manualWifiToggle = false;
-            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
+            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 10240, NULL, 1, NULL, 0);
 
             g_loadingStatusText = (currL_boot == LANG_ZH) ? "加载完成，准备就绪！" : ((currL_boot == LANG_JA) ? "ロード完了、準備完了！" : ((currL_boot == LANG_ES) ? "¡Listo!" : "Ready!"));
             g_loadingProgress = 100;
@@ -3176,6 +3211,122 @@ void drawWiFiSetupPage() {
     }
 }
 
+void drawServoTestPage() {
+    auto canvas = earth_renderer->getCanvas();
+    uint16_t width = canvas->width();
+    uint16_t height = canvas->height();
+    
+    // 全局重置对齐基准与裁剪区域，杜绝状态污染
+    canvas->setTextDatum(top_left);
+    canvas->clearClipRect();
+    
+    // 背景深空灰蓝（卫星百科与硬件向导同款）
+    canvas->fillRect(0, 0, width, height, canvas->color565(20, 30, 40));
+    
+    bool isZh = (I18N::getLanguage() == LANG_ZH);
+    canvas->setFont(I18N::getFont());
+    canvas->setTextSize(1);
+    
+    // 顶部标题栏（百科同款深蓝灰底色与边框）
+    canvas->fillRect(0, 0, width, 20, canvas->color565(30, 40, 50));
+    canvas->drawFastHLine(0, 20, width, canvas->color565(50, 65, 80));
+    
+    // 标题：科技青
+    canvas->setTextColor(canvas->color565(0, 220, 255));
+    canvas->drawString(isZh ? "浑仪舵机校准标定" : "Gimbal Servo Calibration", 6, 4);
+    
+    // 右侧状态与按键提示：在线电流 + [aA/Esc]退出
+    int rightX = width - 4;
+    canvas->setTextDatum(top_right);
+    canvas->setTextColor(canvas->color565(170, 190, 210)); // 浅灰银色
+    canvas->drawString(isZh ? "[aA/Esc]退出" : "[aA/Esc]Exit", rightX, 4);
+    rightX -= (canvas->textWidth(isZh ? "[aA/Esc]退出" : "[aA/Esc]Exit") + 8);
+    
+    if (gimbal.isOnline()) {
+        char statBuf[32];
+        snprintf(statBuf, sizeof(statBuf), "ON %.0fmA", gimbal.getCurrentmA());
+        canvas->setTextColor(TFT_GREEN);
+        canvas->drawString(statBuf, rightX, 4);
+    } else {
+        canvas->setTextColor(TFT_YELLOW);
+        canvas->drawString("OFFLINE", rightX, 4);
+    }
+    canvas->setTextDatum(top_left);
+    
+    // 三个通道名称定义
+    const char* chNamesZh[3] = {"CH0 走向", "CH1 倾角", "CH2 星位"};
+    const char* chNamesEn[3] = {"CH0 Base", "CH1 Inc ", "CH2 Prog"};
+    
+    // 绘制三个通道卡片 (y = 23, 49, 75，每个高度 24)
+    int cardY[3] = {23, 49, 75};
+    int cardH = 24;
+    
+    for (int i = 0; i < 3; i++) {
+        int y = cardY[i];
+        bool isSelected = (activeServoTestChannel == i);
+        
+        // 背景与边框
+        if (isSelected) {
+            canvas->fillRect(4, y, width - 8, cardH, canvas->color565(25, 55, 90));
+            canvas->drawRect(4, y, width - 8, cardH, canvas->color565(0, 220, 255));
+            canvas->setTextColor(canvas->color565(0, 255, 200));
+            canvas->drawString(">", 8, y + 4);
+            canvas->setTextColor(TFT_WHITE);
+        } else {
+            canvas->fillRect(4, y, width - 8, cardH, canvas->color565(26, 38, 52));
+            canvas->drawRect(4, y, width - 8, cardH, canvas->color565(42, 58, 76));
+            canvas->setTextColor(canvas->color565(140, 180, 210));
+        }
+        
+        // 列 1: 通道名称 (x = 18 ~ 70)
+        canvas->drawString(isZh ? chNamesZh[i] : chNamesEn[i], 18, y + 4);
+        
+        float curAngle = gimbal.getChannelAngle(i);
+        uint16_t curPulse = gimbal.getChannelPulse(i);
+        
+        // 列 2: 角度数值 (x = 75 ~ 118)
+        char angleBuf[16];
+        snprintf(angleBuf, sizeof(angleBuf), "%5.1f\xC2\xB0", curAngle);
+        canvas->setTextColor(isSelected ? TFT_YELLOW : canvas->color565(0, 200, 230));
+        canvas->drawString(angleBuf, 75, y + 4);
+        
+        // 列 3: 微秒脉宽 (x = 124 ~ 168)
+        char pulseBuf[16];
+        snprintf(pulseBuf, sizeof(pulseBuf), "%4dus", curPulse);
+        canvas->setTextColor(isSelected ? canvas->color565(220, 230, 240) : canvas->color565(140, 155, 170));
+        canvas->drawString(pulseBuf, 124, y + 4);
+        
+        // 列 4: 进度条 (x = 172 ~ 230, 宽 58, 高 6)
+        int barX = 172;
+        int barY = y + 9;
+        int barW = 58;
+        int barH = 6;
+        canvas->fillRect(barX, barY, barW, barH, canvas->color565(35, 48, 62));
+        int fillW = constrain((int)((curAngle / 180.0f) * barW), 0, barW);
+        if (fillW > 0) {
+            canvas->fillRect(barX, barY, fillW, barH, isSelected ? canvas->color565(0, 220, 255) : canvas->color565(60, 100, 150));
+        }
+        // 标尺中点 90° 刻度小竖线
+        canvas->drawFastVLine(barX + barW / 2, barY - 1, barH + 2, canvas->color565(180, 200, 220));
+    }
+    
+    // 底部按键提示栏 (y = 101 ~ 135)
+    canvas->drawFastHLine(0, 101, width, canvas->color565(50, 65, 80));
+    canvas->fillRect(0, 102, width, 33, canvas->color565(16, 24, 34));
+    
+    canvas->setTextColor(canvas->color565(170, 190, 210));
+    if (isZh) {
+        canvas->drawString("[; .]选通道   [, /]微调-+5\xC2\xB0", 6, 104);
+        canvas->drawString("预设: [Z]0\xC2\xB0  [A]45\xC2\xB0  [X]90\xC2\xB0  [S]135\xC2\xB0  [C]180\xC2\xB0", 6, 118);
+    } else {
+        canvas->drawString("[; .]Channel   [, /]Step -/+5\xC2\xB0", 6, 104);
+        canvas->drawString("Preset: [Z]0\xC2\xB0  [A]45\xC2\xB0  [X]90\xC2\xB0  [S]135\xC2\xB0  [C]180\xC2\xB0", 6, 118);
+    }
+    
+    canvas->setTextDatum(top_left);
+    canvas->clearClipRect();
+}
+
 void drawSatSelectPage() {
     auto getBannerTextColor = [](const String& msg) -> uint16_t {
         String lower = msg;
@@ -3207,15 +3358,6 @@ void drawSatSelectPage() {
         
         return TFT_LIGHTGRAY;
     };
-
-    if (!g_networkActive) {
-        if (downloadErrorMsg == I18N::get(TXT_SYS_BUSY)) {
-            downloadErrorMsg = "";
-        }
-        if (recentLaunchErrorMsg == I18N::get(TXT_SYS_BUSY)) {
-            recentLaunchErrorMsg = "";
-        }
-    }
 
     static bool lastDownloading = false;
     if (lastDownloading && !recentLaunchDownloading) {
@@ -3805,6 +3947,34 @@ void drawSatSelectPage() {
                     snprintf(statusBuf, sizeof(statusBuf), "\nEstado: Inactivo/Silencioso");
                 } else {
                     snprintf(statusBuf, sizeof(statusBuf), "\nStatus: Inactive/Silent");
+                }
+                specBlock += String(statusBuf);
+            }
+            
+            if (selSat.noradId == 100532) {
+                char statusBuf[96];
+                if (currL == LANG_ZH) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\n运行状态: 往L2转移轨道巡航中(预计9月底入轨)");
+                } else if (currL == LANG_JA) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\n運用状態: 地球-L2遷移軌道巡航中(9月下旬投入予定)");
+                } else if (currL == LANG_ES) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\nEstado: En transito a L2 (Llegada fin de sep 2026)");
+                } else {
+                    snprintf(statusBuf, sizeof(statusBuf), "\nStatus: In-transit to L2 (Arrival late Sep 2026)");
+                }
+                specBlock += String(statusBuf);
+            }
+            
+            if (selSat.noradId == 34937) {
+                char statusBuf[96];
+                if (currL == LANG_ZH) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\n运行状态: 已退役(液氦耗尽停止工作)");
+                } else if (currL == LANG_JA) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\n運用状態: 退役(液体ヘリウム枯渇)");
+                } else if (currL == LANG_ES) {
+                    snprintf(statusBuf, sizeof(statusBuf), "\nEstado: Retirado (Helio agotado)");
+                } else {
+                    snprintf(statusBuf, sizeof(statusBuf), "\nStatus: Retired (Helium depleted)");
                 }
                 specBlock += String(statusBuf);
             }
@@ -4451,6 +4621,7 @@ void drawSatSelectPage() {
 }
 
 void loop() {
+    gimbal.tick();
     // Resume suspended predictorTask after 500ms debounce of time machine adjustments
     if (lastTimeAdjustMillis != 0 && millis() - lastTimeAdjustMillis > 500) {
         lastTimeAdjustMillis = 0;
@@ -4481,7 +4652,7 @@ void loop() {
                 unlockPassMutex();
                 
                 if (!isCacheValid) {
-                    Serial.printf("[Debug] Time Machine resumed but cache invalid (day crossed). Resetting prediction. baseTime=%u, targetTime=%u\n", baseTime, targetTime);
+                    // Serial.printf("[Debug] Time Machine resumed but cache invalid (day crossed). Resetting prediction. baseTime=%u, targetTime=%u\n", baseTime, targetTime);
                     lockPassMutex();
                     predictionsReady = false;
                     lastPredictionBaseTime = 0; // Invalid cache
@@ -4490,10 +4661,10 @@ void loop() {
                     unlockPassMutex();
                     triggerPrediction = true;
                 } else {
-                    Serial.printf("[Debug] Time Machine resumed, cache is valid (same day). Continuing calculation or keeping cache. baseTime=%u\n", baseTime);
+                    // Serial.printf("[Debug] Time Machine resumed, cache is valid (same day). Continuing calculation or keeping cache. baseTime=%u\n", baseTime);
                 }
             } else {
-                Serial.println("[Debug] Time Machine resumed. Panel closed, skipping cross-day recalculation checks.");
+                // Serial.println("[Debug] Time Machine resumed. Panel closed, skipping cross-day recalculation checks.");
             }
         }
     }
@@ -4524,8 +4695,8 @@ void loop() {
         isManualLocationMode = pos_manager->isManualPositionEnabled();
         
         if (abs(baseUserLat - oldLat) > 0.01 || abs(baseUserLon - oldLon) > 0.01 || abs(baseUserAlt - oldAlt) > 100.0) {
-            Serial.printf("[Debug] Cache reset due to main loop coords change: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
-                          oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
+            // Serial.printf("[Debug] Cache reset due to main loop coords change: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
+            //               oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
             lockPassMutex();
             lastPredictionBaseTime = 0; // 缓存失效
             predictionsReady = false;
@@ -4644,8 +4815,10 @@ void loop() {
         static bool lastN = false;
         static bool lastD = false;
         static bool lastTab = false;
+        static bool lastShift = false;
         static bool lastL = false;
         static bool lastSpace = false;
+        static bool lastM = false;
 
         bool currSemi = M5Cardputer.Keyboard.isKeyPressed(';');
         bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
@@ -4669,8 +4842,10 @@ void loop() {
         bool currN = M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed('N');
         bool currD = M5Cardputer.Keyboard.isKeyPressed('d') || M5Cardputer.Keyboard.isKeyPressed('D');
         bool currTab = M5Cardputer.Keyboard.isKeyPressed(KEY_TAB);
+        bool currShift = M5Cardputer.Keyboard.isKeyPressed(KEY_LEFT_SHIFT) || M5Cardputer.Keyboard.keysState().shift;
         bool currL = M5Cardputer.Keyboard.isKeyPressed('l') || M5Cardputer.Keyboard.isKeyPressed('L');
         bool currSpace = M5Cardputer.Keyboard.isKeyPressed(' ');
+        bool currM = M5Cardputer.Keyboard.isKeyPressed('m') || M5Cardputer.Keyboard.isKeyPressed('M');
 
         bool justSemi = currSemi && !lastSemi;
         bool justDot = currDot && !lastDot;
@@ -4694,17 +4869,19 @@ void loop() {
         bool justN = currN && !lastN;
         bool justD = currD && !lastD;
         bool justTab = currTab && !lastTab;
+        bool justShift = currShift && !lastShift;
         bool justL = currL && !lastL;
         bool justSpace = currSpace && !lastSpace;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justTab || justL || justSpace;
+        bool justM = currM && !lastM;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justTab || justShift || justL || justSpace || justM;
 
         if (showHelp) {
             if (millis() < 3000) {
                 showHelp = false;
             } else if (hasAnyKeyJustPressed) {
                 showHelp = false;
-                currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = currTab = currL = currSpace = false;
-                justSemi = justDot = justComma = justSlash = justO = justV = justEnter = justBack = justEsc = justTick = justBracketL = justBracketR = justC = justR = justW = justS = justH = justG = justY = justN = justD = justTab = false;
+                currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = currTab = currShift = currL = currSpace = false;
+                justSemi = justDot = justComma = justSlash = justO = justV = justEnter = justBack = justEsc = justTick = justBracketL = justBracketR = justC = justR = justW = justS = justH = justG = justY = justN = justD = justTab = justShift = false;
                 hasAnyKeyJustPressed = false;
             }
         }
@@ -4853,13 +5030,48 @@ void loop() {
                     }
                 }
             }
+        } else if (appState == STATE_SERVO_TEST) {
+            char currentKey = 0;
+            if (M5Cardputer.Keyboard.isKeyPressed(',')) currentKey = ',';
+            else if (M5Cardputer.Keyboard.isKeyPressed('/')) currentKey = '/';
+
+            if (currentKey != 0) {
+                if (lastKey != currentKey) {
+                    lastKey = currentKey;
+                    keyHoldStartTime = millis();
+                    lastKeyRepeat = millis();
+                    float cur = gimbal.getChannelAngle(activeServoTestChannel);
+                    if (currentKey == ',') cur -= 5.0f;
+                    else if (currentKey == '/') cur += 5.0f;
+                    gimbal.setManualTestAngle(activeServoTestChannel, cur, true);
+                    log_i("[ServoTest] CH%d -> %.1f deg (%d us)", activeServoTestChannel, 
+                          gimbal.getChannelAngle(activeServoTestChannel), 
+                          gimbal.getChannelPulse(activeServoTestChannel));
+                } else {
+                    unsigned long heldTime = millis() - keyHoldStartTime;
+                    if (heldTime > 250) {
+                        if (millis() - lastKeyRepeat >= 50) {
+                            lastKeyRepeat = millis();
+                            float cur = gimbal.getChannelAngle(activeServoTestChannel);
+                            if (currentKey == ',') cur -= 2.0f;
+                            else if (currentKey == '/') cur += 2.0f;
+                            gimbal.setManualTestAngle(activeServoTestChannel, cur, true);
+                        }
+                    }
+                }
+            } else {
+                lastKey = 0;
+            }
         }
 
         
         // Handle discrete keyboard input
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
             if (appState == STATE_MAIN) {
-                if (justTab) {
+                if (justShift) {
+                    appState = STATE_SERVO_TEST;
+                    gimbal.enterManualTest();
+                } else if (justTab) {
                     int nextMode = (earth_renderer->getVisualMode() + 1) % 2;
                     earth_renderer->setVisualMode(nextMode);
                 } else if (justC) {
@@ -4937,14 +5149,14 @@ void loop() {
 
                         // 4. Only recalculate if difference is beyond thresholds
                         if (timeCrossedDay || locShifted) {
-                            Serial.printf("[Debug] Cache reset on justR: timeCrossedDay=%d, locShifted=%d\n", timeCrossedDay, locShifted);
+                            // Serial.printf("[Debug] Cache reset on justR: timeCrossedDay=%d, locShifted=%d\n", timeCrossedDay, locShifted);
                             lockPassMutex();
                             lastPredictionBaseTime = 0; // 缓存失效
                             predictionsReady = false;
                             unlockPassMutex();
                             triggerPrediction = true;
                         } else {
-                            Serial.println("[Debug] justR reset applied silently. Coords/Time shift within thresholds.");
+                            // Serial.println("[Debug] justR reset applied silently. Coords/Time shift within thresholds.");
                         }
                     }
                 } else if (justBack) {
@@ -5015,12 +5227,12 @@ void loop() {
                         }
                         unlockPassMutex();
                         
-                        Serial.printf("[Debug] Enter Panel: predictionsReady=%d, lastPredictionBaseTime=%u, targetTime=%u, isCacheValid=%d, g_orbitCalculating=%d, triggerPrediction=%d\n", 
-                                      predictionsReady, lastPredictionBaseTime, targetTime, isCacheValid, g_orbitCalculating, triggerPrediction);
+                        // Serial.printf("[Debug] Enter Panel: predictionsReady=%d, lastPredictionBaseTime=%u, targetTime=%u, isCacheValid=%d, g_orbitCalculating=%d, triggerPrediction=%d\n", 
+                        //               predictionsReady, lastPredictionBaseTime, targetTime, isCacheValid, g_orbitCalculating, triggerPrediction);
 
                         bool needTrigger = !isCacheValid || (!predictionsReady && !g_orbitCalculating);
                         if (needTrigger && !g_orbitCalculating && !triggerPrediction) {
-                            Serial.printf("[Debug] Triggering calculation. needTrigger=%d, isCacheValid=%d, predictionsReady=%d\n", needTrigger, isCacheValid, predictionsReady);
+                            // Serial.printf("[Debug] Triggering calculation. needTrigger=%d, isCacheValid=%d, predictionsReady=%d\n", needTrigger, isCacheValid, predictionsReady);
                             lockPassMutex();
                             predictionsReady = false;
                             lastPredictionBaseTime = 0;
@@ -5062,10 +5274,14 @@ void loop() {
                 } else if (justW) {
                     if (!g_networkActive) {
                         if (!HalWifi::isConnected()) {
-                            manualWifiToggle = true;
-                            BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
-                            if (res != pdPASS) {
-                                LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
+                            if (!isSystemMemorySafeForNetwork()) {
+                                LOG_W("APP", "Cannot start NetworkTask from main view: insufficient memory");
+                            } else {
+                                manualWifiToggle = true;
+                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 10240, NULL, 1, NULL, 0);
+                                if (res != pdPASS) {
+                                    LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
+                                }
                             }
                         } else {
                             WiFi.disconnect(true);
@@ -5086,6 +5302,9 @@ void loop() {
                 } else if (justL) {
                     appState = STATE_LANG_SELECT;
                     langSelectedIndex = (int)I18N::getLanguage();
+                } else if (justM) {
+                    appState = STATE_HW_WIZARD;
+                    hardware_wizard.reset();
                 } else if (justH) {
                     showHelp = !showHelp;
                 } else if (justG) {
@@ -5270,7 +5489,7 @@ void loop() {
                             
                             manualWifiToggle = true; // Stay connected since user explicitly set it up
                             BaseType_t res = xTaskCreatePinnedToCore(
-                                networkTask, "NetworkTask", 16384, params, 1, NULL, 0
+                                networkTask, "NetworkTask", 10240, params, 1, NULL, 0
                             );
                             if (res != pdPASS) {
                                 LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
@@ -5378,6 +5597,12 @@ void loop() {
                             recentLaunchDownloadFinishedMs = millis();
                             drawSatSelectPage();
                             pushCanvasWithFilter();
+                        } else if (!isSystemMemorySafeForNetwork()) {
+                            recentLaunchErrorMsg = I18N::get(TXT_LOW_MEMORY);
+                            recentLaunchDownloadSuccess = false;
+                            recentLaunchDownloadFinishedMs = millis();
+                            drawSatSelectPage();
+                            pushCanvasWithFilter();
                         } else if (!recentLaunchDownloading) {
                             if (justC) {
                                 if (LittleFS.exists("/recent_last_update.txt")) {
@@ -5402,6 +5627,12 @@ void loop() {
                         if (justC && currentSatTab == TAB_ENCYCLOPEDIA && satSelectedIndex >= 0 && satSelectedIndex < NUM_SATELLITES) {
                             if (g_networkActive) {
                                 downloadErrorMsg = I18N::get(TXT_SYS_BUSY);
+                                downloadFinishedMs = millis();
+                                drawSatSelectPage();
+                                pushCanvasWithFilter();
+                            } else if (!isSystemMemorySafeForNetwork()) {
+                                downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
+                                downloadFinishedMs = millis();
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
                             } else {
@@ -5411,6 +5642,7 @@ void loop() {
                                 BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 8192, (void*)(intptr_t)satSelectedIndex, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
+                                    downloadFinishedMs = millis();
                                     drawSatSelectPage();
                                     pushCanvasWithFilter();
                                 }
@@ -5418,23 +5650,35 @@ void loop() {
                         } else if (!justC) { // Prevent C from triggering WiFi toggle in other tabs
                             if (g_networkActive) {
                                 downloadErrorMsg = I18N::get(TXT_SYS_BUSY);
+                                downloadFinishedMs = millis();
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
                             } else if (!HalWifi::isConnected()) {
-                                manualWifiToggle = true;
-                                downloadErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
-                                drawSatSelectPage();
-                                pushCanvasWithFilter();
-                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 16384, NULL, 1, NULL, 0);
-                                if (res != pdPASS) {
-                                    downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
+                                if (!isSystemMemorySafeForNetwork()) {
+                                    downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
+                                    downloadFinishedMs = millis();
                                     drawSatSelectPage();
                                     pushCanvasWithFilter();
+                                } else {
+                                    manualWifiToggle = true;
+                                    downloadErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
+                                    drawSatSelectPage();
+                                    pushCanvasWithFilter();
+                                    BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 10240, NULL, 1, NULL, 0);
+                                    if (res != pdPASS) {
+                                        downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
+                                        downloadFinishedMs = millis();
+                                        drawSatSelectPage();
+                                        pushCanvasWithFilter();
+                                    }
                                 }
                             } else {
                                 WiFi.disconnect(true);
                                 WiFi.mode(WIFI_OFF);
                                 downloadErrorMsg = I18N::get(TXT_WIFI_DISCONNECTED);
+                                downloadFinishedMs = millis();
+                                drawSatSelectPage();
+                                pushCanvasWithFilter();
                             }
                         }
                     }
@@ -5548,16 +5792,31 @@ void loop() {
                             satSelectedIndex = 0;
                         } else if (justEnter) {
                             if ((noradInput.length() == 5 || noradInput.length() == 6) && !isDownloadingCustom) {
-                                isDownloadingCustom = true;
-                                downloadErrorMsg = "";
-                                drawSatSelectPage();
-                                pushCanvasWithFilter();
-                                
-                                int id = noradInput.toInt();
-                                BaseType_t res = xTaskCreatePinnedToCore(downloadCustomSatTask, "DownloadCustomSatTask", 8192, (void*)(intptr_t)id, 1, NULL, 0);
-                                if (res != pdPASS) {
-                                    isDownloadingCustom = false;
-                                    downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
+                                if (g_networkActive) {
+                                    downloadErrorMsg = I18N::get(TXT_SYS_BUSY);
+                                    downloadFinishedMs = millis();
+                                    drawSatSelectPage();
+                                    pushCanvasWithFilter();
+                                } else if (!isSystemMemorySafeForNetwork()) {
+                                    downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
+                                    downloadFinishedMs = millis();
+                                    drawSatSelectPage();
+                                    pushCanvasWithFilter();
+                                } else {
+                                    isDownloadingCustom = true;
+                                    downloadErrorMsg = "";
+                                    drawSatSelectPage();
+                                    pushCanvasWithFilter();
+                                    
+                                    int id = noradInput.toInt();
+                                    BaseType_t res = xTaskCreatePinnedToCore(downloadCustomSatTask, "DownloadCustomSatTask", 8192, (void*)(intptr_t)id, 1, NULL, 0);
+                                    if (res != pdPASS) {
+                                        isDownloadingCustom = false;
+                                        downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
+                                        downloadFinishedMs = millis();
+                                        drawSatSelectPage();
+                                        pushCanvasWithFilter();
+                                    }
                                 }
                             }
                         } else {
@@ -5632,6 +5891,52 @@ void loop() {
                 } else if (justDot) { // DOWN
                     langSelectedIndex = (langSelectedIndex + 1) % 4;
                 }
+            } else if (appState == STATE_SERVO_TEST) {
+                if (justShift || justEsc || justTick || justBack) {
+                    gimbal.exitManualTest();
+                    appState = STATE_MAIN;
+                } else if (M5Cardputer.Keyboard.isKeyPressed('0')) {
+                    activeServoTestChannel = 0;
+                } else if (M5Cardputer.Keyboard.isKeyPressed('1')) {
+                    activeServoTestChannel = 1;
+                } else if (M5Cardputer.Keyboard.isKeyPressed('2')) {
+                    activeServoTestChannel = 2;
+                } else if (justSemi) { // 轮换上一个通道
+                    activeServoTestChannel = (activeServoTestChannel - 1 + 3) % 3;
+                } else if (justDot) { // 轮换下一个通道
+                    activeServoTestChannel = (activeServoTestChannel + 1) % 3;
+                } else if (justC) { // 快捷置 180°
+                    gimbal.setManualTestAngle(activeServoTestChannel, 180.0f, true);
+                    log_i("[ServoTest] CH%d -> 180.0 deg (2500 us)", activeServoTestChannel);
+                } else if (M5Cardputer.Keyboard.isKeyPressed('x') || M5Cardputer.Keyboard.isKeyPressed('X')) { // 快捷置 90° (中点)
+                    gimbal.setManualTestAngle(activeServoTestChannel, 90.0f, true);
+                    log_i("[ServoTest] CH%d -> 90.0 deg (1500 us)", activeServoTestChannel);
+                } else if (M5Cardputer.Keyboard.isKeyPressed('z') || M5Cardputer.Keyboard.isKeyPressed('Z')) { // 快捷置 0°
+                    gimbal.setManualTestAngle(activeServoTestChannel, 0.0f, true);
+                    log_i("[ServoTest] CH%d -> 0.0 deg (500 us)", activeServoTestChannel);
+                } else if (M5Cardputer.Keyboard.isKeyPressed('a') || M5Cardputer.Keyboard.isKeyPressed('A')) { // 快捷置 45°
+                    gimbal.setManualTestAngle(activeServoTestChannel, 45.0f, true);
+                    log_i("[ServoTest] CH%d -> 45.0 deg (1000 us)", activeServoTestChannel);
+                } else if (justS) { // 快捷置 135°
+                    gimbal.setManualTestAngle(activeServoTestChannel, 135.0f, true);
+                    log_i("[ServoTest] CH%d -> 135.0 deg (2000 us)", activeServoTestChannel);
+                }
+            } else if (appState == STATE_HW_WIZARD) {
+                char keyChar = 0;
+                if (justEsc || justTick || justBack) keyChar = 27;
+                else if (justEnter) keyChar = '\n';
+                else if (justBracketL) keyChar = '[';
+                else if (justBracketR) keyChar = ']';
+                else if (justSpace) keyChar = ' ';
+                else if (M5Cardputer.Keyboard.keysState().word.size() > 0) {
+                    keyChar = M5Cardputer.Keyboard.keysState().word[0];
+                }
+
+                if (hardware_wizard.handleKey(M5Cardputer.Keyboard.keysState(), keyChar)) {
+                    appState = STATE_MAIN;
+                    earth_renderer->getCanvas()->setTextDatum(top_left);
+                    earth_renderer->getCanvas()->clearClipRect();
+                }
             }
         }
 
@@ -5658,8 +5963,10 @@ void loop() {
         lastN = currN;
         lastD = currD;
         lastTab = currTab;
+        lastShift = currShift;
         lastL = currL;
         lastSpace = currSpace;
+        lastM = currM;
         
         if (appState == STATE_WIFI_SETUP) {
             drawWiFiSetupPage();
@@ -5674,6 +5981,16 @@ void loop() {
             return;
         } else if (appState == STATE_SAT_SELECT) {
             drawSatSelectPage();
+            pushCanvasWithFilter();
+            updateChainMonoDisplay();
+            return;
+        } else if (appState == STATE_SERVO_TEST) {
+            drawServoTestPage();
+            pushCanvasWithFilter();
+            updateChainMonoDisplay();
+            return;
+        } else if (appState == STATE_HW_WIZARD) {
+            hardware_wizard.draw(earth_renderer->getCanvas());
             pushCanvasWithFilter();
             updateChainMonoDisplay();
             return;
@@ -5707,8 +6024,8 @@ void loop() {
                     }
                     
                     if (abs(baseUserLat - oldLat) > 0.01 || abs(baseUserLon - oldLon) > 0.01 || abs(baseUserAlt - oldAlt) > 100.0) {
-                        Serial.printf("[Debug] GNSS sync cache reset: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
-                                      oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
+                        // Serial.printf("[Debug] GNSS sync cache reset: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
+                        //               oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
                         lockPassMutex();
                         lastPredictionBaseTime = 0; // 缓存失效
                         predictionsReady = false;
@@ -6442,6 +6759,258 @@ void loop() {
                 }
             }
         
+        // Update 3-axis Gimbal Targets based on active sat view focus
+        if (gimbal.isOnline() && appState != STATE_SERVO_TEST) {
+            if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+                if (!g_satCaches[focusSatIndex].lastGeoValid) {
+                    double tx = 0, ty = 0, tz = 0;
+                    if (g_satellites[focusSatIndex].calc.getTEME(simTime, tx, ty, tz)) {
+                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(simTime));
+                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                        g_satCaches[focusSatIndex].lastGeo = CoordTransform::ecefToGeodetic(ecef);
+                        g_satCaches[focusSatIndex].lastGeoValid = true;
+                    }
+                }
+                
+                if (g_satCaches[focusSatIndex].lastGeoValid) {
+                    GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                    ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_satCaches[focusSatIndex].lastGeo);
+                    TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
+                    
+                    float realAz = topo.az;
+                    float realEl = topo.el;
+                    uint32_t currentSimTime = current_unix + timeMachineOffset;
+                    
+                    static int s_trackingSatIndex = -1;
+                    static bool s_inPassSession = false;
+                    static PassEvent s_lockedPass;
+                    static float s_lockedHeading = 90.0f;
+                    
+                    // 切换聚焦卫星时，重置过境跟踪会话
+                    if (s_trackingSatIndex != focusSatIndex) {
+                        s_trackingSatIndex = focusSatIndex;
+                        s_inPassSession = false;
+                    }
+                    
+                    // 状态切换与退出判定：
+                    bool isPassActive = false;
+                    if (!s_inPassSession) {
+                        // 未在过境中：卫星仰角大于等于 0 即判定升出地平线
+                        if (realEl >= 0.0f) {
+                            isPassActive = true;
+                        }
+                    } else {
+                        // 已在过境中：只要卫星仰角仍在地上 (realEl > 0)，或尚未到达预计降落时刻，维持过境
+                        // 一旦卫星已经落入地平线 (realEl <= 0) 且时间已过预计落山时刻，过境立即圆满结束！
+                        if (realEl > 0.0f || (s_lockedPass.losTime > 0 && currentSimTime < s_lockedPass.losTime)) {
+                            isPassActive = true;
+                        }
+                    }
+                    
+                    // 解算当前聚焦卫星在天平面的真实飞行航向角 Track Heading
+                    auto getSatTrackHeading = [&](uint32_t t) -> float {
+                        double x0 = 0, y0 = 0, z0 = 0;
+                        double x1 = 0, y1 = 0, z1 = 0;
+                        if (g_satellites[focusSatIndex].calc.getTEME(t, x0, y0, z0) &&
+                            g_satellites[focusSatIndex].calc.getTEME(t + 15, x1, y1, z1)) {
+                            double g0 = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
+                            double g1 = CoordTransform::getGMST(CoordTransform::unixToJulian(t + 15));
+                            ECEFCoord ec0 = CoordTransform::temeToECEF(x0, y0, z0, g0);
+                            ECEFCoord ec1 = CoordTransform::temeToECEF(x1, y1, z1, g1);
+                            GeodeticCoord obs = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                            TopocentricCoord tp0 = CoordTransform::ecefToTopocentric(obs, ec0);
+                            TopocentricCoord tp1 = CoordTransform::ecefToTopocentric(obs, ec1);
+                            
+                            float r0 = cosf(tp0.el * DEG_TO_RAD);
+                            float e0 = r0 * sinf(tp0.az * DEG_TO_RAD);
+                            float n0 = r0 * cosf(tp0.az * DEG_TO_RAD);
+                            
+                            float r1 = cosf(tp1.el * DEG_TO_RAD);
+                            float e1 = r1 * sinf(tp1.az * DEG_TO_RAD);
+                            float n1 = r1 * cosf(tp1.az * DEG_TO_RAD);
+                            
+                            float de = e1 - e0;
+                            float dn = n1 - n0;
+                            if (fabsf(de) > 1e-5f || fabsf(dn) > 1e-5f) {
+                                float hdg = atan2f(de, dn) * RAD_TO_DEG;
+                                if (hdg < 0.0f) hdg += 360.0f;
+                                return hdg;
+                            }
+                        }
+                        return 90.0f;
+                    };
+
+                    if (isPassActive) {
+                        // 1. 卫星在过境中：锁定单一会话，CH0基准走向与CH1拱门倾角在整个过境期间绝对恒定，严禁任何跳变！
+                        if (!s_inPassSession) {
+                            bool foundPass = false;
+                            PassEvent activePass;
+                            
+                            lockPassMutex();
+                            for (const auto& pass : recommendedPasses) {
+                                if (pass.satName == g_satellites[focusSatIndex].name) {
+                                    if (currentSimTime >= (pass.aosTime > 60 ? pass.aosTime - 60 : 0) && currentSimTime <= pass.losTime + 60) {
+                                        activePass = pass;
+                                        foundPass = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            unlockPassMutex();
+                            
+                            if (foundPass && activePass.losTime > activePass.aosTime) {
+                                s_lockedPass = activePass;
+                            } else {
+                                // 就地推算精准过境，避免错误固定当前坐标
+                                s_lockedPass.satName = g_satellites[focusSatIndex].name;
+                                s_lockedPass.maxElevation = max(realEl, 15.0f);
+                                s_lockedPass.maxAz = realAz;
+                                
+                                uint32_t tAos = currentSimTime;
+                                for (int k = 1; k <= 45; k++) {
+                                    uint32_t tb = currentSimTime - k * 20;
+                                    double bx=0, by=0, bz=0;
+                                    if (g_satellites[focusSatIndex].calc.getTEME(tb, bx, by, bz)) {
+                                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(tb));
+                                        ECEFCoord bec = CoordTransform::temeToECEF(bx, by, bz, gmst);
+                                        TopocentricCoord btp = CoordTransform::ecefToTopocentric(observerPos, bec);
+                                        if (btp.el < 0.0f) { tAos = tb; break; }
+                                        if (btp.el > s_lockedPass.maxElevation) { s_lockedPass.maxElevation = btp.el; s_lockedPass.maxAz = btp.az; }
+                                    }
+                                }
+                                uint32_t tLos = currentSimTime + 600;
+                                for (int k = 1; k <= 45; k++) {
+                                    uint32_t tf = currentSimTime + k * 20;
+                                    double fx=0, fy=0, fz=0;
+                                    if (g_satellites[focusSatIndex].calc.getTEME(tf, fx, fy, fz)) {
+                                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(tf));
+                                        ECEFCoord fec = CoordTransform::temeToECEF(fx, fy, fz, gmst);
+                                        TopocentricCoord ftp = CoordTransform::ecefToTopocentric(observerPos, fec);
+                                        if (ftp.el < 0.0f) { tLos = tf; break; }
+                                        if (ftp.el > s_lockedPass.maxElevation) { s_lockedPass.maxElevation = ftp.el; s_lockedPass.maxAz = ftp.az; }
+                                    }
+                                }
+                                s_lockedPass.aosTime = tAos;
+                                s_lockedPass.losTime = tLos;
+                            }
+                            uint32_t tMid = (s_lockedPass.aosTime + s_lockedPass.losTime) / 2;
+                            s_lockedHeading = getSatTrackHeading(tMid);
+                            s_inPassSession = true;
+                        }
+                        
+                        // 计算过境平滑进度 (0.0 -> 1.0 -> 0° -> 180°)
+                        float totalDur = (float)(s_lockedPass.losTime - s_lockedPass.aosTime);
+                        if (totalDur < 30.0f) totalDur = 600.0f;
+                        float ratio = (float)(currentSimTime - s_lockedPass.aosTime) / totalDur;
+                        ratio = constrain(ratio, 0.0f, 1.0f);
+                        float progressDeg = ratio * 180.0f;
+                        
+                        // 下发刚性锁定的轨道航向走向、拱高与平滑进度（CH0 与 CH1 恒定不动，只有 CH2 平滑划过天际）
+                        gimbal.setTargetArch(s_lockedHeading, s_lockedPass.maxElevation, progressDeg, s_lockedPass.maxAz);
+                    } else {
+                        // 2. 卫星在地平线以下：结束本次过境会话，寻找该卫星未来最早的下一次过境并预瞄准
+                        s_inPassSession = false;
+                        bool foundNext = false;
+                        uint32_t earliestAos = 0xFFFFFFFF;
+                        float aosAz = 90.0f;
+                        float nextMaxEl = 45.0f;
+                        float nextMaxAz = 90.0f;
+                        
+                        // 优先在推荐过境列表中检索未来过境
+                        lockPassMutex();
+                        for (const auto& pass : recommendedPasses) {
+                            if (pass.satName == g_satellites[focusSatIndex].name && pass.aosTime > currentSimTime) {
+                                if (pass.aosTime < earliestAos) {
+                                    earliestAos = pass.aosTime;
+                                    aosAz = pass.startAz;
+                                    nextMaxEl = pass.maxElevation;
+                                    nextMaxAz = pass.maxAz;
+                                    foundNext = true;
+                                }
+                            }
+                        }
+                        unlockPassMutex();
+                        
+                        // 增强防护：若预计算列表中尚未包含（例如后台正在重算），直接对当前聚焦卫星就地向前推算最近过境
+                        // 注意：若用户正在按键调节时间 (lastTimeAdjustMillis != 0)，严禁执行耗时推算，保证调时绝对丝滑
+                        if (!foundNext) {
+                            static int s_cachedFocusSat = -1;
+                            static uint32_t s_lastProbeMs = 0;
+                            static uint32_t s_cachedNextAos = 0;
+                            static float s_cachedAosAz = 90.0f;
+                            static float s_cachedNextMaxEl = 45.0f;
+                            
+                            if (s_cachedFocusSat != focusSatIndex) {
+                                s_cachedFocusSat = focusSatIndex;
+                                s_cachedNextAos = 0;
+                                s_lastProbeMs = 0;
+                            }
+                            
+                            if (s_cachedNextAos > currentSimTime) {
+                                earliestAos = s_cachedNextAos;
+                                aosAz = s_cachedAosAz;
+                                nextMaxEl = s_cachedNextMaxEl;
+                                foundNext = true;
+                            } else if (lastTimeAdjustMillis == 0 && (millis() - s_lastProbeMs > 3000)) {
+                                s_lastProbeMs = millis();
+                                GeodeticCoord obsPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                                uint32_t probeT = currentSimTime + 60;
+                                uint32_t probeEnd = currentSimTime + 6 * 3600; // 探测未来 6 小时
+                                bool probeInPass = false;
+                                float pAosAz = 0.0f;
+                                float pMaxEl = 0.0f;
+                                uint32_t pAosTime = 0;
+                                
+                                while (probeT < probeEnd) {
+                                    double px = 0, py = 0, pz = 0;
+                                    if (g_satellites[focusSatIndex].calc.getTEME(probeT, px, py, pz)) {
+                                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(probeT));
+                                        ECEFCoord pEcef = CoordTransform::temeToECEF(px, py, pz, gmst);
+                                        TopocentricCoord pTopo = CoordTransform::ecefToTopocentric(obsPos, pEcef);
+                                        
+                                        if (pTopo.el >= 0.0f) {
+                                            if (!probeInPass) {
+                                                probeInPass = true;
+                                                pAosAz = pTopo.az;
+                                                pMaxEl = pTopo.el;
+                                                pAosTime = probeT;
+                                            } else {
+                                                if (pTopo.el > pMaxEl) pMaxEl = pTopo.el;
+                                            }
+                                        } else if (probeInPass) {
+                                            if (pMaxEl >= 10.0f) {
+                                                foundNext = true;
+                                                earliestAos = pAosTime;
+                                                aosAz = pAosAz;
+                                                nextMaxEl = pMaxEl;
+                                                s_cachedNextAos = earliestAos;
+                                                s_cachedAosAz = aosAz;
+                                                s_cachedNextMaxEl = nextMaxEl;
+                                                break;
+                                            }
+                                            probeInPass = false;
+                                        }
+                                    }
+                                    probeT += 120; // 120秒快速巡航探测，计算量减半
+                                }
+                            }
+                        }
+                        
+                        if (foundNext) {
+                            float nextHeading = getSatTrackHeading(earliestAos);
+                            gimbal.setTargetPrePointArch(nextHeading, nextMaxEl, nextMaxAz);
+                        } else {
+                            gimbal.setHold();
+                        }
+                    }
+                } else {
+                    gimbal.setHold();
+                }
+            } else {
+                gimbal.setHold();
+            }
+        }
+        
         // Render scene
         double renderUserLat = baseUserLat;
         if (isManualLocationMode && ((millis() / 500) % 2 == 0)) {
@@ -6496,22 +7065,22 @@ void loop() {
         
         if (showHelp && appState == STATE_MAIN) {
             auto canvas = earth_renderer->getCanvas();
-            uint16_t w = 216, h = 114;
+            uint16_t w = 216, h = 127;
             int x = (canvas->width() - w) / 2;
             int y = (canvas->height() - h) / 2;
             
             canvas->fillRect(x, y, w, h, canvas->color565(20, 30, 40));
             canvas->drawRect(x, y, w, h, TFT_LIGHTGRAY);
             
-            bool isZh = (I18N::getLanguage() == LANG_ZH);
             canvas->setTextColor(TFT_WHITE);
             canvas->setTextSize(1);
-            canvas->drawString(I18N::get(TXT_HELP_TITLE), x + 35, y + 5);
+            canvas->drawString(I18N::get(TXT_HELP_TITLE), x + 35, y + 4);
             
             auto drawHotKey = [&](const char* word, char keyChar, int dx, int dy) {
                 int cx = dx;
                 bool highlighted = false;
                 int i = 0;
+                int openBracketCount = 0;
                 while (word[i] != '\0') {
                     int charLen = 1;
                     unsigned char head = (unsigned char)word[i];
@@ -6524,10 +7093,30 @@ void loop() {
                         cstr[j] = word[i + j];
                     }
                     
-                    if ((charLen == 1 && !highlighted && tolower((unsigned char)cstr[0]) == tolower((unsigned char)keyChar) && keyChar != '\0') ||
-                        (keyChar == ' ' && !highlighted && (strcmp(cstr, "Spc") == 0 || strcmp(cstr, " ") == 0))) {
+                    bool isYellow = false;
+                    if (keyChar == '[') {
+                        if (cstr[0] == '[') {
+                            openBracketCount++;
+                            if (openBracketCount > 1) isYellow = true;
+                        } else if (cstr[0] == ']') {
+                            if (word[i + 1] != '\0' && strchr(word + i + 1, ']') != nullptr) {
+                                isYellow = true;
+                            }
+                        }
+                    } else if (keyChar == ' ') {
+                        if (!highlighted && (strcmp(cstr, "Spc") == 0 || strcmp(cstr, " ") == 0)) {
+                            isYellow = true;
+                            highlighted = true;
+                        }
+                    } else if (keyChar != '\0') {
+                        if (charLen == 1 && !highlighted && tolower((unsigned char)cstr[0]) == tolower((unsigned char)keyChar)) {
+                            isYellow = true;
+                            highlighted = true;
+                        }
+                    }
+                    
+                    if (isYellow) {
                         canvas->setTextColor(TFT_YELLOW);
-                        highlighted = true;
                     } else {
                         canvas->setTextColor(TFT_LIGHTGRAY);
                     }
@@ -6538,12 +7127,12 @@ void loop() {
                 }
             };
 
-            int ty = y + 20;
+            int ty = y + 17;
             drawHotKey(I18N::get(TXT_HELP_BRIGHT), '[', x + 8, ty);
             drawHotKey(I18N::get(TXT_HELP_GNSS), 'g', x + 112, ty); ty += 13;
             
             drawHotKey(I18N::get(TXT_HELP_HELP), 'h', x + 8, ty);
-            drawHotKey(I18N::get(TXT_HELP_HUD), 'b', x + 112, ty); ty += 13;
+            drawHotKey(I18N::get(TXT_HELP_HUD), '\0', x + 112, ty); ty += 13;
             
             drawHotKey(I18N::get(TXT_HELP_LOCK), ' ', x + 8, ty);
             drawHotKey(I18N::get(TXT_HELP_PASSLIST), 'e', x + 112, ty); ty += 13;
@@ -6557,7 +7146,10 @@ void loop() {
             drawHotKey(I18N::get(TXT_HELP_CONFIG), 'c', x + 8, ty);
             drawHotKey(I18N::get(TXT_HELP_REALTIME), 'r', x + 112, ty); ty += 13;
             
-            drawHotKey(I18N::get(TXT_HELP_TAB), 't', x + 8, ty); ty += 13;
+            drawHotKey(I18N::get(TXT_HELP_TAB), 't', x + 8, ty);
+            drawHotKey(I18N::get(TXT_HELP_MODULE), 'm', x + 112, ty); ty += 13;
+            
+            drawHotKey(I18N::get(TXT_HELP_SERVO), '\0', x + 8, ty); ty += 13;
         }
         
         if (showRecommendations) {
@@ -6875,51 +7467,13 @@ void loop() {
                 }
             }
             
-            // Draw GNSS and WiFi Status at the bottom of the panel
-            // Divider line shifted up to y=100
+            // Draw 2-Row Status Bar at the bottom of the panel
+            // Divider line at y=100
             earth_renderer->getCanvas()->drawFastHLine(0, 100, 140, TFT_DARKGREY);
             
-            // Draw WiFi Status
-            if (HalWifi::isConnected()) {
-                earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                earth_renderer->getCanvas()->drawString("WF:ON", 5, 105);
-            } else {
-                earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                earth_renderer->getCanvas()->drawString("WF:OFF", 5, 105);
-            }
+            auto& hw = HardwareConfig::getInstance();
             
-            // Draw GNSS Status
-            if (gnss && gnss->isModuleInitialized()) {
-                if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
-                    earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                    earth_renderer->getCanvas()->drawString("GP:FIX", 52, 105);
-                } else if (gnss->isInStandbyMode()) {
-                    if (gnssTimedOut) {
-                        earth_renderer->getCanvas()->setTextColor(TFT_RED);
-                        earth_renderer->getCanvas()->drawString("GP:TMO", 52, 105);
-                    } else {
-                        earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                        earth_renderer->getCanvas()->drawString("GP:OFF", 52, 105);
-                    }
-                } else {
-                    earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
-                    earth_renderer->getCanvas()->drawString("GP:SCH", 52, 105);
-                }
-            } else {
-                earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
-                earth_renderer->getCanvas()->drawString("GP:N/A", 52, 105);
-            }
-            
-            // Draw M5Chain Mono Status
-            if (isMonoInitialized) {
-                earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                earth_renderer->getCanvas()->drawString("MN:OK", 100, 105);
-            } else {
-                earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
-                earth_renderer->getCanvas()->drawString("MN:ND", 100, 105); // Not Detected
-            }
-            
-            // Draw GP Epoch Version
+            // Row 1 (y=105): GP Epoch (Left, x=3) & WiFi Status (Right, x=98)
             String tleEpoch = String(I18N::get(TXT_RL_EPOCH));
             if (g_satellites[0].tle.line1.length() >= 24) {
                 int year = 2000 + g_satellites[0].tle.line1.substring(18, 20).toInt();
@@ -6931,13 +7485,83 @@ void loop() {
                     month++;
                 }
                 char buf[16];
-                snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month + 1, doy);
+                snprintf(buf, sizeof(buf), "%02d-%02d-%02d", year % 100, month + 1, doy);
                 tleEpoch += buf;
             } else {
                 tleEpoch += I18N::get(TXT_VIS_NA);
             }
             earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-            earth_renderer->getCanvas()->drawString(tleEpoch.c_str(), 5, 117);
+            earth_renderer->getCanvas()->drawString(tleEpoch.c_str(), 3, 105);
+            
+            if (HalWifi::isConnected()) {
+                earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
+                earth_renderer->getCanvas()->drawString("WF:ON", 98, 105);
+            } else {
+                earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
+                earth_renderer->getCanvas()->drawString("WF:OFF", 98, 105);
+            }
+            
+            // Row 2 (y=118): GP (x=4), MN (x=52), GB (x=98)
+            // 1. GNSS Status (x=4)
+            bool gnssConfigured = hw.isEnabled(HW_MOD_CAP_LORA1262) || hw.isEnabled(HW_MOD_UNIT_GPSV11);
+            if (!gnssConfigured) {
+                earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
+                earth_renderer->getCanvas()->drawString("GP:--", 4, 118);
+            } else if (gnss && gnss->isModuleInitialized()) {
+                if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
+                    earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
+                    earth_renderer->getCanvas()->drawString("GP:FIX", 4, 118);
+                } else if (gnss->isInStandbyMode()) {
+                    if (gnssTimedOut) {
+                        earth_renderer->getCanvas()->setTextColor(TFT_RED);
+                        earth_renderer->getCanvas()->drawString("GP:TMO", 4, 118);
+                    } else {
+                        earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
+                        earth_renderer->getCanvas()->drawString("GP:OFF", 4, 118);
+                    }
+                } else {
+                    earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
+                    earth_renderer->getCanvas()->drawString("GP:SCH", 4, 118);
+                }
+            } else {
+                earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
+                earth_renderer->getCanvas()->drawString("GP:ND", 4, 118);
+            }
+            
+            // 2. Chain Mono Sub-screen Status (x=52)
+            bool monoConfigured = hw.isEnabled(HW_MOD_CHAIN_MONO);
+            if (!monoConfigured) {
+                earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
+                earth_renderer->getCanvas()->drawString("MN:--", 52, 118);
+            } else if (isMonoInitialized) {
+                earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
+                earth_renderer->getCanvas()->drawString("MN:OK", 52, 118);
+            } else {
+                earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
+                earth_renderer->getCanvas()->drawString("MN:ND", 52, 118);
+            }
+            
+            // 3. Gimbal Status (x=98)
+            bool gimbalConfigured = hw.isEnabled(HW_MOD_UNIT_8SERVOS);
+            if (!gimbalConfigured) {
+                earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
+                earth_renderer->getCanvas()->drawString("GB:--", 98, 118);
+            } else if (gimbal.isOnline()) {
+                uint16_t gbColor = TFT_GREEN;
+                const char* gbStatus = "GB:OK";
+                switch (gimbal.getState()) {
+                    case GIMBAL_STATE_INITIALIZING: gbColor = TFT_ORANGE; gbStatus = "GB:INI"; break;
+                    case GIMBAL_STATE_PREPOINT:     gbColor = TFT_YELLOW; gbStatus = "GB:AIM"; break;
+                    case GIMBAL_STATE_TRACKING:     gbColor = TFT_GREEN;  gbStatus = "GB:TRK"; break;
+                    case GIMBAL_STATE_STANDBY:      
+                    default:                        gbColor = TFT_GREEN;  gbStatus = "GB:OK";  break;
+                }
+                earth_renderer->getCanvas()->setTextColor(gbColor);
+                earth_renderer->getCanvas()->drawString(gbStatus, 98, 118);
+            } else {
+                earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
+                earth_renderer->getCanvas()->drawString("GB:ND", 98, 118);
+            }
         }
         
         // Draw Time Machine at bottom right

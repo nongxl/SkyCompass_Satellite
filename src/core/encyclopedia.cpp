@@ -109,6 +109,48 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         false  // defaultSelected
     },
+    // 100532 NGRST (Roman Space Telescope)
+    {
+        100532,
+        "NGRST (Roman)",
+        Category::ASTRONOMY,
+        ICON_TELESCOPE,
+        "南希·格蕾丝·罗曼空间望远镜（原WFIRST）。NASA研制的大视场红外巡天望远镜，于2026年8月30日由猎鹰重型运载火箭发射升空，正奔赴日-地L2点（预计9月底入轨）。视场为哈勃的100倍，用于探测暗能量、系外行星及验证广义相对论时空曲率。",
+        "Nancy Grace Roman Space Telescope (NGRST, formerly WFIRST). NASA observatory launched Aug 30, 2026 by a Falcon Heavy rocket, cruising to Sun-Earth L2 (arrival late Sep). Its 100x Hubble FOV explores dark energy, exoplanets, and spacetime curvature.",
+        "ナンシー・グレース・ローマン宇宙望遠鏡（NGRST、旧WFIRST）。NASAの広視野赤外線望远鏡で、2026年8月30日にファルコンヘビーロケットで打ち上げられ太陽-地球L2点へ巡航中（9月下旬投入予定）。ハッブルの100倍の視野で暗黒エネルギーや系外惑星を探査する。",
+        "Telescopio Espacial Nancy Grace Roman (NGRST, antes WFIRST). Observatorio de la NASA lanzado el 30 de agosto de 2026 en un cohete Falcon Heavy, en transito a L2 Sol-Tierra (llegada fin de sep). Campo 100x mayor que Hubble para estudiar energia oscura y exoplanetas.",
+        FLAG_SCIENCE,
+        TFT_MAGENTA,
+        0,
+        10.0,
+        SAT_TYPE_VISUAL,
+        "",
+        "",
+        "",
+        "",
+        false  // defaultSelected
+    },
+    // 34937 HERSCHEL (Herschel Space Observatory)
+    {
+        34937,
+        "HERSCHEL",
+        Category::ASTRONOMY,
+        ICON_TELESCOPE,
+        "赫歇尔空间天文台（HERSCHEL）。ESA远红外与亚毫米空间望远镜，于2009年5月14日由亚利安五号运载火箭发射升空，运行于日-地L2点利萨如轨道。2013年4月29日因液氦冷却剂耗尽停止工作。",
+        "Herschel Space Observatory. ESA's far-infrared and submillimetre space telescope, launched May 14, 2009 aboard an Ariane 5 rocket into a Lissajous orbit at Sun-Earth L2. Ceased operations on April 29, 2013 after liquid helium coolant was exhausted.",
+        "ハーシェル宇宙望遠鏡（HERSCHEL）。ESAの遠赤外線・サブミリ波宇宙望遠鏡。2009年5月14日にアリアン5ロケットで打ち上げられ太陽-地球L2点のリサージュ軌道に投入。2013年4月29日に液体ヘリウム冷却材が枯渇し運用終了。",
+        "Observatorio Espacial Herschel. Observatorio de infrarrojo lejano y submilimetrico de la ESA, lanzado el 14 de mayo de 2009 por un cohete Ariane 5 hacia una orbita de Lissajous en L2 Sol-Tierra. Ceso operaciones el 29 de abril de 2013 al agotarse el helio liquido.",
+        FLAG_SCIENCE | FLAG_HISTORIC,
+        TFT_YELLOW,
+        0,
+        10.0,
+        SAT_TYPE_VISUAL,
+        "",
+        "",
+        "",
+        "",
+        false  // defaultSelected
+    },
     // 53807 BlueWalker 3
     {
         53807,

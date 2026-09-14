@@ -5,6 +5,8 @@
 #include <esp32-hal-log.h>
 
 #define LOG_I(tag, format, ...) log_i("[%s] " format, tag, ##__VA_ARGS__)
+#define LOG_W(tag, format, ...) log_w("[%s] " format, tag, ##__VA_ARGS__)
+#define LOG_E(tag, format, ...) log_e("[%s] " format, tag, ##__VA_ARGS__)
 
 /**
  * @brief 日志管理器类
@@ -31,12 +33,12 @@ private:
      * @brief 私有构造函数
      */
     LogManager() {
-        _enabled = true;
+        _enabled = false;
         
-        // 初始化模块日志状态
+        // 初始化模块日志状态 - 暂时关闭计算链条日志
         _sunLogState.lastLogTime = 0;
         _sunLogState.logInterval = 5000; // 太阳5秒
-        _sunLogState.enabled = true;
+        _sunLogState.enabled = false;
         
         _moonLogState.lastLogTime = 0;
         _moonLogState.logInterval = 5000; // 月亮5秒
@@ -44,7 +46,7 @@ private:
         
         _galaxyLogState.lastLogTime = 0;
         _galaxyLogState.logInterval = 5000; // 银河5秒
-        _galaxyLogState.enabled = true;
+        _galaxyLogState.enabled = false;
     }
     
 public:

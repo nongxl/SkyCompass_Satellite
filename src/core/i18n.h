@@ -83,6 +83,8 @@ enum TextId {
     TXT_HELP_CONFIG,
     TXT_HELP_REALTIME,
     TXT_HELP_TAB,
+    TXT_HELP_MODULE,
+    TXT_HELP_SERVO,
     
     // Recommended Passes Panel
     TXT_RECOMMENDED_PASSES,
@@ -162,6 +164,7 @@ enum TextId {
     
     // Status Feedback / Error Msg / Banner info
     TXT_SYS_BUSY,
+    TXT_LOW_MEMORY,
     TXT_TASK_INIT_FAILED,
     TXT_CONNECTING_WIFI,
     TXT_WIFI_DISCONNECTED,

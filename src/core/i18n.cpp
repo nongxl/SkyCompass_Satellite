@@ -70,7 +70,7 @@ static const char* const t_en[TXT_MAX] = {
     "Brightness[ [/] ]",
     "GNSS Location[G]",
     "Help Menu[H]",
-    "HUD Toggle[Back]",
+    "HUD Toggle[Del]",
     "View Lock[Spc]",
     "Passes Panel[Enter]",
     "Satellite List[S]",
@@ -80,6 +80,8 @@ static const char* const t_en[TXT_MAX] = {
     "Manual Pos[C]",
     "Reset Time[R]",
     "Color Filter[Tab]",
+    "Module Setup[M]",
+    "Servo Setup[aA]",
     
     // Recommended Passes Panel
     " RECOMMENDED PASSES",
@@ -159,6 +161,7 @@ static const char* const t_en[TXT_MAX] = {
     
     // Status Feedback / Error Msg / Banner info
     "System Busy... Wait.",
+    "Low Memory, please wait...",
     "Task Init Failed!",
     "Connecting WiFi...",
     "WiFi Disconnected.",
@@ -239,7 +242,7 @@ static const char* const t_zh[TXT_MAX] = {
     "屏幕亮度[ [/] ]",
     "卫星定位[G]",
     "帮助菜单[H]",
-    "界面开关[Back]",
+    "界面开关[Del]",
     "视角校准[Spc]",
     "过境推荐[Enter]",
     "卫星百科[S]",
@@ -249,6 +252,8 @@ static const char* const t_zh[TXT_MAX] = {
     "手工位置[C]",
     "重置时间[R]",
     "色彩滤镜[Tab]",
+    "硬件模块[M]",
+    "舵机调试[aA]",
     
     // Recommended Passes Panel
     " 推荐过境事件",
@@ -328,6 +333,7 @@ static const char* const t_zh[TXT_MAX] = {
     
     // Status Feedback / Error Msg / Banner info
     "系统繁忙，请稍候...",
+    "内存不足，请稍候...",
     "任务初始化失败！",
     "正在连接无线网络...",
     "无线网络已断开。",
@@ -408,7 +414,7 @@ static const char* const t_ja[TXT_MAX] = {
     "画面明るさ[ [/] ]",
     "GNSS位置[G]",
     "ヘルプメニュー[H]",
-    "HUD表示切り替え[Back]",
+    "HUD表示切り替え[Del]",
     "視点ロック[Spc]",
     "通過予測一覧[Enter]",
     "衛星図鑑[S]",
@@ -418,6 +424,8 @@ static const char* const t_ja[TXT_MAX] = {
     "手動位置設定[C]",
     "時刻リセット[R]",
     "カラーフィルター[Tab]",
+    "モジュール[M]",
+    "サーボ調整[aA]",
     
     // Recommended Passes Panel
     " 推奨の通過イベント",
@@ -497,6 +505,7 @@ static const char* const t_ja[TXT_MAX] = {
     
     // Status Feedback / Error Msg / Banner info
     "システム処理中...",
+    "メモリ不足，お待ちください...",
     "タスク初期化失敗！",
     "WiFi接続中...",
     "WiFi切断。",
@@ -577,7 +586,7 @@ static const char* const t_es[TXT_MAX] = {
     "Brillo pantalla[ [/] ]",
     "Ubicacion GNSS[G]",
     "Menu de ayuda[H]",
-    "Alternar HUD[Back]",
+    "Alternar HUD[Del]",
     "Bloquear vista[Spc]",
     "Panel de pases[Enter]",
     "Lista de satelites[S]",
@@ -587,6 +596,8 @@ static const char* const t_es[TXT_MAX] = {
     "Posicion manual[C]",
     "Reiniciar hora[R]",
     "Filtro de color[Tab]",
+    "Modulos[M]",
+    "Calib servos[aA]",
     
     // Recommended Passes Panel
     " PASES RECOMENDADOS",
@@ -666,6 +677,7 @@ static const char* const t_es[TXT_MAX] = {
     
     // Status Feedback / Error Msg / Banner info
     "Sistema ocupado... Espere.",
+    "Memoria baja, espere...",
     "Error al iniciar tarea!",
     "Conectando a WiFi...",
     "WiFi desconectado.",
