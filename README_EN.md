@@ -19,27 +19,46 @@
   - **v1.1 Standard Version**: Supports external serial GPS modules (e.g. **GPS v1.1 Unit**) via the Grove port.
   - **Adaptive Pin Remapping**: The system automatically detects the internal slot. If no GPS module is detected on the internal slot pins `15/13` (slot empty), it **automatically remaps GPS communications to the Grove port (GPIO 2 / GPIO 1) and skips Chain Mono screen probe (displays mono:no)**. This solves the hardware pin conflicts between the rear slot and the physical matrix keyboard scanner lines on v1.1 Standard Cardputer.
 - **Physical Coexistence & Concurrent Working (No IMU contention)**: The built-in IMU on Cardputer-Adv operates on the internal I2C bus (GPIO 8/9), which is physically independent of the external Grove port (GPIO 2/1). Thus, GPS positioning and IMU motion sensing work concurrently without bus conflicts, keeping the Earth globe rendering perfectly smooth.
-- 6-Axis IMU (Accelerometer + Gyroscope)
-- Built-in or external GNSS Module (for positioning and high-precision UTC clock sync, default UART baud rate: 115200bps@8N1)
-- Physical Keyboard + Miniature TFT Screen
+- **6-Axis IMU** (Built-in Accelerometer + Gyroscope, supports real-time physical attitude tracking and `Space` lock).
+- **GNSS Module** (Built-in or external GPS/BDS/GLONASS module, used for geographic coordinate locking and atomic UTC time synchronization, default UART baud rate: 115200bps@8N1, equipped with automatic power-saving sleep).
+- **Orbital Arch Gimbal System (3-Axis Lego Armillary Sphere)**:
+  - Connects to an **M5Stack Unit 8Servos** or **PCA9685** servo driver module via Grove I2C.
+  - Drives 3 servos coupled with Lego mechanics:
+    - **CH0 (Base Azimuth / Track Heading Axis)**: Locks rigidly with the satellite's instantaneous orbital ground track heading.
+    - **CH1 (Celestial Arch Elevation Axis)**: Controls arch tilt corresponding to pass peak elevation (30°~180° mechanical clearance protection against base beam).
+    - **CH2 (Satellite Pointer Travel Axis)**: Simulates the spacecraft sweeping along the arch from AOS to LOS.
+- **Hardware Setup Wizard**:
+  - Press **`M`** on the main screen anytime to open the Hardware Setup Wizard to manually test and toggle **WiFi (WF)**, **GNSS (GP)**, **Magnetometer (MN)**, and **Gimbal (GB)** peripherals, with configs persisted to NVS flash.
+  - Features a dual-row module indicator bar at the bottom of the recommended passes list (Row 1: Epoch, WF; Row 2: GP, MN, GB).
+- **Physical Keyboard + Miniature Color TFT Screen** (240x135).
 
 ![Hardware Connection Diagram](docs/schematic_diagram.png)
 
 ## Core Features
 
 - **Tactile Panoramic Interaction & Key Mappings**:
-  - `Enter`: Slide out/in the recommended observation passes list panel.
-  - `S`: Open the Satellite selection menu to select which satellites to draw on the screen. Press `d` in the menu to delete custom-downloaded satellites.
-  - `W`: Enable/disable WiFi to perform NTP time synchronization and TLE data update.
-  - `H`: Slide out the **Keyboard Shortcuts Help Menu** at the center of the screen.
-  - `L`: Open the **Language Selection Menu** to seamlessly switch between English, Simplified Chinese, Japanese (日本語), and Spanish (Español), automatically saved to NVS flash.
-  - `C`: Enter/exit **Manual Location Mode (Crosshair Mode)**, using `;` (up), `.` (down), `,` (left), and `/` (right) like a joystick to rotate the globe and manually designate any observer location on Earth.
-  - `G`: Enable/disable **GNSS Forced Always-On Mode**, bypassing the auto-sleep power management to manually acquire GPS coordinates.
-  - `V`: Enter/exit **Spacecraft Follow Mode (Sat View Mode)**. In this mode, press `;` (previous) and `.` (next) to cycle focus between selected satellites.
-  - `Space`: Lock/unlock **IMU Camera Angle**. In Sat View Mode, pressing Space locks the current observation viewpoint; releasing it snaps the camera back to sync with physical device tilt.
-  - `R`: Reset the **Time Machine** simulated offset, immediately reverting to actual system time.
-  - `Del` (Backspace): Toggle **HUD Data Overlay** (toggles latitude/longitude overlays at corners).
-  - `[` and `]`: Adjust TFT screen brightness (from 16 to 255).
+  - `Enter`: Slide out/in the recommended observation passes list panel; press `Enter` on an item to inspect pass details or jump directly to AOS time.
+  - `S`: Open the Satellite selection and Encyclopedia menu; press `d` to delete custom satellites, or `O` to inspect individual launch mission objects.
+  - `W`: Toggle WiFi on/off to perform NTP time synchronization and TLE data updates.
+  - `H`: Slide out the **Keyboard Shortcuts Help Menu** at the center of the screen (multi-language aware).
+  - `L`: Open the **Language Selection Menu** (English, Simplified Chinese, Japanese, Spanish), saved to NVS flash.
+  - `M`: Open the **Hardware Setup Wizard** to configure and detect WiFi, GNSS, Magnetometer, and Gimbal peripherals.
+  - `aA` (Shift): Enter **3-Axis Gimbal Servo Test Mode**, supporting channel selection (`0/1/2`), fine stepping (`,`/`/`), and preset angles (`Z/X/C/A/S`).
+  - `C`: Enter/exit **Manual Location Mode (Crosshair Mode)** to manually designate any observer position on Earth:
+    - `;` (Up) / `.` (Down): Adjust Latitude;
+    - `,` (Left) / `/` (Right): Adjust Longitude;
+    - `[` / `]`: Adjust Altitude (-10m / +10m).
+  - `G`: Toggle **GNSS Forced Always-On Mode**, bypassing automatic sleep to acquire coordinates manually.
+  - `V`: Enter/exit **Spacecraft Follow Mode (Sat View Mode)**:
+    - Press `;` (previous) and `.` (next) to cycle focus between tracked satellites;
+    - When a satellite passes overhead, a neon-cyan 3D laser sight line and `El: xx°` badge are dynamically projected.
+  - `Space`: Lock/unlock **IMU Camera Angle** in Sat View Mode.
+  - `R`: Reset the **Time Machine** simulated offset and crosshairs, immediately reverting to actual real-time and default coordinates.
+  - `Del` (Backspace): Toggle **HUD Data Overlay** (shows/hides corner telemetry labels).
+  - `[` and `]`: Adjust TFT screen backlight brightness (16 to 255).
+  - `,` and `/`: Adjust **Time Machine** simulated offset (tap for 60s step, hold for fast time travel).
+  - `Tab`: Cycle screen visual modes (Normal -> Aurora/Airglow -> Red Night Vision).
+  - `Esc` / `~`: Back / Exit current active modal overlay (Passes List, Help, Crosshairs, Sat View, etc.).
 - **Live Mode & Time Machine (Simulated Time Travel)**:
   - Vector 3D Earth rendering with **dynamic cold/warm gradient continent outlines** and daylight/shadow terminator.
   - **Visual Anchors**: Automatically computes and floats a "dynamic compass" at the screen corner; projects a "3D axis & polar crosshair grid" at polar zones to resolve disorientation when looking from an orbital perspective.
