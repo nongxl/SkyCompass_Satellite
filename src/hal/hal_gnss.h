@@ -46,6 +46,7 @@ typedef struct {
 class HalGnss {
 public:
     virtual bool begin() = 0;
+    virtual bool begin(int rxPin, int txPin, uint32_t baudRate = 115200) = 0;
     virtual bool update() = 0;
     virtual GnssData getData() = 0;
     virtual GnssStatus getStatus() = 0;

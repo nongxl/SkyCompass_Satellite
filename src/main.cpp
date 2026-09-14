@@ -2761,12 +2761,13 @@ void setup() {
             // 1. GNSS 模块定向点火
             if (hw.isEnabled(HW_MOD_CAP_LORA1262)) {
                 LOG_I("APP", "[HW] Cap LoRa-1262 GNSS selected. Starting GNSS on RX=15, TX=13...");
+                gnss->begin(15, 13, 115200);
                 pos_manager = new PositionManager(gnss);
                 pos_manager->begin();
             } else if (hw.isEnabled(HW_MOD_UNIT_GPSV11)) {
-                LOG_I("APP", "[HW] Unit GPS v1.1 selected. Probing GNSS on Grove port (RX=2, TX=1)...");
+                LOG_I("APP", "[HW] Unit GPS v1.1 selected. Starting GNSS on Grove port (RX=2, TX=1)...");
+                gnss->begin(2, 1, 115200);
                 pos_manager = new PositionManager(gnss);
-                gnss->probeGrove();
                 pos_manager->begin();
             } else {
                 LOG_I("APP", "[HW] No GNSS module configured. Running in standalone cached/manual position mode.");
@@ -5308,8 +5309,16 @@ void loop() {
                 } else if (justH) {
                     showHelp = !showHelp;
                 } else if (justG) {
-                    if (gnss && gnss->isModuleInitialized()) {
-                        if (gnss->isInStandbyMode()) {
+                    auto& hw = HardwareConfig::getInstance();
+                    bool gnssConfigured = hw.isEnabled(HW_MOD_CAP_LORA1262) || hw.isEnabled(HW_MOD_UNIT_GPSV11);
+                    if (gnssConfigured && gnss) {
+                        if (!gnss->isModuleInitialized()) {
+                            if (hw.isEnabled(HW_MOD_CAP_LORA1262)) gnss->begin(15, 13, 115200);
+                            else if (hw.isEnabled(HW_MOD_UNIT_GPSV11)) gnss->begin(2, 1, 115200);
+                            gnssManualMode = true;
+                            gnssTimedOut = false;
+                            gnssStartTime = millis();
+                        } else if (gnss->isInStandbyMode()) {
                             gnss->exitStandbyMode();
                             gnssManualMode = true;
                             gnssTimedOut = false;

@@ -82,109 +82,59 @@ public:
     }
 
     bool begin() override {
-        LOG_I("GNSS", "Creating MultipleSatellite instance for Cap LoRa-1262...");
-        Serial.flush();
+        if (_isInitialized) return true;
+        return begin(_config.rxPin, _config.txPin, _config.baudRate);
+    }
 
-        // 使能 Cap LoRa-1262 扩展槽电源与 IO 扩展芯片
-        enableCapLoRa1262Power();
+    bool begin(int rxPin, int txPin, uint32_t baudRate = 115200) override {
+        _config.rxPin = rxPin;
+        _config.txPin = txPin;
+        _config.baudRate = baudRate;
         
-        bool found = false;
-        _config.rxPin = 15;
-        _config.txPin = 13;
+        LOG_I("GNSS", "Starting GNSS on RX=%d, TX=%d @ %u...", rxPin, txPin, baudRate);
         
-        auto probeUart = [](uint32_t baud, unsigned long timeout) -> bool {
-            pinMode(15, INPUT_PULLUP);
-            
-            // 清空串口缓冲区
-            while (Serial1.available() > 0) {
-                Serial1.read();
-            }
-
-            // 发送换行与唤醒指令
-            Serial1.print("\r\n$PCAS00*01\r\n");
-            Serial1.flush();
-
-            uint32_t totalBytes = 0;
-            char sampleBuf[16] = {0};
-            int sampleLen = 0;
-            bool foundDollar = false;
-
-            unsigned long start = millis();
-            while (millis() - start < timeout) {
-                while (Serial1.available() > 0) {
-                    char c = Serial1.read();
-                    totalBytes++;
-                    if (sampleLen < 15) {
-                        sampleBuf[sampleLen++] = c;
-                    }
-                    if (c == '$' || c == 'G' || c == 'N') { // 有效 NMEA 帧头字符
-                        foundDollar = true;
-                    }
-                }
-                delay(10);
-            }
-
-            LOG_I("GNSS", "[PROBE] RX=15 TX=13 @ %u baud -> read %u bytes, matched=%d, hex=[%02X %02X %02X %02X]",
-                  baud, totalBytes, foundDollar,
-                  (uint8_t)sampleBuf[0], (uint8_t)sampleBuf[1], (uint8_t)sampleBuf[2], (uint8_t)sampleBuf[3]);
-
-            return (totalBytes > 0 && foundDollar);
-        };
-
-        // 1. 优先尝试 Cap LoRa-1262 官方默认的 115200 波特率 (RX=15, TX=13)
-        LOG_I("GNSS", "Probing Cap LoRa-1262 GNSS on RX=15, TX=13 @ 115200...");
-        _config.baudRate = 115200;
-        Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+        if (rxPin == 15 && txPin == 13) {
+            enableCapLoRa1262Power();
+        } else if (rxPin == 2 && txPin == 1) {
+            Wire.end(); // 确保 Grove 端口释放 I2C 引脚占用
+        }
+        
+        // 开启 RX 引脚内部上拉电阻
+        gpio_pullup_en((gpio_num_t)rxPin);
+        
+        // 启动串口
+        Serial1.end();
+        Serial1.begin(baudRate, SERIAL_8N1, rxPin, txPin);
         delay(50);
         
-        // 超时设为 2000ms 保证完整覆盖 1Hz NMEA 周期
-        if (probeUart(115200, 2000)) {
-            found = true;
-            _config.enableGroveProbe = false;
-            LOG_I("GNSS", "Detected Cap LoRa-1262 GNSS on RX=15, TX=13 @ 115200");
-        }
-
-        // 2. 备用尝试 9600 波特率
-        if (!found) {
-            Serial1.end();
-            _config.baudRate = 9600;
-            LOG_I("GNSS", "115200 probe timed out, fallback probing on RX=15, TX=13 @ 9600...");
-            Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
-            delay(50);
-
-            if (probeUart(9600, 2000)) {
-                found = true;
-                _config.enableGroveProbe = false;
-                LOG_I("GNSS", "Detected Cap LoRa-1262 GNSS on RX=15, TX=13 @ 9600");
-            }
+        // 清空串口缓冲区
+        while (Serial1.available() > 0) {
+            Serial1.read();
         }
         
-        // 3. 未找到 Cap LoRa-1262 模块
-        if (!found) {
-            LOG_I("GNSS", "No Cap LoRa-1262 GNSS detected on RX=15, TX=13.");
-            _enabled = false;
-            _isInitialized = false;
-            return false;
+        // 发送唤醒指令与 GPS + 北斗 BDS 双模搜星配置指令
+        Serial1.print("\r\n$PCAS04,3*1A\r\n");
+        Serial1.print("$PCAS00*01\r\n");
+        Serial1.flush();
+        
+        if (_gps) {
+            delete _gps;
+            _gps = nullptr;
         }
-        
-        _isProbing = false; // Scan complete
-        
-        _gps = new MultipleSatellite(Serial1, _config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+        _gps = new MultipleSatellite(Serial1, baudRate, SERIAL_8N1, rxPin, txPin);
         if (!_gps) {
-            LOG_I("GNSS", "Failed to create MultipleSatellite!");
+            LOG_E("GNSS", "Failed to allocate MultipleSatellite!");
+            _isInitialized = false;
+            _enabled = false;
             return false;
         }
-        LOG_I("GNSS", "MultipleSatellite created, calling begin()...");
-        Serial.flush();
         
         _gps->begin();
-        delay(50);
-        _gps->write("\r\n$PCAS04,3*1A\r\n"); // 启用 GPS + 北斗 BDS 双模搜星
-        _gps->write("$PCAS00*01\r\n");     // 发送唤醒/热启动指令
-        LOG_I("GNSS", "Initialization complete");
-        _enabled = true;
         _isInitialized = true;
+        _enabled = true;
+        _isInStandby = false;
         _data.status = GNSS_STATUS_SEARCHING;
+        LOG_I("GNSS", "GNSS module initialized successfully on RX=%d, TX=%d @ %u", rxPin, txPin, baudRate);
         return true;
     }
 
@@ -481,6 +431,7 @@ public:
     }
     
     uint32_t getGpsChars() override {
+        if (_gps) return _gps->charsProcessed();
         return _gpsChars;
     }
     
@@ -516,37 +467,7 @@ public:
     }
 
     bool probeGrove() override {
-        // 如果 Cap LoRa-1262 槽位已初始化并正常工作，保持 Cap GNSS，禁止切换到空的 Grove 端口
-        if (_isInitialized && _config.rxPin == 15) {
-            LOG_I("GNSS", "Cap GNSS is already active on RX=15, TX=13. Keeping Cap GNSS.");
-            return true;
-        }
-        
-        // 彻底释放 GPIO 2 / 1 上的 I2C 控制权，防止硬件外设锁定
-        Wire.end();
-        
-        _isProbing = true; // Late probe: pause I2C
-        
-        LOG_I("GNSS", "Manually setting GNSS to Grove pins (2/1) @ 115200...");
-        _config.rxPin = 2;
-        _config.txPin = 1;
-        _config.baudRate = 115200;
-        
-        Serial1.end();
-        Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
-        
-        if (_gps) {
-            delete _gps;
-        }
-        _gps = new MultipleSatellite(Serial1, _config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
-        if (_gps) {
-            _gps->begin();
-            _data.status = GNSS_STATUS_SEARCHING;
-            _isInitialized = true;
-            _enabled = true;
-        }
-        _isProbing = false;
-        return true;
+        return begin(2, 1, 115200);
     }
 
     bool isGroveMode() const override {
