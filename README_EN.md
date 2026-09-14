@@ -278,15 +278,21 @@ The system is fully compatible with future 6-digit Catalog Numbers. It utilizes 
 
 ## Future Outlook (TODO List)
 
-- `[ ]` **Night Vision Mode**: One-click red-tinted screen filter to preserve dark adaptation for outdoor observations.
+- `[x]` **Night Vision Mode**: One-click red-tinted screen filter to preserve dark adaptation for outdoor observations.
 - `[x]` **Visual Magnitude Modeling**: Predict brightness based on satellite RCS and solar phase angle.
 - `[x]` **HAM Radio Downlinks**: Display live transceiver tuning parameters.
 - `[x]` **Starlink Train Tracker**: Real-time orbital train & formation tracking using clustered physical phase data.
-- `[ ]` **Countdowns & Buzzer Alerts**: Audible alarms triggered by the buzzer a few minutes prior to AOS.
-- `[ ]` **AR Sat Pointer**: Utilizing Cardputer's IMU to render a crosshair, guiding the user to point the device physically towards the skyward satellite location.
-- `[ ]` **Deep Sleep Scheduling**: Calculate the next AOS time and put the ESP32 into deep sleep, scheduling an RTC timer to wake it up right before the pass.
+- `[x]` **Countdowns & Buzzer Alerts**: Audible alarms triggered by the buzzer a few minutes prior to AOS.
+- `[x]` **Orbital Arch Gimbal System**: Drives a 3-axis Lego armillary sphere via Unit 8Servos / PCA9685, physically syncing satellite ground track heading, elevation arch, and pass progression. Includes manual servo test mode.
+- `[x]` **Hardware Setup Wizard**: Press `M` to open graphical peripheral configuration for WiFi, GNSS, Magnetometer, and Gimbal, saved to NVS flash.
+- `[x]` **Solar Shadow Alignment & 3D Sight Line**: Outdoor physical compass-free alignment via simulated solar ground shadow, with dynamic 3D laser sight line and elevation badge for antenna pointing.
+- `[x]` **Multi-Language Support (i18n)**: Seamless live switching between English, Simplified Chinese, Japanese, and Spanish, saved in NVS.
+- `[x]` **Aurora & Airglow Visual Mode**: Renders glowing auroral ovals and atmospheric airglow layers on the 3D globe.
 - `[x]` **Celestial Background Stars**: Render bright reference stars (e.g., Sirius) on the 3D globe background.
+- `[ ]` **GNSS Satellite Skyplot Visualization**: Render visual skyplot and carrier-to-noise ratio (C/N0) bars for real-time constellation fix inspection.
+- `[ ]` **Deep Sleep Scheduling**: Calculate the next AOS time and put the ESP32 into deep sleep, scheduling an RTC timer to wake it up right before the pass.
 - `[ ]` **Local LAN WebServer**: Host a lightweight web server on the ESP32 to export full 7-day pass timetables to mobile browsers.
+- `[ ]` **External 3-Axis Magnetometer Integration**: Connect external I2C digital compass (e.g., QMC5883L/BMM150) for true physical magnetic heading tracking.
 
 ## Screenshot Guide
 
