@@ -83,6 +83,8 @@ enum TextId {
     TXT_HELP_CONFIG,
     TXT_HELP_REALTIME,
     TXT_HELP_TAB,
+    TXT_HELP_MODULE,
+    TXT_HELP_SERVO,
     
     // Recommended Passes Panel
     TXT_RECOMMENDED_PASSES,

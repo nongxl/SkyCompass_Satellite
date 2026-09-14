@@ -46,14 +46,15 @@ enum MonoState {
 };
 
 #include "core/mono_animator.h"
+#include "core/hardware_config.h"
+#include "ui/hardware_wizard_view.h"
 
-// Set to 1 if you have an external M5Chain Mono 8x8 screen module attached to Grove Port.
-// Set to 0 (default) to keep Grove port free, which prevents keyboard I2C/UART sharing conflicts on Cardputer.
-#define ENABLE_CHAIN_MONO 0
-
+// 硬件外设由 HardwareConfig 动态管理并根据 NVS 配置定向初始化
 bool isMonoInitialized = false;
 uint8_t mono_id = 0;
 uint8_t operation_status = 0;
+
+HardwareWizardView hardware_wizard;
 
 #include "gimbal/gimbal_controller.h"
 GimbalController gimbal;
@@ -116,7 +117,8 @@ enum AppState {
     STATE_WIFI_SETUP,
     STATE_SAT_SELECT,
     STATE_LANG_SELECT,
-    STATE_SERVO_TEST
+    STATE_SERVO_TEST,
+    STATE_HW_WIZARD
 };
 AppState appState = STATE_MAIN;
 int langSelectedIndex = 0;
@@ -2689,6 +2691,14 @@ void setup() {
     earth_renderer = new EarthRenderer(&M5Cardputer.Display);
     earth_renderer->begin();
 
+    // 检查是否为首次开机（无硬件配置记录）
+    HardwareConfig::getInstance().load();
+    if (!HardwareConfig::getInstance().isConfigured()) {
+        LOG_I("APP", "[HW] First boot detected (unconfigured). Launching Hardware Setup Wizard...");
+        appState = STATE_HW_WIZARD;
+        hardware_wizard.reset();
+    }
+
     // Draw initial loading screen instantly to avoid black screen during setup
     drawStartupScreen(18);
 
@@ -2742,86 +2752,73 @@ void setup() {
                 g_satellites[i].type = entries[i].type;
             }
 
-            // Initialize Position & Sun Calculator
-            pos_manager = new PositionManager(gnss);
-            pos_manager->begin(); 
-            
-            // Initialize Chain Mono on Serial2 (Grove Port) early so it lights up during boot progress
-#if ENABLE_CHAIN_MONO
-            bool skipMonoProbe = false;
-            if (gnss && !skipMonoProbe) {
-                GnssConfig gnssCfg = gnss->getConfig();
-                if (gnssCfg.rxPin == 2) {
-                    skipMonoProbe = true;
-                    LOG_I("APP", "Grove port is occupied by GNSS (pin 2/1). Skipping Chain Mono probe.");
-                }
+            // -----------------------------------------------------------------
+            // 精准定向硬件外设初始化（由 HardwareConfig 动态驱动，彻底消除引脚争抢）
+            // -----------------------------------------------------------------
+            auto& hw = HardwareConfig::getInstance();
+            hw.load();
+
+            // 1. GNSS 模块定向点火
+            if (hw.isEnabled(HW_MOD_CAP_LORA1262)) {
+                LOG_I("APP", "[HW] Cap LoRa-1262 GNSS selected. Starting GNSS on RX=15, TX=13...");
+                pos_manager = new PositionManager(gnss);
+                pos_manager->begin();
+            } else if (hw.isEnabled(HW_MOD_UNIT_GPSV11)) {
+                LOG_I("APP", "[HW] Unit GPS v1.1 selected. Probing GNSS on Grove port (RX=2, TX=1)...");
+                pos_manager = new PositionManager(gnss);
+                gnss->probeGrove();
+                pos_manager->begin();
+            } else {
+                LOG_I("APP", "[HW] No GNSS module configured. Running in standalone cached/manual position mode.");
+                pos_manager = new PositionManager(nullptr);
+                pos_manager->begin();
+                if (gnss) gnss->disable();
             }
 
-            bool foundChain = false;
-            uint8_t usedRx = 2;
-            uint8_t usedTx = 1;
-            uint16_t device_nums = 0;
-            
-            if (!skipMonoProbe) {
-                LOG_I("APP", "Initializing Chain Mono on Serial2 (Auto-detecting pins)...");
+            // 2. Unit 8Servos 浑仪云台舵机初始化
+            if (hw.isEnabled(HW_MOD_UNIT_8SERVOS)) {
+                if (hw.isEnabled(HW_MOD_CAP_LORA1262)) {
+                    // 有 Cap 时，统一走 Cap 上的 HY2.0-4P 扩展口 (I2C: SDA=8, SCL=9)
+                    LOG_I("APP", "[HW] Initializing 3-axis Gimbal on Cap HY2.0 port (Wire: SDA=8, SCL=9)...");
+                    gimbal.begin(&Wire, 8, 9, 100000);
+                } else {
+                    // 无 Cap 时，走机身侧面 Grove 接口 (Wire: SDA=2, SCL=1)
+                    LOG_I("APP", "[HW] Initializing 3-axis Gimbal on Body Grove port (Wire: SDA=2, SCL=1)...");
+                    gimbal.begin(&Wire, 2, 1, 100000);
+                }
+            } else {
+                LOG_I("APP", "[HW] Unit 8Servos is disabled.");
+            }
+
+            // 3. Chain Mono 8x8 像素副屏初始化
+            if (hw.isEnabled(HW_MOD_CHAIN_MONO)) {
+                LOG_I("APP", "[HW] Initializing Chain Mono on Body Grove port (Serial2: 115200)...");
                 
-                // CRITICAL: GPIO 1/2 are shared between Grove port (Serial2) and internal I²C (IMU).
-                // Suspend IMU task before driving these pins with UART to prevent I²C bus corruption
-                // which would cause the IMU to output garbage data and the globe to jump around.
                 if (imuTaskHandle != NULL) {
                     vTaskSuspend(imuTaskHandle);
-                    LOG_I("APP", "IMU task suspended for Grove bus probing");
                 }
+                
+                uint16_t device_nums = 0;
+                bool foundChain = false;
+                uint8_t usedRx = 2, usedTx = 1;
                 
                 M5Chain.begin(&Serial2, 115200, 2, 1);
-                delay(100);
-                int retry = 2;
-                while (retry > 0) {
+                delay(80);
+                if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
+                    foundChain = true;
+                } else {
+                    Serial2.end();
+                    delay(40);
+                    M5Chain.begin(&Serial2, 115200, 1, 2);
+                    delay(80);
                     if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
                         foundChain = true;
-                        usedRx = 2;
-                        usedTx = 1;
-                        break;
+                        usedRx = 1; usedTx = 2;
                     }
-                    retry--;
-                    if (retry > 0) delay(50);
-                }
-                
-                if (!foundChain) {
-                    LOG_I("APP", "Chain Mono not found on RX=2,TX=1. Swapping pins (RX=1,TX=2) and retrying...");
-                    Serial2.end();
-                    delay(50);
-                    M5Chain.begin(&Serial2, 115200, 1, 2);
-                    delay(100);
-                    retry = 2;
-                    while (retry > 0) {
-                        if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
-                            foundChain = true;
-                            usedRx = 1;
-                            usedTx = 2;
-                            break;
-                        }
-                        retry--;
-                        if (retry > 0) delay(50);
-                    }
-                }
-                
-                // Restore I²C bus and resume IMU task regardless of probe result.
-                // If Chain Mono was not found, release GPIO 1/2 back to I²C.
-                // If Chain Mono was found, Wire.begin() re-asserts I²C so other I²C devices still work.
-                if (!foundChain) {
-                    Serial2.end(); // Release GPIO 1/2 from UART
-                    LOG_I("APP", "Chain Mono not found. Released GPIO 1/2. Restoring I²C bus.");
-                }
-                Wire.begin(8, 9, 100000); // Re-assert internal I²C master explicitly on GPIO 8 (SDA) / GPIO 9 (SCL)
-                delay(10);    // Short stabilisation before resuming IMU reads
-                if (imuTaskHandle != NULL) {
-                    vTaskResume(imuTaskHandle);
-                    LOG_I("APP", "IMU task resumed after Grove bus probing");
                 }
                 
                 if (foundChain) {
-                    LOG_I("APP", "Chain Mono successfully detected on RX=%d, TX=%d! Device count: %d", usedRx, usedTx, device_nums);
+                    LOG_I("APP", "[HW] Chain Mono detected on RX=%d, TX=%d! Devices: %d", usedRx, usedTx, device_nums);
                     device_info_t *infos = (device_info_t *)malloc(sizeof(device_info_t) * device_nums);
                     if (infos != nullptr) {
                         memset(infos, 0, sizeof(device_info_t) * device_nums);
@@ -2839,47 +2836,24 @@ void setup() {
                         }
                         free(infos);
                     }
-                }
-            }
-            
-            if (isMonoInitialized) {
-                LOG_I("APP", "Chain Mono found on Grove port. ID: %d", mono_id);
-                M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
-                M5Chain.setMonoRotation(mono_id, MONO_ROTATION_0, &operation_status);
-                M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_7, &operation_status);
-                M5Chain.setMonoClear(mono_id, &operation_status);
-                
-                if (gnss) {
-                    GnssConfig gnssCfg = gnss->getConfig();
-                    gnssCfg.enableGroveProbe = false;
-                    gnss->setConfig(gnssCfg);
-                }
-            } else {
-                if (!skipMonoProbe) {
-                    LOG_I("APP", "Chain Mono module not detected. Releasing Grove pins.");
-                    Serial2.end();
-                    if (gnss && !gnss->isModuleInitialized()) {
-                        LOG_I("APP", "Cap GNSS not found, probing Grove port for GNSS...");
-                        gnss->probeGrove();
+                    if (isMonoInitialized) {
+                        M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
+                        M5Chain.setMonoRotation(mono_id, MONO_ROTATION_0, &operation_status);
+                        M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_7, &operation_status);
+                        M5Chain.setMonoClear(mono_id, &operation_status);
                     }
                 } else {
-                    LOG_I("APP", "Skipped Chain Mono probe as Grove is occupied by GNSS.");
+                    LOG_I("APP", "[HW] Chain Mono not responding on Grove port, releasing pins.");
+                    Serial2.end();
                 }
-            }
-#else
-            isMonoInitialized = false;
-            // Initialize 3-axis Gimbal on Grove I2C (SDA=2, SCL=1)
-            {
-                LOG_I("APP", "Initializing 3-axis Gimbal on Grove I2C (SDA=2, SCL=1)...");
-                gimbal.begin(&Wire, 2, 1, 100000);
-            }
-            // 锁定 Grove 端口供三轴云台舵机驱动板专用，严禁 GNSS 探针霸占导致 I2C 中断
-            if (gnss) {
-                GnssConfig gnssCfg = gnss->getConfig();
-                gnssCfg.enableGroveProbe = false;
-                gnss->setConfig(gnssCfg);
-            }
-#endif 
+                
+                Wire.begin(8, 9, 100000);
+                if (imuTaskHandle != NULL) {
+                    vTaskResume(imuTaskHandle);
+                }
+            } else {
+                isMonoInitialized = false;
+            } 
             
             Language currL = I18N::getLanguage();
             g_loadingStatusText = (currL == LANG_ZH) ? "初始化传感器与外设..." : ((currL == LANG_JA) ? "センサー・外来機器の初期化中..." : ((currL == LANG_ES) ? "Inicializando sensores..." : "Initializing Hardware..."));
@@ -3242,32 +3216,44 @@ void drawServoTestPage() {
     uint16_t width = canvas->width();
     uint16_t height = canvas->height();
     
-    // 背景深灰黑
-    canvas->fillRect(0, 0, width, height, canvas->color565(12, 16, 22));
+    // 全局重置对齐基准与裁剪区域，杜绝状态污染
+    canvas->setTextDatum(top_left);
+    canvas->clearClipRect();
+    
+    // 背景深空灰蓝（卫星百科与硬件向导同款）
+    canvas->fillRect(0, 0, width, height, canvas->color565(20, 30, 40));
     
     bool isZh = (I18N::getLanguage() == LANG_ZH);
     canvas->setFont(I18N::getFont());
     canvas->setTextSize(1);
     
-    // 顶部标题栏
-    canvas->fillRect(0, 0, width, 20, canvas->color565(18, 32, 52));
-    canvas->drawFastHLine(0, 20, width, canvas->color565(40, 75, 120));
+    // 顶部标题栏（百科同款深蓝灰底色与边框）
+    canvas->fillRect(0, 0, width, 20, canvas->color565(30, 40, 50));
+    canvas->drawFastHLine(0, 20, width, canvas->color565(50, 65, 80));
     
-    canvas->setTextColor(canvas->color565(0, 230, 255));
-    canvas->drawString(isZh ? "浑仪舵机测试标定 (Shift退出)" : "Gimbal Servo Test (Shift to Exit)", 6, 4);
+    // 标题：科技青
+    canvas->setTextColor(canvas->color565(0, 220, 255));
+    canvas->drawString(isZh ? "浑仪舵机校准标定" : "Gimbal Servo Calibration", 6, 4);
     
-    // 在线状态与电流
+    // 右侧状态与按键提示：在线电流 + [aA/Esc]退出
+    int rightX = width - 4;
+    canvas->setTextDatum(top_right);
+    canvas->setTextColor(canvas->color565(170, 190, 210)); // 浅灰银色
+    canvas->drawString(isZh ? "[aA/Esc]退出" : "[aA/Esc]Exit", rightX, 4);
+    rightX -= (canvas->textWidth(isZh ? "[aA/Esc]退出" : "[aA/Esc]Exit") + 8);
+    
     if (gimbal.isOnline()) {
         char statBuf[32];
         snprintf(statBuf, sizeof(statBuf), "ON %.0fmA", gimbal.getCurrentmA());
         canvas->setTextColor(TFT_GREEN);
-        canvas->drawString(statBuf, width - 68, 4);
+        canvas->drawString(statBuf, rightX, 4);
     } else {
-        canvas->setTextColor(TFT_RED);
-        canvas->drawString("OFFLINE", width - 56, 4);
+        canvas->setTextColor(TFT_YELLOW);
+        canvas->drawString("OFFLINE", rightX, 4);
     }
+    canvas->setTextDatum(top_left);
     
-    // 三个通道名称定义 (精简防止与角度重叠)
+    // 三个通道名称定义
     const char* chNamesZh[3] = {"CH0 走向", "CH1 倾角", "CH2 星位"};
     const char* chNamesEn[3] = {"CH0 Base", "CH1 Inc ", "CH2 Prog"};
     
@@ -3281,14 +3267,15 @@ void drawServoTestPage() {
         
         // 背景与边框
         if (isSelected) {
-            canvas->fillRect(4, y, width - 8, cardH, canvas->color565(22, 45, 75));
-            canvas->drawRect(4, y, width - 8, cardH, canvas->color565(0, 230, 180));
+            canvas->fillRect(4, y, width - 8, cardH, canvas->color565(25, 55, 90));
+            canvas->drawRect(4, y, width - 8, cardH, canvas->color565(0, 220, 255));
             canvas->setTextColor(canvas->color565(0, 255, 200));
             canvas->drawString(">", 8, y + 4);
+            canvas->setTextColor(TFT_WHITE);
         } else {
-            canvas->fillRect(4, y, width - 8, cardH, canvas->color565(18, 22, 28));
-            canvas->drawRect(4, y, width - 8, cardH, canvas->color565(40, 45, 55));
-            canvas->setTextColor(canvas->color565(160, 175, 190));
+            canvas->fillRect(4, y, width - 8, cardH, canvas->color565(26, 38, 52));
+            canvas->drawRect(4, y, width - 8, cardH, canvas->color565(42, 58, 76));
+            canvas->setTextColor(canvas->color565(140, 180, 210));
         }
         
         // 列 1: 通道名称 (x = 18 ~ 70)
@@ -3300,41 +3287,44 @@ void drawServoTestPage() {
         // 列 2: 角度数值 (x = 75 ~ 118)
         char angleBuf[16];
         snprintf(angleBuf, sizeof(angleBuf), "%5.1f\xC2\xB0", curAngle);
-        canvas->setTextColor(isSelected ? TFT_YELLOW : canvas->color565(0, 230, 255));
+        canvas->setTextColor(isSelected ? TFT_YELLOW : canvas->color565(0, 200, 230));
         canvas->drawString(angleBuf, 75, y + 4);
         
         // 列 3: 微秒脉宽 (x = 124 ~ 168)
         char pulseBuf[16];
         snprintf(pulseBuf, sizeof(pulseBuf), "%4dus", curPulse);
-        canvas->setTextColor(isSelected ? TFT_WHITE : canvas->color565(160, 170, 180));
+        canvas->setTextColor(isSelected ? canvas->color565(220, 230, 240) : canvas->color565(140, 155, 170));
         canvas->drawString(pulseBuf, 124, y + 4);
         
-        // 列 4: 进度条 (x = 172 ~ 230, 宽 58, 高 5)
+        // 列 4: 进度条 (x = 172 ~ 230, 宽 58, 高 6)
         int barX = 172;
         int barY = y + 9;
         int barW = 58;
-        int barH = 5;
-        canvas->fillRect(barX, barY, barW, barH, canvas->color565(35, 40, 50));
+        int barH = 6;
+        canvas->fillRect(barX, barY, barW, barH, canvas->color565(35, 48, 62));
         int fillW = constrain((int)((curAngle / 180.0f) * barW), 0, barW);
         if (fillW > 0) {
-            canvas->fillRect(barX, barY, fillW, barH, isSelected ? canvas->color565(0, 230, 255) : canvas->color565(70, 110, 160));
+            canvas->fillRect(barX, barY, fillW, barH, isSelected ? canvas->color565(0, 220, 255) : canvas->color565(60, 100, 150));
         }
         // 标尺中点 90° 刻度小竖线
-        canvas->drawFastVLine(barX + barW / 2, barY - 1, barH + 2, canvas->color565(150, 160, 170));
+        canvas->drawFastVLine(barX + barW / 2, barY - 1, barH + 2, canvas->color565(180, 200, 220));
     }
     
-    // 底部按键提示栏 (y = 102 ~ 134)
-    canvas->drawFastHLine(0, 101, width, canvas->color565(40, 55, 75));
-    canvas->fillRect(0, 102, width, 33, canvas->color565(10, 14, 20));
+    // 底部按键提示栏 (y = 101 ~ 135)
+    canvas->drawFastHLine(0, 101, width, canvas->color565(50, 65, 80));
+    canvas->fillRect(0, 102, width, 33, canvas->color565(16, 24, 34));
     
     canvas->setTextColor(canvas->color565(170, 190, 210));
     if (isZh) {
-        canvas->drawString("[0/1/2]或[; .]选通道  [, /]微调-+5\xC2\xB0", 6, 104);
-        canvas->drawString("[Z]0\xC2\xB0 [X]90\xC2\xB0 [C]180\xC2\xB0 [A]45\xC2\xB0 [S]135\xC2\xB0 [Shift]退出", 6, 118);
+        canvas->drawString("[; .]选通道   [, /]微调-+5\xC2\xB0", 6, 104);
+        canvas->drawString("预设: [Z]0\xC2\xB0  [A]45\xC2\xB0  [X]90\xC2\xB0  [S]135\xC2\xB0  [C]180\xC2\xB0", 6, 118);
     } else {
-        canvas->drawString("[0/1/2]or[; .]Channel  [, /]Step -/+5\xC2\xB0", 6, 104);
-        canvas->drawString("[Z]0\xC2\xB0 [X]90\xC2\xB0 [C]180\xC2\xB0 [A]45\xC2\xB0 [S]135\xC2\xB0 [Shift]Exit", 6, 118);
+        canvas->drawString("[; .]Channel   [, /]Step -/+5\xC2\xB0", 6, 104);
+        canvas->drawString("Preset: [Z]0\xC2\xB0  [A]45\xC2\xB0  [X]90\xC2\xB0  [S]135\xC2\xB0  [C]180\xC2\xB0", 6, 118);
     }
+    
+    canvas->setTextDatum(top_left);
+    canvas->clearClipRect();
 }
 
 void drawSatSelectPage() {
@@ -4828,6 +4818,7 @@ void loop() {
         static bool lastShift = false;
         static bool lastL = false;
         static bool lastSpace = false;
+        static bool lastM = false;
 
         bool currSemi = M5Cardputer.Keyboard.isKeyPressed(';');
         bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
@@ -4854,6 +4845,7 @@ void loop() {
         bool currShift = M5Cardputer.Keyboard.isKeyPressed(KEY_LEFT_SHIFT) || M5Cardputer.Keyboard.keysState().shift;
         bool currL = M5Cardputer.Keyboard.isKeyPressed('l') || M5Cardputer.Keyboard.isKeyPressed('L');
         bool currSpace = M5Cardputer.Keyboard.isKeyPressed(' ');
+        bool currM = M5Cardputer.Keyboard.isKeyPressed('m') || M5Cardputer.Keyboard.isKeyPressed('M');
 
         bool justSemi = currSemi && !lastSemi;
         bool justDot = currDot && !lastDot;
@@ -4880,7 +4872,8 @@ void loop() {
         bool justShift = currShift && !lastShift;
         bool justL = currL && !lastL;
         bool justSpace = currSpace && !lastSpace;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justTab || justShift || justL || justSpace;
+        bool justM = currM && !lastM;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justTab || justShift || justL || justSpace || justM;
 
         if (showHelp) {
             if (millis() < 3000) {
@@ -5309,6 +5302,9 @@ void loop() {
                 } else if (justL) {
                     appState = STATE_LANG_SELECT;
                     langSelectedIndex = (int)I18N::getLanguage();
+                } else if (justM) {
+                    appState = STATE_HW_WIZARD;
+                    hardware_wizard.reset();
                 } else if (justH) {
                     showHelp = !showHelp;
                 } else if (justG) {
@@ -5925,6 +5921,22 @@ void loop() {
                     gimbal.setManualTestAngle(activeServoTestChannel, 135.0f, true);
                     log_i("[ServoTest] CH%d -> 135.0 deg (2000 us)", activeServoTestChannel);
                 }
+            } else if (appState == STATE_HW_WIZARD) {
+                char keyChar = 0;
+                if (justEsc || justTick || justBack) keyChar = 27;
+                else if (justEnter) keyChar = '\n';
+                else if (justBracketL) keyChar = '[';
+                else if (justBracketR) keyChar = ']';
+                else if (justSpace) keyChar = ' ';
+                else if (M5Cardputer.Keyboard.keysState().word.size() > 0) {
+                    keyChar = M5Cardputer.Keyboard.keysState().word[0];
+                }
+
+                if (hardware_wizard.handleKey(M5Cardputer.Keyboard.keysState(), keyChar)) {
+                    appState = STATE_MAIN;
+                    earth_renderer->getCanvas()->setTextDatum(top_left);
+                    earth_renderer->getCanvas()->clearClipRect();
+                }
             }
         }
 
@@ -5954,6 +5966,7 @@ void loop() {
         lastShift = currShift;
         lastL = currL;
         lastSpace = currSpace;
+        lastM = currM;
         
         if (appState == STATE_WIFI_SETUP) {
             drawWiFiSetupPage();
@@ -5973,6 +5986,11 @@ void loop() {
             return;
         } else if (appState == STATE_SERVO_TEST) {
             drawServoTestPage();
+            pushCanvasWithFilter();
+            updateChainMonoDisplay();
+            return;
+        } else if (appState == STATE_HW_WIZARD) {
+            hardware_wizard.draw(earth_renderer->getCanvas());
             pushCanvasWithFilter();
             updateChainMonoDisplay();
             return;
@@ -7047,22 +7065,22 @@ void loop() {
         
         if (showHelp && appState == STATE_MAIN) {
             auto canvas = earth_renderer->getCanvas();
-            uint16_t w = 216, h = 114;
+            uint16_t w = 216, h = 127;
             int x = (canvas->width() - w) / 2;
             int y = (canvas->height() - h) / 2;
             
             canvas->fillRect(x, y, w, h, canvas->color565(20, 30, 40));
             canvas->drawRect(x, y, w, h, TFT_LIGHTGRAY);
             
-            bool isZh = (I18N::getLanguage() == LANG_ZH);
             canvas->setTextColor(TFT_WHITE);
             canvas->setTextSize(1);
-            canvas->drawString(I18N::get(TXT_HELP_TITLE), x + 35, y + 5);
+            canvas->drawString(I18N::get(TXT_HELP_TITLE), x + 35, y + 4);
             
             auto drawHotKey = [&](const char* word, char keyChar, int dx, int dy) {
                 int cx = dx;
                 bool highlighted = false;
                 int i = 0;
+                int openBracketCount = 0;
                 while (word[i] != '\0') {
                     int charLen = 1;
                     unsigned char head = (unsigned char)word[i];
@@ -7075,10 +7093,30 @@ void loop() {
                         cstr[j] = word[i + j];
                     }
                     
-                    if ((charLen == 1 && !highlighted && tolower((unsigned char)cstr[0]) == tolower((unsigned char)keyChar) && keyChar != '\0') ||
-                        (keyChar == ' ' && !highlighted && (strcmp(cstr, "Spc") == 0 || strcmp(cstr, " ") == 0))) {
+                    bool isYellow = false;
+                    if (keyChar == '[') {
+                        if (cstr[0] == '[') {
+                            openBracketCount++;
+                            if (openBracketCount > 1) isYellow = true;
+                        } else if (cstr[0] == ']') {
+                            if (word[i + 1] != '\0' && strchr(word + i + 1, ']') != nullptr) {
+                                isYellow = true;
+                            }
+                        }
+                    } else if (keyChar == ' ') {
+                        if (!highlighted && (strcmp(cstr, "Spc") == 0 || strcmp(cstr, " ") == 0)) {
+                            isYellow = true;
+                            highlighted = true;
+                        }
+                    } else if (keyChar != '\0') {
+                        if (charLen == 1 && !highlighted && tolower((unsigned char)cstr[0]) == tolower((unsigned char)keyChar)) {
+                            isYellow = true;
+                            highlighted = true;
+                        }
+                    }
+                    
+                    if (isYellow) {
                         canvas->setTextColor(TFT_YELLOW);
-                        highlighted = true;
                     } else {
                         canvas->setTextColor(TFT_LIGHTGRAY);
                     }
@@ -7089,12 +7127,12 @@ void loop() {
                 }
             };
 
-            int ty = y + 20;
+            int ty = y + 17;
             drawHotKey(I18N::get(TXT_HELP_BRIGHT), '[', x + 8, ty);
             drawHotKey(I18N::get(TXT_HELP_GNSS), 'g', x + 112, ty); ty += 13;
             
             drawHotKey(I18N::get(TXT_HELP_HELP), 'h', x + 8, ty);
-            drawHotKey(I18N::get(TXT_HELP_HUD), 'b', x + 112, ty); ty += 13;
+            drawHotKey(I18N::get(TXT_HELP_HUD), '\0', x + 112, ty); ty += 13;
             
             drawHotKey(I18N::get(TXT_HELP_LOCK), ' ', x + 8, ty);
             drawHotKey(I18N::get(TXT_HELP_PASSLIST), 'e', x + 112, ty); ty += 13;
@@ -7108,7 +7146,10 @@ void loop() {
             drawHotKey(I18N::get(TXT_HELP_CONFIG), 'c', x + 8, ty);
             drawHotKey(I18N::get(TXT_HELP_REALTIME), 'r', x + 112, ty); ty += 13;
             
-            drawHotKey(I18N::get(TXT_HELP_TAB), 't', x + 8, ty); ty += 13;
+            drawHotKey(I18N::get(TXT_HELP_TAB), 't', x + 8, ty);
+            drawHotKey(I18N::get(TXT_HELP_MODULE), 'm', x + 112, ty); ty += 13;
+            
+            drawHotKey(I18N::get(TXT_HELP_SERVO), '\0', x + 8, ty); ty += 13;
         }
         
         if (showRecommendations) {
@@ -7426,65 +7467,13 @@ void loop() {
                 }
             }
             
-            // Draw GNSS and WiFi Status at the bottom of the panel
-            // Divider line shifted up to y=100
+            // Draw 2-Row Status Bar at the bottom of the panel
+            // Divider line at y=100
             earth_renderer->getCanvas()->drawFastHLine(0, 100, 140, TFT_DARKGREY);
             
-            // Draw WiFi Status
-            if (HalWifi::isConnected()) {
-                earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                earth_renderer->getCanvas()->drawString("WF:ON", 5, 105);
-            } else {
-                earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                earth_renderer->getCanvas()->drawString("WF:OFF", 5, 105);
-            }
+            auto& hw = HardwareConfig::getInstance();
             
-            // Draw GNSS Status
-            if (gnss && gnss->isModuleInitialized()) {
-                if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
-                    earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                    earth_renderer->getCanvas()->drawString("GP:FIX", 52, 105);
-                } else if (gnss->isInStandbyMode()) {
-                    if (gnssTimedOut) {
-                        earth_renderer->getCanvas()->setTextColor(TFT_RED);
-                        earth_renderer->getCanvas()->drawString("GP:TMO", 52, 105);
-                    } else {
-                        earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                        earth_renderer->getCanvas()->drawString("GP:OFF", 52, 105);
-                    }
-                } else {
-                    earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
-                    earth_renderer->getCanvas()->drawString("GP:SCH", 52, 105);
-                }
-            } else {
-                earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
-                earth_renderer->getCanvas()->drawString("GP:N/A", 52, 105);
-            }
-            
-            // Draw Gimbal Status
-            if (gimbal.isOnline()) {
-                uint16_t gbColor = TFT_LIGHTGRAY;
-                switch (gimbal.getState()) {
-                    case GIMBAL_STATE_INITIALIZING: gbColor = TFT_ORANGE; break;
-                    case GIMBAL_STATE_PREPOINT:     gbColor = TFT_YELLOW; break;
-                    case GIMBAL_STATE_TRACKING:     gbColor = TFT_GREEN; break;
-                    case GIMBAL_STATE_STANDBY:      
-                    default:                        gbColor = TFT_LIGHTGRAY; break;
-                }
-                earth_renderer->getCanvas()->setTextColor(gbColor);
-                char gbBuf[16];
-                if (gimbal.getCurrentmA() > 0.1f) {
-                    snprintf(gbBuf, sizeof(gbBuf), "GB:%.0fmA", gimbal.getCurrentmA());
-                } else {
-                    snprintf(gbBuf, sizeof(gbBuf), "GB:OK");
-                }
-                earth_renderer->getCanvas()->drawString(gbBuf, 100, 105);
-            } else {
-                earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
-                earth_renderer->getCanvas()->drawString("GB:ND", 100, 105); // Not Detected
-            }
-            
-            // Draw GP Epoch Version
+            // Row 1 (y=105): GP Epoch (Left, x=3) & WiFi Status (Right, x=98)
             String tleEpoch = String(I18N::get(TXT_RL_EPOCH));
             if (g_satellites[0].tle.line1.length() >= 24) {
                 int year = 2000 + g_satellites[0].tle.line1.substring(18, 20).toInt();
@@ -7496,13 +7485,83 @@ void loop() {
                     month++;
                 }
                 char buf[16];
-                snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month + 1, doy);
+                snprintf(buf, sizeof(buf), "%02d-%02d-%02d", year % 100, month + 1, doy);
                 tleEpoch += buf;
             } else {
                 tleEpoch += I18N::get(TXT_VIS_NA);
             }
             earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-            earth_renderer->getCanvas()->drawString(tleEpoch.c_str(), 5, 117);
+            earth_renderer->getCanvas()->drawString(tleEpoch.c_str(), 3, 105);
+            
+            if (HalWifi::isConnected()) {
+                earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
+                earth_renderer->getCanvas()->drawString("WF:ON", 98, 105);
+            } else {
+                earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
+                earth_renderer->getCanvas()->drawString("WF:OFF", 98, 105);
+            }
+            
+            // Row 2 (y=118): GP (x=4), MN (x=52), GB (x=98)
+            // 1. GNSS Status (x=4)
+            bool gnssConfigured = hw.isEnabled(HW_MOD_CAP_LORA1262) || hw.isEnabled(HW_MOD_UNIT_GPSV11);
+            if (!gnssConfigured) {
+                earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
+                earth_renderer->getCanvas()->drawString("GP:--", 4, 118);
+            } else if (gnss && gnss->isModuleInitialized()) {
+                if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
+                    earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
+                    earth_renderer->getCanvas()->drawString("GP:FIX", 4, 118);
+                } else if (gnss->isInStandbyMode()) {
+                    if (gnssTimedOut) {
+                        earth_renderer->getCanvas()->setTextColor(TFT_RED);
+                        earth_renderer->getCanvas()->drawString("GP:TMO", 4, 118);
+                    } else {
+                        earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
+                        earth_renderer->getCanvas()->drawString("GP:OFF", 4, 118);
+                    }
+                } else {
+                    earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
+                    earth_renderer->getCanvas()->drawString("GP:SCH", 4, 118);
+                }
+            } else {
+                earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
+                earth_renderer->getCanvas()->drawString("GP:ND", 4, 118);
+            }
+            
+            // 2. Chain Mono Sub-screen Status (x=52)
+            bool monoConfigured = hw.isEnabled(HW_MOD_CHAIN_MONO);
+            if (!monoConfigured) {
+                earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
+                earth_renderer->getCanvas()->drawString("MN:--", 52, 118);
+            } else if (isMonoInitialized) {
+                earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
+                earth_renderer->getCanvas()->drawString("MN:OK", 52, 118);
+            } else {
+                earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
+                earth_renderer->getCanvas()->drawString("MN:ND", 52, 118);
+            }
+            
+            // 3. Gimbal Status (x=98)
+            bool gimbalConfigured = hw.isEnabled(HW_MOD_UNIT_8SERVOS);
+            if (!gimbalConfigured) {
+                earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
+                earth_renderer->getCanvas()->drawString("GB:--", 98, 118);
+            } else if (gimbal.isOnline()) {
+                uint16_t gbColor = TFT_GREEN;
+                const char* gbStatus = "GB:OK";
+                switch (gimbal.getState()) {
+                    case GIMBAL_STATE_INITIALIZING: gbColor = TFT_ORANGE; gbStatus = "GB:INI"; break;
+                    case GIMBAL_STATE_PREPOINT:     gbColor = TFT_YELLOW; gbStatus = "GB:AIM"; break;
+                    case GIMBAL_STATE_TRACKING:     gbColor = TFT_GREEN;  gbStatus = "GB:TRK"; break;
+                    case GIMBAL_STATE_STANDBY:      
+                    default:                        gbColor = TFT_GREEN;  gbStatus = "GB:OK";  break;
+                }
+                earth_renderer->getCanvas()->setTextColor(gbColor);
+                earth_renderer->getCanvas()->drawString(gbStatus, 98, 118);
+            } else {
+                earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
+                earth_renderer->getCanvas()->drawString("GB:ND", 98, 118);
+            }
         }
         
         // Draw Time Machine at bottom right
