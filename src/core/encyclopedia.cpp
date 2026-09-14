@@ -424,10 +424,10 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         false  // defaultSelected
     },
-    // 57165 Meteor-M2
+    // 57166 Meteor-M2-3
     {
-        57165,
-        "Meteor-M2",
+        57166,
+        "Meteor-M2-3",
         Category::WEATHER,
         ICON_WEATHER,
         "俄罗斯极轨道气象卫星。在轨道上持续广播137MHz实时数字气象图（LRPT），能生成高分辨率可见光云图。",
