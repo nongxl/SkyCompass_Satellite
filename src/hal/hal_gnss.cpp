@@ -13,6 +13,7 @@ private:
     bool _isInStandby;
     bool _isProbing;
     MultipleSatellite* _gps;
+    unsigned long _lastNmeaTime;
     
     static const int DEFAULT_RX_PIN = 15;
     static const int DEFAULT_TX_PIN = 13;
@@ -22,7 +23,7 @@ private:
     static uint32_t _gpsSentences;
 
 public:
-    M5Gnss() : _enabled(false), _newData(false), _isInitialized(false), _isInStandby(false), _isProbing(false), _gps(nullptr) {
+    M5Gnss() : _enabled(false), _newData(false), _isInitialized(false), _isInStandby(false), _isProbing(false), _gps(nullptr), _lastNmeaTime(0) {
         _data.latitude = 0.0;
         _data.longitude = 0.0;
         _data.altitude = 0.0;
@@ -93,9 +94,13 @@ public:
         
         LOG_I("GNSS", "Starting GNSS on RX=%d, TX=%d @ %u...", rxPin, txPin, baudRate);
         
+        // 确保 M5 设备 5V 外设供电开启 (使能 Grove 口与 Cap 供电)
+        M5Cardputer.Power.setExtOutput(true);
+        delay(20);
+
         if (rxPin == 15 && txPin == 13) {
             enableCapLoRa1262Power();
-        } else if (rxPin == 2 && txPin == 1) {
+        } else if ((rxPin == 1 && txPin == 2) || (rxPin == 2 && txPin == 1)) {
             Wire.end(); // 确保 Grove 端口释放 I2C 引脚占用
         }
         
@@ -143,7 +148,12 @@ public:
             return false;
         }
 
+        bool hadChars = _gps->available();
+        uint32_t prevChars = _gps->charsProcessed();
         _gps->updateGPS();
+        if (hadChars || _gps->charsProcessed() > prevChars) {
+            _lastNmeaTime = millis();
+        }
         
         static unsigned long lastDebugLog = 0;
         if (millis() - lastDebugLog > 5000) {
@@ -443,9 +453,22 @@ public:
         return _isInitialized;
     }
     
+    unsigned long getLastNmeaTime() override {
+        return _lastNmeaTime;
+    }
+    
+    bool isHeartbeatActive(uint32_t pulseDurationMs = 250) override {
+        if (!_isInitialized || _isInStandby || !_enabled) {
+            return false;
+        }
+        if (_lastNmeaTime == 0) return false;
+        return (millis() - _lastNmeaTime < pulseDurationMs);
+    }
+    
     bool feed(char c) override {
         if (!_gps) return false;
         
+        _lastNmeaTime = millis();
         _gpsChars++;
         if (_gps->encode(c)) {
             _gpsSentences++;
@@ -462,16 +485,17 @@ public:
     char read() override {
         if (!_isInitialized) return 0;
         char c = Serial1.read();
+        _lastNmeaTime = millis();
         _gpsChars++;
         return c;
     }
 
     bool probeGrove() override {
-        return begin(2, 1, 115200);
+        return begin(1, 2, 115200);
     }
 
     bool isGroveMode() const override {
-        return (_config.rxPin == 2 && _config.txPin == 1);
+        return (_config.rxPin == 1 && _config.txPin == 2) || (_config.rxPin == 2 && _config.txPin == 1);
     }
 
     bool isProbing() const override {

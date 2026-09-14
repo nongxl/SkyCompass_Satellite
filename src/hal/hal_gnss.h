@@ -82,6 +82,8 @@ public:
     virtual uint32_t getGpsChars() = 0;
     virtual uint32_t getGpsSentences() = 0;
     virtual bool isModuleInitialized() = 0;
+    virtual unsigned long getLastNmeaTime() = 0;
+    virtual bool isHeartbeatActive(uint32_t pulseDurationMs = 250) = 0;
     
     virtual bool feed(char c) = 0;
     virtual int available() = 0;

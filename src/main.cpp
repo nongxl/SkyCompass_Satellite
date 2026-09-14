@@ -2765,8 +2765,8 @@ void setup() {
                 pos_manager = new PositionManager(gnss);
                 pos_manager->begin();
             } else if (hw.isEnabled(HW_MOD_UNIT_GPSV11)) {
-                LOG_I("APP", "[HW] Unit GPS v1.1 selected. Starting GNSS on Grove port (RX=2, TX=1)...");
-                gnss->begin(2, 1, 115200);
+                LOG_I("APP", "[HW] Unit GPS v1.1 selected. Starting GNSS on Grove port (RX=1, TX=2)...");
+                gnss->begin(1, 2, 115200);
                 pos_manager = new PositionManager(gnss);
                 pos_manager->begin();
             } else {
@@ -4784,8 +4784,8 @@ void loop() {
         doScreenshot();
     }
 
-    // 手动调整时间/快进期间暂停 GNSS 串口解析，防止串口中断抢占 CPU/I2C 总线
-    if (gnss && !g_isFastForwarding) {
+    // 仅在用户按键调整时光机快进期间短暂暂停 GNSS 串口解析，推荐列表等正常模式下保持 GNSS 实时解析
+    if (gnss && (lastTimeAdjustMillis == 0)) {
         gnss->update();
     }
 
@@ -5314,7 +5314,7 @@ void loop() {
                     if (gnssConfigured && gnss) {
                         if (!gnss->isModuleInitialized()) {
                             if (hw.isEnabled(HW_MOD_CAP_LORA1262)) gnss->begin(15, 13, 115200);
-                            else if (hw.isEnabled(HW_MOD_UNIT_GPSV11)) gnss->begin(2, 1, 115200);
+                            else if (hw.isEnabled(HW_MOD_UNIT_GPSV11)) gnss->begin(1, 2, 115200);
                             gnssManualMode = true;
                             gnssTimedOut = false;
                             gnssStartTime = millis();
@@ -7517,10 +7517,7 @@ void loop() {
                 earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
                 earth_renderer->getCanvas()->drawString("GP:--", 4, 118);
             } else if (gnss && gnss->isModuleInitialized()) {
-                if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
-                    earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                    earth_renderer->getCanvas()->drawString("GP:FIX", 4, 118);
-                } else if (gnss->isInStandbyMode()) {
+                if (gnss->isInStandbyMode()) {
                     if (gnssTimedOut) {
                         earth_renderer->getCanvas()->setTextColor(TFT_RED);
                         earth_renderer->getCanvas()->drawString("GP:TMO", 4, 118);
@@ -7529,8 +7526,89 @@ void loop() {
                         earth_renderer->getCanvas()->drawString("GP:OFF", 4, 118);
                     }
                 } else {
-                    earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
-                    earth_renderer->getCanvas()->drawString("GP:SCH", 4, 118);
+                    // 检查最近是否有 NMEA 串口数据（如果超过 3.5 秒完全没有数据字符，显示 ND）
+                    unsigned long lastNmea = gnss->getLastNmeaTime();
+                    bool hasUartTraffic = (lastNmea > 0 && (millis() - lastNmea < 3500));
+                    
+                    if (!hasUartTraffic && gnss->getGpsChars() < 10) {
+                        earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
+                        earth_renderer->getCanvas()->drawString("GP:ND", 4, 118);
+                    } else {
+                        int sats = gnss->getSatelliteCount();
+                        char gpBuf[12];
+                        uint16_t txtColor = TFT_YELLOW;
+
+                        if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
+                            // 定位锁定: 绿字显示参与卫星数，如 GP:8D
+                            if (sats > 0) {
+                                snprintf(gpBuf, sizeof(gpBuf), "GP:%dD", sats);
+                            } else {
+                                snprintf(gpBuf, sizeof(gpBuf), "GP:3D");
+                            }
+                            txtColor = TFT_GREEN;
+                        } else {
+                            // 搜星中: 若抓到卫星则显示 GP:n* (青蓝)，若天空中 0 星则显示 GP:0 (黄色)
+                            if (sats > 0) {
+                                snprintf(gpBuf, sizeof(gpBuf), "GP:%d*", sats);
+                                txtColor = TFT_CYAN;
+                            } else {
+                                snprintf(gpBuf, sizeof(gpBuf), "GP:0");
+                                txtColor = TFT_YELLOW;
+                            }
+                        }
+
+                        earth_renderer->getCanvas()->setTextColor(txtColor);
+                        earth_renderer->getCanvas()->drawString(gpBuf, 4, 118);
+
+                        // 绘制心跳呼吸点：放置在文本右下角 (文字起始x=4，计算字符串宽度并在其右侧 y=124 处绘制 4x4 呼吸点)
+                        int textWidth = earth_renderer->getCanvas()->textWidth(gpBuf);
+                        int dotX = 4 + textWidth + 2;
+                        int dotY = 124;
+
+                        unsigned long lastNmea = gnss->getLastNmeaTime();
+                        uint32_t elapsed = (lastNmea > 0) ? (millis() - lastNmea) : 99999;
+
+                        // 只要在最近 2.0 秒内接收到串口 NMEA 物理数据，就保持与模组节奏严格同步的 1Hz 呼吸心跳
+                        if (elapsed < 2000) {
+                            // 呼吸周期 1000ms：0~250ms 强劲起搏充盈，250~750ms 平滑呼出渐暗，750~1000ms 待机微光
+                            uint32_t phase = elapsed % 1000;
+                            float breath = 0.0f;
+                            if (phase < 250) {
+                                breath = sinf((phase / 250.0f) * 1.5707963f);
+                            } else if (phase < 750) {
+                                breath = cosf(((phase - 250) / 500.0f) * 1.5707963f);
+                            } else {
+                                breath = 0.0f;
+                            }
+                            if (breath < 0.0f) breath = 0.0f;
+                            if (breath > 1.0f) breath = 1.0f;
+
+                            // 呼吸色相：搜星阶段为亮青色(0, 255, 255)，定位锁定阶段为翡翠绿(0, 255, 120)
+                            bool isLocked = (gnss->getStatus() == GNSS_STATUS_LOCKED);
+                            uint8_t targetR = isLocked ? 20 : 0;
+                            uint8_t targetG = 255;
+                            uint8_t targetB = isLocked ? 120 : 255;
+
+                            // 待机暗底色 (深太空青灰)
+                            uint8_t baseR = 25, baseG = 40, baseB = 55;
+
+                            uint8_t curR = (uint8_t)(baseR + breath * (targetR - baseR));
+                            uint8_t curG = (uint8_t)(baseG + breath * (targetG - baseG));
+                            uint8_t curB = (uint8_t)(baseB + breath * (targetB - baseB));
+                            uint16_t coreColor = earth_renderer->getCanvas()->color565(curR, curG, curB);
+
+                            // 绘制 4x4 平滑呼吸核心
+                            earth_renderer->getCanvas()->fillRect(dotX, dotY, 4, 4, coreColor);
+
+                            // 脉冲峰值区 (起搏充盈 breath > 0.55) 叠加亮白高光核，呈现强烈的心跳爆闪呼吸质感
+                            if (breath > 0.55f) {
+                                earth_renderer->getCanvas()->fillRect(dotX + 1, dotY + 1, 2, 2, TFT_WHITE);
+                            }
+                        } else {
+                            // 硬件离线/未通信/待机：固定显示低调的暗灰色待机槽，无呼吸、无高光
+                            earth_renderer->getCanvas()->fillRect(dotX, dotY, 4, 4, earth_renderer->getCanvas()->color565(40, 45, 50));
+                        }
+                    }
                 }
             } else {
                 earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
