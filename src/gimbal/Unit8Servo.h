@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <M5Cardputer.h>
 
 #define UNIT_8SERVO_DEFAULT_ADDR        0x25
 #define PCA9685_DEFAULT_ADDR            0x40
@@ -51,6 +52,7 @@ private:
     TwoWire *_wire;
     uint8_t _sda;
     uint8_t _scl;
+    bool _useInI2C; // 当引脚为 8/9 时使用 M5.In_I2C，融入统一硬件调度
     servo_driver_type_t _driverType;
 
     bool writeBytes(uint8_t reg, const uint8_t *buffer, uint8_t length);

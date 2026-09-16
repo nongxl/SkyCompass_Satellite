@@ -62,7 +62,7 @@ private:
 public:
     GimbalController();
     
-    bool begin(TwoWire *wire = &Wire, uint8_t sda = 2, uint8_t scl = 1, uint32_t freq = 400000);
+    bool begin(TwoWire *wire = &Wire, uint8_t sda = 2, uint8_t scl = 1, uint32_t freq = 100000);
     void tick();
     
     // 轨道拱门专用输入接口 (trackHeading 为轨道天面飞行航向角，satAz 为卫星侧向方位角)

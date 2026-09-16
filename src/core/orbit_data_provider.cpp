@@ -151,7 +151,7 @@ bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record
     return success;
 }
 
-static void processRecentLaunchItem(std::vector<RecentLaunchItem>& tempLaunches, const OrbitRecord& record) {
+static void processRecentLaunchItem(std::vector<RecentLaunchItem>& tempLaunches, const OrbitRecord& record, std::vector<std::vector<float>>* outPhases = nullptr) {
     String batchId = record.getBatchId();
     if (batchId.length() == 0) return;
     
@@ -166,6 +166,9 @@ static void processRecentLaunchItem(std::vector<RecentLaunchItem>& tempLaunches,
     if (foundIdx != -1) {
         if (tempLaunches[foundIdx].satelliteCount < 60) {
             tempLaunches[foundIdx].satelliteCount++;
+        }
+        if (outPhases && (size_t)foundIdx < outPhases->size()) {
+            (*outPhases)[foundIdx].push_back(record.meanAnomaly);
         }
     } else {
         RecentLaunchItem item;
@@ -208,6 +211,11 @@ static void processRecentLaunchItem(std::vector<RecentLaunchItem>& tempLaunches,
         item.repSatName = record.name;
         item.iconType = ICON_SATELLITE;
         tempLaunches.push_back(item);
+        if (outPhases) {
+            std::vector<float> pList;
+            pList.push_back(record.meanAnomaly);
+            outPhases->push_back(pList);
+        }
     }
 }
 
@@ -308,7 +316,158 @@ bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& te
     return false;
 }
 
-bool OrbitDataProvider::loadRecentLaunchesFromCache(std::vector<RecentLaunchItem>& tempLaunches) {
+static const char* META_CACHE_PATH = "/recent_launches_meta.bin";
+static const uint32_t META_MAGIC = 0x534B594C; // "SKYL"
+static const uint8_t META_VERSION = 1;
+
+static void writeBinStr(File& f, const String& s) {
+    uint8_t len = (uint8_t)min((size_t)s.length(), (size_t)255);
+    f.write(len);
+    if (len > 0) {
+        f.write((const uint8_t*)s.c_str(), len);
+    }
+}
+
+static String readBinStr(File& f) {
+    uint8_t len = 0;
+    if (f.read(&len, 1) != 1) return "";
+    if (len == 0) return "";
+    char buf[256];
+    int r = f.read((uint8_t*)buf, len);
+    if (r <= 0) return "";
+    buf[r] = '\0';
+    return String(buf);
+}
+
+bool OrbitDataProvider::saveRecentLaunchesMeta(const std::vector<RecentLaunchItem>& items) {
+    File f = LittleFS.open(META_CACHE_PATH, "w", true);
+    if (!f) {
+        LOG_E("RECENT_LAUNCH", "Failed to open %s for write", META_CACHE_PATH);
+        return false;
+    }
+    
+    uint32_t magic = META_MAGIC;
+    uint8_t ver = META_VERSION;
+    uint16_t count = (uint16_t)items.size();
+    
+    f.write((const uint8_t*)&magic, sizeof(magic));
+    f.write(&ver, sizeof(ver));
+    f.write((const uint8_t*)&count, sizeof(count));
+    
+    for (const auto& item : items) {
+        writeBinStr(f, item.batchId);
+        writeBinStr(f, item.displayName);
+        writeBinStr(f, item.shortName);
+        writeBinStr(f, item.repSatName);
+        
+        int32_t satCount = item.satelliteCount;
+        uint8_t isGrp = item.isGroup ? 1 : 0;
+        uint8_t sel = item.selected ? 1 : 0;
+        uint32_t ep = item.epoch;
+        float inc = item.inclination;
+        float alt = item.avgAlt;
+        float occ = item.occupancy;
+        float occStart = item.occupancyStartPhase;
+        float occEnd = item.occupancyEndPhase;
+        float repPhase = item.repAlongTrackPhase;
+        uint8_t icon = (uint8_t)item.iconType;
+        
+        f.write((const uint8_t*)&satCount, sizeof(satCount));
+        f.write(&isGrp, 1);
+        f.write(&sel, 1);
+        f.write((const uint8_t*)&ep, sizeof(ep));
+        f.write((const uint8_t*)&inc, sizeof(inc));
+        f.write((const uint8_t*)&alt, sizeof(alt));
+        f.write((const uint8_t*)&occ, sizeof(occ));
+        f.write((const uint8_t*)&occStart, sizeof(occStart));
+        f.write((const uint8_t*)&occEnd, sizeof(occEnd));
+        f.write((const uint8_t*)&repPhase, sizeof(repPhase));
+        f.write(&icon, 1);
+        
+        uint8_t pCount = (uint8_t)item.proxyFormation.size();
+        f.write(&pCount, 1);
+        for (const auto& pt : item.proxyFormation) {
+            f.write((const uint8_t*)&pt.AlongTrackPhase, sizeof(pt.AlongTrackPhase));
+            f.write((const uint8_t*)&pt.brightness, sizeof(pt.brightness));
+        }
+    }
+    
+    f.close();
+    LOG_I("RECENT_LAUNCH", "Saved %d launch items to meta snapshot (%s).", (int)items.size(), META_CACHE_PATH);
+    return true;
+}
+
+bool OrbitDataProvider::loadRecentLaunchesMeta(std::vector<RecentLaunchItem>& items) {
+    if (!LittleFS.exists(META_CACHE_PATH)) return false;
+    File f = LittleFS.open(META_CACHE_PATH, "r");
+    if (!f) return false;
+    
+    uint32_t magic = 0;
+    uint8_t ver = 0;
+    uint16_t count = 0;
+    
+    if (f.read((uint8_t*)&magic, sizeof(magic)) != sizeof(magic) || magic != META_MAGIC) {
+        f.close();
+        return false;
+    }
+    if (f.read(&ver, sizeof(ver)) != sizeof(ver) || ver != META_VERSION) {
+        f.close();
+        return false;
+    }
+    if (f.read((uint8_t*)&count, sizeof(count)) != sizeof(count) || count > 200) {
+        f.close();
+        return false;
+    }
+    
+    items.clear();
+    items.reserve(count);
+    
+    for (uint16_t i = 0; i < count; i++) {
+        RecentLaunchItem item;
+        item.batchId = readBinStr(f);
+        item.displayName = readBinStr(f);
+        item.shortName = readBinStr(f);
+        item.repSatName = readBinStr(f);
+        
+        int32_t satCount = 0;
+        uint8_t isGrp = 0, sel = 0, icon = 0;
+        
+        f.read((uint8_t*)&satCount, sizeof(satCount));
+        f.read(&isGrp, 1);
+        f.read(&sel, 1);
+        f.read((uint8_t*)&item.epoch, sizeof(item.epoch));
+        f.read((uint8_t*)&item.inclination, sizeof(item.inclination));
+        f.read((uint8_t*)&item.avgAlt, sizeof(item.avgAlt));
+        f.read((uint8_t*)&item.occupancy, sizeof(item.occupancy));
+        f.read((uint8_t*)&item.occupancyStartPhase, sizeof(item.occupancyStartPhase));
+        f.read((uint8_t*)&item.occupancyEndPhase, sizeof(item.occupancyEndPhase));
+        f.read((uint8_t*)&item.repAlongTrackPhase, sizeof(item.repAlongTrackPhase));
+        f.read(&icon, 1);
+        
+        item.satelliteCount = satCount;
+        item.isGroup = (isGrp != 0);
+        item.selected = (sel != 0);
+        item.iconType = (SatIconType)icon;
+        
+        uint8_t pCount = 0;
+        f.read(&pCount, 1);
+        item.proxyFormation.clear();
+        for (uint8_t p = 0; p < pCount; p++) {
+            FormationPoint pt;
+            f.read((uint8_t*)&pt.AlongTrackPhase, sizeof(pt.AlongTrackPhase));
+            f.read((uint8_t*)&pt.brightness, sizeof(pt.brightness));
+            item.proxyFormation.push_back(pt);
+        }
+        
+        items.push_back(item);
+    }
+    
+    f.close();
+    LOG_I("RECENT_LAUNCH", "Fast-loaded %d launch items from meta snapshot!", (int)items.size());
+    return !items.empty();
+}
+
+bool OrbitDataProvider::loadRecentLaunchesFromCache(std::vector<RecentLaunchItem>& tempLaunches, std::vector<std::vector<float>>* outPhases) {
     File f = LittleFS.open("/json_recent_raw.jsonl", "r");
     if (!f) {
         LOG_I("DEBUG", "loadRecentLaunchesFromCache: Failed to open /json_recent_raw.jsonl");
@@ -317,6 +476,10 @@ bool OrbitDataProvider::loadRecentLaunchesFromCache(std::vector<RecentLaunchItem
     
     tempLaunches.clear();
     tempLaunches.reserve(30);
+    if (outPhases) {
+        outPhases->clear();
+        outPhases->reserve(30);
+    }
     
     JSONParser parser;
     int rawCount = 0;
@@ -329,29 +492,22 @@ bool OrbitDataProvider::loadRecentLaunchesFromCache(std::vector<RecentLaunchItem
         singleJson.trim();
         if (singleJson.length() == 0) continue;
         
-        if (lineCount <= 5) {
-            LOG_I("DEBUG", "JSON Line %d (len %d): %s", lineCount, (int)singleJson.length(), singleJson.c_str());
-        }
-        
         OrbitRecord record;
         if (parser.parse(singleJson, record)) {
             parseSuccessCount++;
             rawCount++;
-            processRecentLaunchItem(tempLaunches, record);
-        } else {
-            if (lineCount <= 5) {
-                LOG_I("DEBUG", "JSON Parse Failed for Line %d", lineCount);
-            }
+            processRecentLaunchItem(tempLaunches, record, outPhases);
         }
         
-        // Feed watchdog every 5 lines to prevent WDT timeout during heavy parsing
-        if (lineCount % 5 == 0) {
+        // 方案三：优化看门狗与调度节拍，从每 5 行改为每 50 行
+        if (lineCount % 50 == 0) {
             esp_task_wdt_reset();
-            vTaskDelay(2);
+            taskYIELD();
         }
     }
     
     f.close();
+    esp_task_wdt_reset();
     LOG_I("DEBUG", "loadRecentLaunchesFromCache finished: Total Lines: %d, Parse Success: %d, Launches Created: %d", lineCount, parseSuccessCount, (int)tempLaunches.size());
     return rawCount > 0;
 }

@@ -1,6 +1,6 @@
 #include "Unit8Servo.h"
 
-Unit8Servo::Unit8Servo(uint8_t addr) : _addr(addr), _wire(&Wire), _sda(2), _scl(1), _driverType(DRIVER_TYPE_NONE) {}
+Unit8Servo::Unit8Servo(uint8_t addr) : _addr(addr), _wire(&Wire), _sda(2), _scl(1), _useInI2C(false), _driverType(DRIVER_TYPE_NONE) {}
 
 bool Unit8Servo::initPCA9685() {
     // PCA9685 软件复位与唤醒
@@ -30,11 +30,67 @@ bool Unit8Servo::begin(TwoWire *wire, uint8_t sda, uint8_t scl, uint32_t freq) {
     _wire = wire;
     _sda = sda;
     _scl = scl;
+    _useInI2C = (sda == 8 && scl == 9);
+
+    if (_useInI2C) {
+        log_i("[Gimbal] Using Cardputer M5.In_I2C native bus driver for Cap HY2.0 port (SDA=8, SCL=9)...");
+        // 1. 优先探测 Unit 8Servos (0x25)
+        if (M5.In_I2C.scanID(UNIT_8SERVO_DEFAULT_ADDR, freq)) {
+            _addr = UNIT_8SERVO_DEFAULT_ADDR;
+            _driverType = DRIVER_TYPE_UNIT8SERVO;
+            setAllPinMode(SERVO_CTL_MODE);
+            delay(10);
+            log_i("[Gimbal] Auto-detected M5Stack Unit 8Servos via M5.In_I2C at 0x%02X (Servo mode enabled)", _addr);
+            return true;
+        }
+        // 2. 备用探测 PCA9685 (0x40)
+        if (M5.In_I2C.scanID(PCA9685_DEFAULT_ADDR, freq)) {
+            _addr = PCA9685_DEFAULT_ADDR;
+            _driverType = DRIVER_TYPE_PCA9685;
+            initPCA9685();
+            log_i("[Gimbal] Auto-detected M5Stack Module SERVO2 (PCA9685) via M5.In_I2C at 0x%02X", _addr);
+            return true;
+        }
+        // 3. 全局扫描
+        log_i("[Gimbal] Scanning M5.In_I2C bus (SDA=8, SCL=9)...");
+        for (uint8_t testAddr = 8; testAddr < 0x78; testAddr++) {
+            if (M5.In_I2C.scanID(testAddr, freq)) {
+                log_i("[Gimbal] -> Found responding I2C device via M5.In_I2C at 0x%02X", testAddr);
+                if (testAddr == UNIT_8SERVO_DEFAULT_ADDR) {
+                    _addr = testAddr;
+                    _driverType = DRIVER_TYPE_UNIT8SERVO;
+                    setAllPinMode(SERVO_CTL_MODE);
+                    delay(10);
+                    return true;
+                } else if (testAddr >= 0x40 && testAddr <= 0x47) {
+                    _addr = testAddr;
+                    _driverType = DRIVER_TYPE_PCA9685;
+                    initPCA9685();
+                    return true;
+                }
+            }
+        }
+        return (_driverType != DRIVER_TYPE_NONE);
+    }
+
+    // 非 8/9 引脚（如机身侧面 Grove 口 SDA=2, SCL=1），使用标准 Wire
     _wire->begin(_sda, _scl, freq);
+    _wire->setTimeOut(25);
     delay(20);
 
     // 自动扫描识别驱动板类型
-    // 1. 优先探测 PCA9685 (M5Stack Module SERVO2 默认 0x40)
+    // 1. 优先探测 Unit 8Servos (STM32 方案默认 0x25)
+    _wire->beginTransmission(UNIT_8SERVO_DEFAULT_ADDR);
+    if (_wire->endTransmission() == 0) {
+        _addr = UNIT_8SERVO_DEFAULT_ADDR;
+        _driverType = DRIVER_TYPE_UNIT8SERVO;
+        setAllPinMode(SERVO_CTL_MODE);
+        delay(10);
+        log_i("[Gimbal] Auto-detected M5Stack Unit 8Servos at 0x%02X (Servo mode enabled)", _addr);
+        return true;
+    }
+
+    // 2. 备用探测 PCA9685 (M5Stack Module SERVO2 默认 0x40)
     _wire->beginTransmission(PCA9685_DEFAULT_ADDR);
     if (_wire->endTransmission() == 0) {
         _addr = PCA9685_DEFAULT_ADDR;
@@ -44,17 +100,8 @@ bool Unit8Servo::begin(TwoWire *wire, uint8_t sda, uint8_t scl, uint32_t freq) {
         return true;
     }
 
-    // 2. 备用探测 Unit 8Servos (STM32 方案默认 0x25)
-    _wire->beginTransmission(UNIT_8SERVO_DEFAULT_ADDR);
-    if (_wire->endTransmission() == 0) {
-        _addr = UNIT_8SERVO_DEFAULT_ADDR;
-        _driverType = DRIVER_TYPE_UNIT8SERVO;
-        log_i("[Gimbal] Auto-detected M5Stack Unit 8Servos at 0x%02X", _addr);
-        return true;
-    }
-
     // 3. 全总线扫描以便输出调试诊断日志
-    log_i("[Gimbal] Scanning Grove I2C bus (GPIO 2/1)...");
+    log_i("[Gimbal] Scanning I2C bus (SDA=%d, SCL=%d)...", _sda, _scl);
     uint8_t foundCount = 0;
     for (uint8_t testAddr = 1; testAddr < 127; testAddr++) {
         _wire->beginTransmission(testAddr);
@@ -62,19 +109,22 @@ bool Unit8Servo::begin(TwoWire *wire, uint8_t sda, uint8_t scl, uint32_t freq) {
             log_i("[Gimbal] -> Found responding I2C device at 0x%02X", testAddr);
             foundCount++;
             if (_driverType == DRIVER_TYPE_NONE) {
-                if (testAddr >= 0x40 && testAddr <= 0x47) {
+                if (testAddr == UNIT_8SERVO_DEFAULT_ADDR) {
+                    _addr = testAddr;
+                    _driverType = DRIVER_TYPE_UNIT8SERVO;
+                    setAllPinMode(SERVO_CTL_MODE);
+                    delay(10);
+                } else if (testAddr >= 0x40 && testAddr <= 0x47) {
                     _addr = testAddr;
                     _driverType = DRIVER_TYPE_PCA9685;
                     initPCA9685();
-                } else if (testAddr == UNIT_8SERVO_DEFAULT_ADDR) {
-                    _addr = testAddr;
-                    _driverType = DRIVER_TYPE_UNIT8SERVO;
                 }
             }
         }
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
     if (foundCount == 0) {
-        log_i("[Gimbal] No I2C devices found on Grove port. Please check wiring (VCC/GND/SDA/SCL)!");
+        log_i("[Gimbal] No I2C devices found on SDA=%d, SCL=%d. Please check wiring (VCC/GND/SDA/SCL)!", _sda, _scl);
     }
 
     return (_driverType != DRIVER_TYPE_NONE);
@@ -82,31 +132,112 @@ bool Unit8Servo::begin(TwoWire *wire, uint8_t sda, uint8_t scl, uint32_t freq) {
 
 bool Unit8Servo::isConnected() {
     if (_driverType == DRIVER_TYPE_NONE) return false;
+    if (_useInI2C) {
+        return M5.In_I2C.scanID(_addr, 100000);
+    }
     _wire->beginTransmission(_addr);
     return (_wire->endTransmission() == 0);
 }
 
+extern SemaphoreHandle_t g_i2cBusMutex;
+
+static void recoverI2CBus(uint8_t sda, uint8_t scl) {
+    pinMode(sda, INPUT_PULLUP);
+    pinMode(scl, OUTPUT);
+    for (int i = 0; i < 9; i++) {
+        digitalWrite(scl, LOW);
+        delayMicroseconds(5);
+        digitalWrite(scl, HIGH);
+        delayMicroseconds(5);
+    }
+    // 发送 STOP 条件 (SCL 为 HIGH 时 SDA 由 LOW 跳到 HIGH)
+    pinMode(sda, OUTPUT);
+    digitalWrite(sda, LOW);
+    delayMicroseconds(5);
+    digitalWrite(scl, HIGH);
+    delayMicroseconds(5);
+    digitalWrite(sda, HIGH);
+    delayMicroseconds(5);
+    pinMode(sda, INPUT_PULLUP);
+}
+
 bool Unit8Servo::writeBytes(uint8_t reg, const uint8_t *buffer, uint8_t length) {
+    bool lockAcquired = false;
+    if (g_i2cBusMutex != NULL) {
+        lockAcquired = (xSemaphoreTake(g_i2cBusMutex, pdMS_TO_TICKS(50)) == pdTRUE);
+    }
+
+    if (_useInI2C) {
+        bool ok = M5.In_I2C.writeRegister(_addr, reg, buffer, length, 100000);
+        if (lockAcquired) {
+            xSemaphoreGive(g_i2cBusMutex);
+        }
+        if (!ok) {
+            log_e("[Unit8Servo] M5.In_I2C write to 0x%02X reg 0x%02X (len=%d) FAILED!", _addr, reg, length);
+        }
+        return ok;
+    }
+
+    _wire->setTimeOut(20); // 严格限制超时为 20ms，杜绝界面卡顿
     _wire->beginTransmission(_addr);
     _wire->write(reg);
     for (uint8_t i = 0; i < length; i++) {
         _wire->write(buffer[i]);
     }
-    return (_wire->endTransmission() == 0);
+    uint8_t err = _wire->endTransmission();
+    if (lockAcquired) {
+        xSemaphoreGive(g_i2cBusMutex);
+    }
+    if (err != 0) {
+        log_e("[Unit8Servo] I2C write to 0x%02X reg 0x%02X (len=%d) FAILED! error=%d", _addr, reg, length, err);
+        if (err == 5) { // 超时说明从机拉低了 SDA，立即自愈恢复总线
+            log_w("[Unit8Servo] I2C Timeout (SDA stuck). Triggering 9-pulse bus recovery...");
+            recoverI2CBus(_sda, _scl);
+            _wire->end();
+            _wire->begin(_sda, _scl, 100000);
+            _wire->setTimeOut(20);
+        }
+        return false;
+    }
+    return true;
 }
 
 bool Unit8Servo::readBytes(uint8_t reg, uint8_t *buffer, uint8_t length) {
+    bool lockAcquired = false;
+    if (g_i2cBusMutex != NULL) {
+        lockAcquired = (xSemaphoreTake(g_i2cBusMutex, pdMS_TO_TICKS(50)) == pdTRUE);
+    }
+
+    if (_useInI2C) {
+        bool ok = M5.In_I2C.readRegister(_addr, reg, buffer, length, 100000);
+        if (lockAcquired) {
+            xSemaphoreGive(g_i2cBusMutex);
+        }
+        return ok;
+    }
+
+    _wire->setTimeOut(20);
     _wire->beginTransmission(_addr);
     _wire->write(reg);
-    if (_wire->endTransmission(false) != 0) {
+    uint8_t txErr = _wire->endTransmission(false);
+    if (txErr != 0) {
+        if (lockAcquired) xSemaphoreGive(g_i2cBusMutex);
+        if (txErr == 5) {
+            recoverI2CBus(_sda, _scl);
+            _wire->end();
+            _wire->begin(_sda, _scl, 100000);
+            _wire->setTimeOut(20);
+        }
         return false;
     }
     if (_wire->requestFrom(_addr, length) == length) {
         for (uint8_t i = 0; i < length; i++) {
             buffer[i] = _wire->read();
         }
+        if (lockAcquired) xSemaphoreGive(g_i2cBusMutex);
         return true;
     }
+    if (lockAcquired) xSemaphoreGive(g_i2cBusMutex);
     return false;
 }
 
@@ -114,16 +245,24 @@ bool Unit8Servo::setAllPinMode(servo_pin_mode_t mode) {
     if (_driverType == DRIVER_TYPE_PCA9685) {
         return true; // PCA9685 默认为 PWM/舵机驱动
     }
+    // 1. 官方规范：向 0x00 寄存器连续写入 8 个字节，触发 STM32 固件置位 flag_servo_mode
     uint8_t data[8];
     memset(data, (uint8_t)mode, 8);
-    return writeBytes(UNIT_8SERVO_MODE_REG, data, 8);
+    bool ok = writeBytes(UNIT_8SERVO_MODE_REG, data, 8);
+    
+    // 2. 双重保证：逐个引脚也写入一次模式
+    for (uint8_t pin = 0; pin < 8; pin++) {
+        uint8_t val = (uint8_t)mode;
+        writeBytes(pin, &val, 1);
+    }
+    return ok;
 }
 
 bool Unit8Servo::setPinMode(uint8_t pin, servo_pin_mode_t mode) {
     if (_driverType == DRIVER_TYPE_PCA9685) return true;
     if (pin > 7) return false;
     uint8_t val = (uint8_t)mode;
-    return writeBytes(UNIT_8SERVO_MODE_REG + pin, &val, 1);
+    return writeBytes(pin, &val, 1);
 }
 
 bool Unit8Servo::setServoAngle(uint8_t pin, uint8_t angle) {
@@ -137,13 +276,8 @@ bool Unit8Servo::setServoAngle(uint8_t pin, uint8_t angle) {
         if (offCount > 4095) offCount = 4095;
 
         uint8_t reg = PCA9685_LED0_ON_L_REG + 4 * pin;
-        _wire->beginTransmission(_addr);
-        _wire->write(reg);
-        _wire->write(0x00); // ON_L
-        _wire->write(0x00); // ON_H
-        _wire->write((uint8_t)(offCount & 0xFF));        // OFF_L
-        _wire->write((uint8_t)((offCount >> 8) & 0x0F)); // OFF_H
-        return (_wire->endTransmission() == 0);
+        uint8_t data[4] = {0x00, 0x00, (uint8_t)(offCount & 0xFF), (uint8_t)((offCount >> 8) & 0x0F)};
+        return writeBytes(reg, data, 4);
     } else {
         if (pin > 7) return false;
         return writeBytes(UNIT_8SERVO_SERVO_ANGLE_8B_REG + pin, &angle, 1);
@@ -162,13 +296,8 @@ bool Unit8Servo::setServoPulse(uint8_t pin, uint16_t pulse) {
         if (offCount > 4095) offCount = 4095;
 
         uint8_t reg = PCA9685_LED0_ON_L_REG + 4 * pin;
-        _wire->beginTransmission(_addr);
-        _wire->write(reg);
-        _wire->write(0x00); // ON_L
-        _wire->write(0x00); // ON_H
-        _wire->write((uint8_t)(offCount & 0xFF));        // OFF_L
-        _wire->write((uint8_t)((offCount >> 8) & 0x0F)); // OFF_H
-        return (_wire->endTransmission() == 0);
+        uint8_t data[4] = {0x00, 0x00, (uint8_t)(offCount & 0xFF), (uint8_t)((offCount >> 8) & 0x0F)};
+        return writeBytes(reg, data, 4);
     } else {
         if (pin > 7) return false;
         uint8_t data[2];
@@ -243,3 +372,4 @@ bool Unit8Servo::setI2CAddress(uint8_t new_addr) {
     }
     return false;
 }
+

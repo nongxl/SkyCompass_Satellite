@@ -439,68 +439,74 @@ static void assignShortNameAndIcon(RecentLaunchItem& item) {
     item.iconType = ICON_SATELLITE;
 }
 
-void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
+void calculateFormationsForItems(std::vector<RecentLaunchItem>& items, const std::vector<std::vector<float>>* providedPhases = nullptr) {
     if (recentLaunchDownloading) return; // Prevent file read collision during background download
     if (items.empty()) return;
     
-    if (!LittleFS.exists("/json_recent_raw.jsonl")) {
-        // Fallback: Default dummy values
-        for (auto& item : items) {
-            assignShortNameAndIcon(item);
-            item.occupancy = 0.0f;
-            item.proxyFormation.clear();
-            FormationPoint fp = {0.0f, 1.0f};
-            item.proxyFormation.push_back(fp);
+    std::vector<std::vector<float>>* allocatedPhases = nullptr;
+    const std::vector<std::vector<float>>* rawPhases = providedPhases;
+    
+    // 如果外部没有直接提供单趟提取的相位，才回退去打开文件解析
+    if (!rawPhases) {
+        if (!LittleFS.exists("/json_recent_raw.jsonl")) {
+            // Fallback: Default dummy values
+            for (auto& item : items) {
+                assignShortNameAndIcon(item);
+                item.occupancy = 0.0f;
+                item.proxyFormation.clear();
+                FormationPoint fp = {0.0f, 1.0f};
+                item.proxyFormation.push_back(fp);
+            }
+            return;
         }
-        return;
-    }
-    
-    // Store original Mean Anomalies for each item index
-    std::vector<std::vector<float>>* rawPhases = new std::vector<std::vector<float>>(items.size());
-    if (!rawPhases) return;
-    
-    File f = LittleFS.open("/json_recent_raw.jsonl", "r");
-    if (!f) {
-        delete rawPhases;
-        return;
-    }
-    
-    JSONParser parser;
-    int calcLineCount = 0;
-    while (f.available()) {
-        String singleLine = f.readStringUntil('\n');
-        singleLine.trim();
-        if (singleLine.length() == 0) continue;
-        calcLineCount++;
         
-        OrbitRecord record;
-        if (parser.parse(singleLine, record)) {
-            String batchId = record.getBatchId();
-            if (batchId.length() == 0) continue;
+        allocatedPhases = new std::vector<std::vector<float>>(items.size());
+        if (!allocatedPhases) return;
+        rawPhases = allocatedPhases;
+        
+        File f = LittleFS.open("/json_recent_raw.jsonl", "r");
+        if (!f) {
+            delete allocatedPhases;
+            return;
+        }
+        
+        JSONParser parser;
+        int calcLineCount = 0;
+        while (f.available()) {
+            String singleLine = f.readStringUntil('\n');
+            singleLine.trim();
+            if (singleLine.length() == 0) continue;
+            calcLineCount++;
             
-            for (size_t i = 0; i < items.size(); i++) {
-                if (items[i].batchId == batchId) {
-                    (*rawPhases)[i].push_back(record.meanAnomaly);
-                    break;
+            OrbitRecord record;
+            if (parser.parse(singleLine, record)) {
+                String batchId = record.getBatchId();
+                if (batchId.length() == 0) continue;
+                
+                for (size_t i = 0; i < items.size(); i++) {
+                    if (items[i].batchId == batchId) {
+                        (*allocatedPhases)[i].push_back(record.meanAnomaly);
+                        break;
+                    }
                 }
             }
+            
+            // 方案三：优化看门狗与调度节拍，从每 5 行改为每 50 行
+            if (calcLineCount % 50 == 0) {
+                esp_task_wdt_reset();
+                taskYIELD();
+            }
         }
-        
-        // Feed watchdog every 5 lines to prevent WDT timeout
-        if (calcLineCount % 5 == 0) {
-            esp_task_wdt_reset();
-            vTaskDelay(2);
-        }
+        f.close();
     }
-    f.close();
     
     for (size_t i = 0; i < items.size(); i++) {
         auto& item = items[i];
-        auto& phases = (*rawPhases)[i];
+        const auto& phases = (*rawPhases)[i];
         
-        // Feed watchdog for each item during heavy formation computation
+        // 方案三：优化聚类运算过程中的看门狗重置频率
         esp_task_wdt_reset();
-        if (i % 3 == 0) vTaskDelay(1);
+        if (i % 10 == 0) taskYIELD();
         
         // 1. Assign shortName and icon
         assignShortNameAndIcon(item);
@@ -518,20 +524,21 @@ void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
         item.repAlongTrackPhase = phases[0];
         
         // 2. Calculate Occupancy and Start/End Phases using circular max gap
-        std::sort(phases.begin(), phases.end());
+        std::vector<float> sortedPhases = phases;
+        std::sort(sortedPhases.begin(), sortedPhases.end());
         
         float maxGap = 0.0f;
-        float gapStart = phases.back();
-        float gapEnd = phases.front();
+        float gapStart = sortedPhases.back();
+        float gapEnd = sortedPhases.front();
         
-        if (phases.size() == 1) {
+        if (sortedPhases.size() == 1) {
             item.occupancy = 0.0f;
-            item.occupancyStartPhase = phases[0];
-            item.occupancyEndPhase = phases[0];
+            item.occupancyStartPhase = sortedPhases[0];
+            item.occupancyEndPhase = sortedPhases[0];
         } else {
-            for (size_t j = 0; j < phases.size(); j++) {
-                float p1 = phases[j];
-                float p2 = phases[(j + 1) % phases.size()];
+            for (size_t j = 0; j < sortedPhases.size(); j++) {
+                float p1 = sortedPhases[j];
+                float p2 = sortedPhases[(j + 1) % sortedPhases.size()];
                 float gap = p2 - p1;
                 if (gap < 0.0f) gap += 360.0f;
                 if (gap > maxGap) {
@@ -546,7 +553,7 @@ void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
         }
         
         // 3. Hierarchical Agglomerative Clustering to compress N phases into K proxies
-        int N = phases.size();
+        int N = sortedPhases.size();
         int K = 5;
         if (N <= 5) {
             K = N;
@@ -564,11 +571,11 @@ void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
         };
         std::vector<Cluster> clusters;
         clusters.reserve(N);
-        for (float p : phases) {
+        for (float p : sortedPhases) {
             clusters.push_back({p, 1});
         }
         
-        while (clusters.size() > (size_t)K) {
+        while ((int)clusters.size() > K) {
             float minDist = 360.0f;
             int bestA = -1;
             int bestB = -1;
@@ -615,7 +622,9 @@ void calculateFormationsForItems(std::vector<RecentLaunchItem>& items) {
             item.proxyFormation.push_back(fp);
         }
     }
-    delete rawPhases;
+    if (allocatedPhases) {
+        delete allocatedPhases;
+    }
 }
 
 
@@ -971,6 +980,7 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& c
 
 TaskHandle_t predictorTaskHandle = NULL;
 TaskHandle_t imuTaskHandle = NULL; // IMU task handle, used to pause IMU during Grove bus probing
+SemaphoreHandle_t g_i2cBusMutex = NULL; // 全局 I2C 总线互斥锁，防止 Cap HY2.0 (8/9) 与 IMU 冲突
 std::vector<PassEvent> recommendedPasses;
 bool showRecommendations = false;
 int passScrollIndex = 0;
@@ -1249,9 +1259,10 @@ void predictorTask(void* parameter) {
             continue;
         }
         
-        // Heap Protection: If system heap memory is critically low (< 24KB), defer the calculation
-        if (ESP.getFreeHeap() < 24000) {
-            LOG_I("APP", "Predictor task deferred: low heap safety guard triggered (%u bytes free)", ESP.getFreeHeap());
+        // Heap Protection: 检查剩余总内存和最大连续内存块，防碎片化
+        if (ESP.getFreeHeap() < 28000 || ESP.getMaxAllocHeap() < 12000) {
+            LOG_I("APP", "Predictor task deferred: low heap safety guard triggered (free: %u, maxBlock: %u)", 
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
@@ -1260,144 +1271,146 @@ void predictorTask(void* parameter) {
         cancelPrediction = false; // 重置取消状态
         g_orbitCalculating = true;
         
-        std::unique_ptr<ObservationPredictor> predictor(new ObservationPredictor(baseUserLat, baseUserLon, baseUserAlt / 1000.0, pos_manager));
-        std::vector<PassEvent> allPasses;
-        allPasses.reserve(150);
-        
-        // Use simulated time for predictions
-        uint32_t startTime = current_unix + timeMachineOffset;
-        g_currentPredictingBaseTime = startTime;
-        
-        int numSatsToPredict = 0;
-        RecentLaunchItem* activeGroup = nullptr;
-        if (g_recentLaunchFocusMode) {
-            numSatsToPredict = 1;
-        } else {
-            for (int i = 0; i < NUM_SATELLITES; i++) {
-                if (g_satellites[i].selected && g_satellites[i].type != SAT_TYPE_GEO_TV && g_satellites[i].type != SAT_TYPE_DEEP_SPACE) {
-                    numSatsToPredict++;
+        try {
+            std::unique_ptr<ObservationPredictor> predictor(new ObservationPredictor(baseUserLat, baseUserLon, baseUserAlt / 1000.0, pos_manager));
+            std::vector<PassEvent> allPasses;
+            allPasses.reserve(120);
+            
+            // Use simulated time for predictions
+            uint32_t startTime = current_unix + timeMachineOffset;
+            g_currentPredictingBaseTime = startTime;
+            
+            int numSatsToPredict = 0;
+            RecentLaunchItem* activeGroup = nullptr;
+            if (g_recentLaunchFocusMode) {
+                numSatsToPredict = 1;
+            } else {
+                for (int i = 0; i < NUM_SATELLITES; i++) {
+                    if (g_satellites[i].selected && g_satellites[i].type != SAT_TYPE_GEO_TV && g_satellites[i].type != SAT_TYPE_DEEP_SPACE) {
+                        numSatsToPredict++;
+                    }
                 }
             }
-        }
-        
-        if (!g_recentLaunchFocusMode && numSatsToPredict == 0) {
-            std::vector<PassEvent> emptyPasses;
-            std::vector<TreeItem> emptyTree;
-            rebuildTreeLocal(emptyTree, emptyPasses, current_unix + timeMachineOffset);
             
-            lockPassMutex();
-            recommendedPasses.swap(emptyPasses);
-            displayTree.swap(emptyTree);
-            predictionsReady = true;
-            lastPredictionBaseTime = startTime;
-            g_currentPredictingBaseTime = 0;
-            unlockPassMutex();
-            
-            g_orbitCalculating = false;
-            triggerPrediction = false;
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
-        
-        predictionProgress = 0;
-        int completedCount = 0;
-        
-        if (g_recentLaunchFocusMode) {
-            if (g_repSatInitialized && g_repSatTLE.line1.length() >= 14 && g_repSatTLE.line2.length() >= 14) {
-                auto passes = predictor->predictPasses(g_repSatTLE, 3.0, startTime, 7);
+            if (!g_recentLaunchFocusMode && numSatsToPredict == 0) {
+                std::vector<PassEvent> emptyPasses;
+                std::vector<TreeItem> emptyTree;
+                rebuildTreeLocal(emptyTree, emptyPasses, current_unix + timeMachineOffset);
                 
-                // Cap passes to prevent OOM
-                if (passes.size() > 8) {
-                    std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
-                        return a.score > b.score;
-                    });
-                    passes.resize(8);
-                }
+                lockPassMutex();
+                recommendedPasses.swap(emptyPasses);
+                displayTree.swap(emptyTree);
+                predictionsReady = true;
+                lastPredictionBaseTime = startTime;
+                g_currentPredictingBaseTime = 0;
+                unlockPassMutex();
                 
-                for (auto& p : passes) {
-                    p.satSelected = true;
-                    p.satIndex = -100; // Representative sat fixed to -100
-                }
-                allPasses.insert(allPasses.end(), passes.begin(), passes.end());
-            }
-            completedCount = 1;
-            predictionProgress = 100;
-        } else {
-            // === PHASE 1: Fast 24-Hour (Tonight) Pass Calculation (< 300ms) ===
-            std::vector<PassEvent> phase1Passes;
-            phase1Passes.reserve(50);
-            
-            for (int i = 0; i < NUM_SATELLITES; i++) {
-                vTaskDelay(1); // Yield CPU 0 to IDLE0 task to feed WDT
-                if (triggerPrediction || cancelPrediction || g_networkActive) break;
-                
-                SatelliteType type = SAT_TYPE_VISUAL;
-                bool isSelected = false;
-                TLEData tle;
-                float stdMag = 3.0;
-                
-                lockSatMutex();
-                isSelected = g_satellites[i].selected;
-                if (isSelected) {
-                    type = g_satellites[i].type;
-                    tle = g_satellites[i].tle;
-                    stdMag = g_satellites[i].stdMag;
-                }
-                unlockSatMutex();
-                
-                if (!isSelected) continue;
-                
-                if (type == SAT_TYPE_GEO_TV || type == SAT_TYPE_DEEP_SPACE) {
-                    completedCount++;
-                    continue;
-                }
-                
-                if (tle.line1.length() < 14 || tle.line2.length() < 14) {
-                    completedCount++;
-                    continue;
-                }
-                
-                // Fast 1-day prediction for Phase 1
-                auto passes1 = predictor->predictPasses(tle, stdMag, startTime, 1);
-                for (auto& p : passes1) {
-                    p.satSelected = true;
-                    p.satIndex = i;
-                }
-                phase1Passes.insert(phase1Passes.end(), passes1.begin(), passes1.end());
-                completedCount++;
-                predictionProgress = (completedCount * 50) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
-            }
-            
-            if (triggerPrediction || cancelPrediction || g_networkActive) {
-                if (cancelPrediction) {
-                    cancelPrediction = false;
-                    g_orbitCalculating = false;
-                    g_currentPredictingBaseTime = 0;
-                }
+                g_orbitCalculating = false;
+                triggerPrediction = false;
+                vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
             
-            // Publish Phase 1 (Tonight's passes) IMMEDIATELY to UI in ~300ms!
-            std::vector<PassEvent> upcomingPhase1;
-            for (const auto& pass : phase1Passes) {
-                if (pass.losTime >= current_unix + timeMachineOffset) {
-                    upcomingPhase1.push_back(pass);
+            predictionProgress = 0;
+            int completedCount = 0;
+            
+            if (g_recentLaunchFocusMode) {
+                if (g_repSatInitialized && g_repSatTLE.line1.length() >= 14 && g_repSatTLE.line2.length() >= 14) {
+                    auto passes = predictor->predictPasses(g_repSatTLE, 3.0, startTime, 7);
+                    
+                    // Cap passes to prevent OOM
+                    if (passes.size() > 8) {
+                        std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
+                            return a.score > b.score;
+                        });
+                        passes.resize(8);
+                    }
+                    
+                    for (auto& p : passes) {
+                        p.satSelected = true;
+                        p.satIndex = -100; // Representative sat fixed to -100
+                    }
+                    allPasses.insert(allPasses.end(), passes.begin(), passes.end());
                 }
-            }
-            std::sort(upcomingPhase1.begin(), upcomingPhase1.end(), [](const PassEvent& a, const PassEvent& b) {
-                if (a.score != b.score) return a.score > b.score;
-                return a.aosTime < b.aosTime;
-            });
-            
-            std::vector<TreeItem> tempDisplayTree1;
-            rebuildTreeLocal(tempDisplayTree1, upcomingPhase1, current_unix + timeMachineOffset);
-            
-            lockPassMutex();
-            recommendedPasses = upcomingPhase1;
-            displayTree = tempDisplayTree1;
-            predictionsReady = true;
-            lastPredictionBaseTime = startTime;
-            unlockPassMutex();
+                completedCount = 1;
+                predictionProgress = 100;
+            } else {
+                // === PHASE 1: Fast 24-Hour (Tonight) Pass Calculation (< 300ms) ===
+                std::vector<PassEvent> phase1Passes;
+                phase1Passes.reserve(40);
+                
+                for (int i = 0; i < NUM_SATELLITES; i++) {
+                    vTaskDelay(1); // Yield CPU 0 to IDLE0 task to feed WDT
+                    if (triggerPrediction || cancelPrediction || g_networkActive) break;
+                    
+                    SatelliteType type = SAT_TYPE_VISUAL;
+                    bool isSelected = false;
+                    TLEData tle;
+                    float stdMag = 3.0;
+                    
+                    lockSatMutex();
+                    isSelected = g_satellites[i].selected;
+                    if (isSelected) {
+                        type = g_satellites[i].type;
+                        tle = g_satellites[i].tle;
+                        stdMag = g_satellites[i].stdMag;
+                    }
+                    unlockSatMutex();
+                    
+                    if (!isSelected) continue;
+                    
+                    if (type == SAT_TYPE_GEO_TV || type == SAT_TYPE_DEEP_SPACE) {
+                        completedCount++;
+                        continue;
+                    }
+                    
+                    if (tle.line1.length() < 14 || tle.line2.length() < 14) {
+                        completedCount++;
+                        continue;
+                    }
+                    
+                    // Fast 1-day prediction for Phase 1
+                    auto passes1 = predictor->predictPasses(tle, stdMag, startTime, 1);
+                    for (auto& p : passes1) {
+                        p.satSelected = true;
+                        p.satIndex = i;
+                    }
+                    phase1Passes.insert(phase1Passes.end(), passes1.begin(), passes1.end());
+                    completedCount++;
+                    predictionProgress = (completedCount * 50) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
+                }
+                
+                if (triggerPrediction || cancelPrediction || g_networkActive) {
+                    if (cancelPrediction) {
+                        cancelPrediction = false;
+                        g_orbitCalculating = false;
+                        g_currentPredictingBaseTime = 0;
+                    }
+                    continue;
+                }
+                
+                // Publish Phase 1 (Tonight's passes) IMMEDIATELY to UI in ~300ms!
+                std::vector<PassEvent> upcomingPhase1;
+                upcomingPhase1.reserve(phase1Passes.size());
+                for (const auto& pass : phase1Passes) {
+                    if (pass.losTime >= current_unix + timeMachineOffset) {
+                        upcomingPhase1.push_back(pass);
+                    }
+                }
+                std::sort(upcomingPhase1.begin(), upcomingPhase1.end(), [](const PassEvent& a, const PassEvent& b) {
+                    if (a.score != b.score) return a.score > b.score;
+                    return a.aosTime < b.aosTime;
+                });
+                
+                std::vector<TreeItem> tempDisplayTree1;
+                rebuildTreeLocal(tempDisplayTree1, upcomingPhase1, current_unix + timeMachineOffset);
+                
+                lockPassMutex();
+                recommendedPasses = upcomingPhase1;
+                displayTree = tempDisplayTree1;
+                predictionsReady = true;
+                lastPredictionBaseTime = startTime;
+                unlockPassMutex();
             
             // === PHASE 2: Background 7-Day Full Pass Calculation ===
             completedCount = 0;
@@ -1464,6 +1477,7 @@ void predictorTask(void* parameter) {
         
         // Filter out past passes relative to the simulated time
         std::vector<PassEvent> upcomingPasses;
+        upcomingPasses.reserve(allPasses.size());
         for (const auto& pass : allPasses) {
             if (pass.losTime >= current_unix + timeMachineOffset) {
                 upcomingPasses.push_back(pass);
@@ -1497,8 +1511,17 @@ void predictorTask(void* parameter) {
             g_orbitCalculating = false;
             g_readyStartTime = millis(); // Trigger 2-second READY effect
         }
-        
-
+        } catch (const std::bad_alloc& e) {
+            LOG_W("APP", "Predictor task caught std::bad_alloc (OOM prevented). Deferring calculation.");
+            g_orbitCalculating = false;
+            g_currentPredictingBaseTime = 0;
+            vTaskDelay(pdMS_TO_TICKS(2000));
+        } catch (...) {
+            LOG_W("APP", "Predictor task caught unknown exception. Safely recovering.");
+            g_orbitCalculating = false;
+            g_currentPredictingBaseTime = 0;
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
     }
 }
 
@@ -2227,14 +2250,16 @@ void networkTaskImpl(void* parameter) {
     HalWifi::begin(ssid.c_str(), pass.c_str());
     
     if (!HalWifi::isConnected()) {
-        LOG_I("APP", "WiFi connection failed. Opening setup screen.");
+        LOG_I("APP", "WiFi connection failed. Entering offline mode.");
         if (appState == STATE_SAT_SELECT) {
             downloadErrorMsg = "WiFi Connection Failed!";
         }
-        g_wifiSetupReturnState = appState;
-        appState = STATE_WIFI_SETUP;
-        wifiIsScanning = true;
-        wifiIsInputtingPassword = false;
+        if (manualWifiToggle) {
+            g_wifiSetupReturnState = appState;
+            appState = STATE_WIFI_SETUP;
+            wifiIsScanning = true;
+            wifiIsInputtingPassword = false;
+        }
         g_wifiConnecting = false;
         g_dataUpdating = false;
         g_timeSynced = true;
@@ -2467,13 +2492,32 @@ void networkTask(void* parameter) {
 }
 
 void tryLoadRecentLaunchCache() {
+    std::vector<RecentLaunchItem> tempLaunches;
+    
+    // 1. 方案一：优先从极速二进制快照恢复（耗时 < 5ms，开机极速秒过）
+    if (OrbitDataProvider::loadRecentLaunchesMeta(tempLaunches) && !tempLaunches.empty()) {
+        lockSatMutex();
+        g_recentLaunches = std::move(tempLaunches);
+        unlockSatMutex();
+        recentLaunchDownloadSuccess = true;
+        recentLaunchSelectedIndex = 0;
+        recentLaunchErrorMsg = "Loaded from fast meta snapshot.";
+        LOG_I("RECENT_LAUNCH", "Fast boot: Loaded %d launches from meta snapshot!", (int)g_recentLaunches.size());
+        return;
+    }
+    
+    // 2. 若快照未命中，回退到从原始 JSONL 缓存文件执行单趟流式极速解析
     if (!LittleFS.exists("/json_recent_raw.jsonl")) {
         LOG_I("RECENT_LAUNCH", "No local cache JSONL file found.");
         return;
     }
     
-    std::vector<RecentLaunchItem> tempLaunches;
-    if (OrbitDataProvider::loadRecentLaunchesFromCache(tempLaunches) && !tempLaunches.empty()) {
+    std::vector<std::vector<float>> rawPhases;
+    if (OrbitDataProvider::loadRecentLaunchesFromCache(tempLaunches, &rawPhases) && !tempLaunches.empty()) {
+        // 单趟解析完成：直接传入各批次相位数据计算编队与聚类，无需重复打开或二次解析文件
+        calculateFormationsForItems(tempLaunches, &rawPhases);
+        
+        // 按照发射批次年份和序号降序排序
         std::sort(tempLaunches.begin(), tempLaunches.end(), [](const RecentLaunchItem& a, const RecentLaunchItem& b) {
             auto getTrueYearAndNum = [](const String& id) -> std::pair<int, int> {
                 if (id.length() < 5) return {0, 0};
@@ -2490,14 +2534,16 @@ void tryLoadRecentLaunchCache() {
             return valA.second > valB.second;
         });
         
+        // 保存排好序的高速快照，供下次开机毫秒级秒开
+        OrbitDataProvider::saveRecentLaunchesMeta(tempLaunches);
+        
         lockSatMutex();
-        g_recentLaunches = tempLaunches;
-        calculateFormationsForItems(g_recentLaunches);
+        g_recentLaunches = std::move(tempLaunches);
         unlockSatMutex();
         recentLaunchDownloadSuccess = true;
         recentLaunchSelectedIndex = 0;
         recentLaunchErrorMsg = "Loaded from local cache.";
-        LOG_I("RECENT_LAUNCH", "Loaded %d launches from local cache.", (int)g_recentLaunches.size());
+        LOG_I("RECENT_LAUNCH", "Loaded %d launches from local cache and created meta snapshot.", (int)g_recentLaunches.size());
     } else {
         LOG_I("RECENT_LAUNCH", "Failed to parse local cache JSONL.");
     }
@@ -2516,12 +2562,13 @@ void saveCustomSatellites() {
 }
 
 volatile bool g_isFastForwarding = false;
+volatile bool g_imuSamplingEnabled = true; // 控制 IMU 是否采样，替代危险的 vTaskSuspend
 
 void imuTask(void* pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     while (true) {
         TickType_t xFrequency = pdMS_TO_TICKS(10); // 恒定 100Hz 高速采样，保证极佳的跟手性
-        if (attitude) {
+        if (g_imuSamplingEnabled && attitude) {
             attitude->update(); // attitude->update() 内部已包含 _imu->update()
         }
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
@@ -2678,6 +2725,9 @@ void setup() {
     if (!g_passMutex) {
         g_passMutex = xSemaphoreCreateMutex();
     }
+    if (!g_i2cBusMutex) {
+        g_i2cBusMutex = xSemaphoreCreateMutex();
+    }
     
     Serial.begin(115200);
     // Remove the 4 second delay to boot instantly
@@ -2758,6 +2808,14 @@ void setup() {
             auto& hw = HardwareConfig::getInstance();
             hw.load();
 
+            // 若配置了任何机身 Grove 或外部扩展外设，显式开启 Cardputer 外部 5V 升压供电总线
+            if (hw.isEnabled(HW_MOD_CAP_LORA1262) || hw.isEnabled(HW_MOD_UNIT_GPSV11) || 
+                hw.isEnabled(HW_MOD_CHAIN_MONO) || hw.isEnabled(HW_MOD_UNIT_8SERVOS)) {
+                LOG_I("APP", "[HW] Enabling external 5V power bus for Grove/Cap peripherals...");
+                M5Cardputer.Power.setExtOutput(true);
+                delay(60); // 留出外部外设上电启动及电压稳定时间
+            }
+
             // 1. GNSS 模块定向点火
             if (hw.isEnabled(HW_MOD_CAP_LORA1262)) {
                 LOG_I("APP", "[HW] Cap LoRa-1262 GNSS selected. Starting GNSS on RX=15, TX=13...");
@@ -2778,55 +2836,68 @@ void setup() {
 
             // 2. Unit 8Servos 浑仪云台舵机初始化
             if (hw.isEnabled(HW_MOD_UNIT_8SERVOS)) {
+                g_imuSamplingEnabled = false;
+                delay(15);
+                
                 if (hw.isEnabled(HW_MOD_CAP_LORA1262)) {
-                    // 有 Cap 时，统一走 Cap 上的 HY2.0-4P 扩展口 (I2C: SDA=8, SCL=9)
-                    LOG_I("APP", "[HW] Initializing 3-axis Gimbal on Cap HY2.0 port (Wire: SDA=8, SCL=9)...");
+                    // 确保 Cap 上的 IO 扩展芯片使能供电 (PI4IOE5V6408)
+                    uint8_t addrs[] = {0x43, 0x44};
+                    for (uint8_t addr : addrs) {
+                        if (M5.In_I2C.writeRegister8(addr, 0x07, 0x00, 100000)) {
+                            M5.In_I2C.writeRegister8(addr, 0x03, 0xFF, 100000);
+                            M5.In_I2C.writeRegister8(addr, 0x05, 0xFF, 100000);
+                        }
+                    }
+                    delay(30);
+                    // 按用户硬件配置：有 Cap 时，严格分配至 Cap 上的 HY2.0-4P 扩展口 (M5.In_I2C: SDA=8, SCL=9)
+                    LOG_I("APP", "[HW] Initializing 3-axis Gimbal on Cap HY2.0 port (SDA=8, SCL=9, 100kHz)...");
                     gimbal.begin(&Wire, 8, 9, 100000);
                 } else {
-                    // 无 Cap 时，走机身侧面 Grove 接口 (Wire: SDA=2, SCL=1)
-                    LOG_I("APP", "[HW] Initializing 3-axis Gimbal on Body Grove port (Wire: SDA=2, SCL=1)...");
+                    // 按用户硬件配置：无 Cap 时，严格分配至机身侧面 Grove 接口 (Wire: SDA=2, SCL=1)
+                    LOG_I("APP", "[HW] Initializing 3-axis Gimbal on Body Grove port (Wire: SDA=2, SCL=1, 100kHz)...");
                     gimbal.begin(&Wire, 2, 1, 100000);
                 }
+                
+                g_imuSamplingEnabled = true;
             } else {
                 LOG_I("APP", "[HW] Unit 8Servos is disabled.");
             }
 
             // 3. Chain Mono 8x8 像素副屏初始化
             if (hw.isEnabled(HW_MOD_CHAIN_MONO)) {
-                LOG_I("APP", "[HW] Initializing Chain Mono on Body Grove port (Serial2: 115200)...");
+                LOG_I("APP", "[HW] Initializing Chain Mono on Body Grove port (115200)...");
                 
-                if (imuTaskHandle != NULL) {
-                    vTaskSuspend(imuTaskHandle);
-                }
+                g_imuSamplingEnabled = false;
+                delay(15);
                 
                 uint16_t device_nums = 0;
-                bool foundChain = false;
-                uint8_t usedRx = 2, usedTx = 1;
+                // Cardputer Grove 口标准 UART 线序: Pin1(G1)=外设TX -> RX=1, Pin2(G2)=外设RX -> TX=2
+                // 备用线序: RX=2, TX=1 (应对交叉线或特殊固件)
+                const int pinPairs[2][2] = {{1, 2}, {2, 1}};
+                bool detected = false;
                 
-                M5Chain.begin(&Serial2, 115200, 2, 1);
-                delay(80);
-                if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
-                    foundChain = true;
-                } else {
-                    Serial2.end();
-                    delay(40);
-                    M5Chain.begin(&Serial2, 115200, 1, 2);
-                    delay(80);
-                    if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
-                        foundChain = true;
-                        usedRx = 1; usedTx = 2;
+                for (int p = 0; p < 2; p++) {
+                    int rxPin = pinPairs[p][0];
+                    int txPin = pinPairs[p][1];
+                    M5Chain.begin(&Serial2, 115200, rxPin, txPin);
+                    delay(30);
+                    
+                    if (M5Chain.getDeviceNum(&device_nums, 80) == CHAIN_OK && device_nums > 0) {
+                        LOG_I("APP", "[HW] Chain Mono detected on Grove (RX=%d, TX=%d)! Devices: %d", rxPin, txPin, device_nums);
+                        detected = true;
+                        break;
                     }
+                    Serial2.end();
                 }
                 
-                if (foundChain) {
-                    LOG_I("APP", "[HW] Chain Mono detected on RX=%d, TX=%d! Devices: %d", usedRx, usedTx, device_nums);
+                if (detected) {
                     device_info_t *infos = (device_info_t *)malloc(sizeof(device_info_t) * device_nums);
                     if (infos != nullptr) {
                         memset(infos, 0, sizeof(device_info_t) * device_nums);
                         device_list_t devices;
                         devices.count = device_nums;
                         devices.devices = infos;
-                        if (M5Chain.getDeviceList(&devices, 150)) {
+                        if (M5Chain.getDeviceList(&devices, 100)) {
                             for (uint8_t i = 0; i < devices.count; i++) {
                                 if (devices.devices[i].device_type == CHAIN_MONO_TYPE_CODE) {
                                     mono_id = devices.devices[i].id;
@@ -2842,19 +2913,17 @@ void setup() {
                         M5Chain.setMonoRotation(mono_id, MONO_ROTATION_0, &operation_status);
                         M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_7, &operation_status);
                         M5Chain.setMonoClear(mono_id, &operation_status);
+                        LOG_I("APP", "[HW] Chain Mono configured successfully (ID=%d).", mono_id);
                     }
                 } else {
-                    LOG_I("APP", "[HW] Chain Mono not responding on Grove port, releasing pins.");
+                    LOG_W("APP", "[HW] Chain Mono not responding on Grove port. Make sure cable is in 'IN' port (NOT 'OUT') and firmly seated.");
                     Serial2.end();
                 }
                 
-                Wire.begin(8, 9, 100000);
-                if (imuTaskHandle != NULL) {
-                    vTaskResume(imuTaskHandle);
-                }
+                g_imuSamplingEnabled = true;
             } else {
                 isMonoInitialized = false;
-            } 
+            }  
             
             Language currL = I18N::getLanguage();
             g_loadingStatusText = (currL == LANG_ZH) ? "初始化传感器与外设..." : ((currL == LANG_JA) ? "センサー・外来機器の初期化中..." : ((currL == LANG_ES) ? "Inicializando sensores..." : "Initializing Hardware..."));
@@ -3183,11 +3252,17 @@ void drawWiFiSetupPage() {
         } else {
             canvas->drawString(I18N::get(TXT_SELECT_NETWORK), 10, 30);
             
+            if (wifiSelectedIndex < 0) wifiSelectedIndex = 0;
+            if (!wifiNetworks.empty() && wifiSelectedIndex >= (int)wifiNetworks.size()) {
+                wifiSelectedIndex = (int)wifiNetworks.size() - 1;
+            }
+            
             int yPos = 45;
             int itemsPerPage = 4;
             int startIndex = (wifiSelectedIndex / itemsPerPage) * itemsPerPage;
+            if (startIndex < 0) startIndex = 0;
             
-            for (int i = 0; i < itemsPerPage && (startIndex + i) < wifiNetworks.size(); i++) {
+            for (int i = 0; i < itemsPerPage && (startIndex + i) < (int)wifiNetworks.size(); i++) {
                 int index = startIndex + i;
                 if (index == wifiSelectedIndex) {
                     canvas->fillRect(5, yPos - 2, width - 10, 18, canvas->color565(50, 100, 150));
@@ -4713,7 +4788,10 @@ void loop() {
         recentLaunchDownloading = false; // Reset downloading flag early to unlock file reads for loading
         
         std::vector<RecentLaunchItem>* tempLaunches = new std::vector<RecentLaunchItem>();
-        if (tempLaunches && OrbitDataProvider::loadRecentLaunchesFromCache(*tempLaunches) && !tempLaunches->empty()) {
+        std::vector<std::vector<float>> rawPhases;
+        if (tempLaunches && OrbitDataProvider::loadRecentLaunchesFromCache(*tempLaunches, &rawPhases) && !tempLaunches->empty()) {
+            calculateFormationsForItems(*tempLaunches, &rawPhases);
+            
             std::sort(tempLaunches->begin(), tempLaunches->end(), [](const RecentLaunchItem& a, const RecentLaunchItem& b) {
                 auto getTrueYearAndNum = [](const String& id) -> std::pair<int, int> {
                     if (id.length() < 5) return {0, 0};
@@ -4730,7 +4808,8 @@ void loop() {
                 return valA.second > valB.second;
             });
             
-            calculateFormationsForItems(*tempLaunches);
+            // 后台下载后同步写入最新快照，供下次开机毫秒级启动
+            OrbitDataProvider::saveRecentLaunchesMeta(*tempLaunches);
             
             lockSatMutex();
             g_recentLaunches = std::move(*tempLaunches);
@@ -5071,6 +5150,8 @@ void loop() {
             if (appState == STATE_MAIN) {
                 if (justShift) {
                     appState = STATE_SERVO_TEST;
+                    g_imuSamplingEnabled = false;
+                    delay(15);
                     gimbal.enterManualTest();
                 } else if (justTab) {
                     int nextMode = (earth_renderer->getVisualMode() + 1) % 2;
@@ -5903,6 +5984,7 @@ void loop() {
             } else if (appState == STATE_SERVO_TEST) {
                 if (justShift || justEsc || justTick || justBack) {
                     gimbal.exitManualTest();
+                    g_imuSamplingEnabled = true;
                     appState = STATE_MAIN;
                 } else if (M5Cardputer.Keyboard.isKeyPressed('0')) {
                     activeServoTestChannel = 0;
@@ -6768,22 +6850,49 @@ void loop() {
                 }
             }
         
-        // Update 3-axis Gimbal Targets based on active sat view focus
+        // Update 3-axis Gimbal Targets based on active sat tracking (主地图全景与视口模式均自动追踪)
         if (gimbal.isOnline() && appState != STATE_SERVO_TEST) {
-            if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
-                if (!g_satCaches[focusSatIndex].lastGeoValid) {
+            int targetTrackSat = -1;
+            // 1. 如果当前聚焦卫星有效，优先以聚焦卫星为主
+            if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+                targetTrackSat = focusSatIndex;
+            }
+            // 2. 如果聚焦卫星不在过境中，自动扫描是否有其他已选卫星正在过境天顶，优先跟进当前过境卫星
+            bool currentFocusPassing = false;
+            if (targetTrackSat >= 0 && g_satCaches[targetTrackSat].lastGeoValid) {
+                GeodeticCoord obs = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                ECEFCoord ec = CoordTransform::geodeticToECEF(g_satCaches[targetTrackSat].lastGeo);
+                TopocentricCoord tp = CoordTransform::ecefToTopocentric(obs, ec);
+                if (tp.el >= 0.0f) currentFocusPassing = true;
+            }
+            if (!currentFocusPassing) {
+                for (int i = 0; i < NUM_SATELLITES; i++) {
+                    if (g_satellites[i].selected && g_satCaches[i].lastGeoValid) {
+                        GeodeticCoord obs = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+                        ECEFCoord ec = CoordTransform::geodeticToECEF(g_satCaches[i].lastGeo);
+                        TopocentricCoord tp = CoordTransform::ecefToTopocentric(obs, ec);
+                        if (tp.el >= 0.0f) {
+                            targetTrackSat = i;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (targetTrackSat >= 0 && targetTrackSat < NUM_SATELLITES && g_satellites[targetTrackSat].selected) {
+                if (!g_satCaches[targetTrackSat].lastGeoValid) {
                     double tx = 0, ty = 0, tz = 0;
-                    if (g_satellites[focusSatIndex].calc.getTEME(simTime, tx, ty, tz)) {
+                    if (g_satellites[targetTrackSat].calc.getTEME(simTime, tx, ty, tz)) {
                         double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(simTime));
                         ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
-                        g_satCaches[focusSatIndex].lastGeo = CoordTransform::ecefToGeodetic(ecef);
-                        g_satCaches[focusSatIndex].lastGeoValid = true;
+                        g_satCaches[targetTrackSat].lastGeo = CoordTransform::ecefToGeodetic(ecef);
+                        g_satCaches[targetTrackSat].lastGeoValid = true;
                     }
                 }
                 
-                if (g_satCaches[focusSatIndex].lastGeoValid) {
+                if (g_satCaches[targetTrackSat].lastGeoValid) {
                     GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                    ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_satCaches[focusSatIndex].lastGeo);
+                    ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_satCaches[targetTrackSat].lastGeo);
                     TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
                     
                     float realAz = topo.az;
@@ -6795,9 +6904,9 @@ void loop() {
                     static PassEvent s_lockedPass;
                     static float s_lockedHeading = 90.0f;
                     
-                    // 切换聚焦卫星时，重置过境跟踪会话
-                    if (s_trackingSatIndex != focusSatIndex) {
-                        s_trackingSatIndex = focusSatIndex;
+                    // 切换聚焦/过境卫星时，重置过境跟踪会话
+                    if (s_trackingSatIndex != targetTrackSat) {
+                        s_trackingSatIndex = targetTrackSat;
                         s_inPassSession = false;
                     }
                     
@@ -6816,12 +6925,12 @@ void loop() {
                         }
                     }
                     
-                    // 解算当前聚焦卫星在天平面的真实飞行航向角 Track Heading
+                    // 解算当前卫星在天平面的真实飞行航向角 Track Heading
                     auto getSatTrackHeading = [&](uint32_t t) -> float {
                         double x0 = 0, y0 = 0, z0 = 0;
                         double x1 = 0, y1 = 0, z1 = 0;
-                        if (g_satellites[focusSatIndex].calc.getTEME(t, x0, y0, z0) &&
-                            g_satellites[focusSatIndex].calc.getTEME(t + 15, x1, y1, z1)) {
+                        if (g_satellites[targetTrackSat].calc.getTEME(t, x0, y0, z0) &&
+                            g_satellites[targetTrackSat].calc.getTEME(t + 15, x1, y1, z1)) {
                             double g0 = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
                             double g1 = CoordTransform::getGMST(CoordTransform::unixToJulian(t + 15));
                             ECEFCoord ec0 = CoordTransform::temeToECEF(x0, y0, z0, g0);
@@ -6857,7 +6966,7 @@ void loop() {
                             
                             lockPassMutex();
                             for (const auto& pass : recommendedPasses) {
-                                if (pass.satName == g_satellites[focusSatIndex].name) {
+                                if (pass.satName == g_satellites[targetTrackSat].name) {
                                     if (currentSimTime >= (pass.aosTime > 60 ? pass.aosTime - 60 : 0) && currentSimTime <= pass.losTime + 60) {
                                         activePass = pass;
                                         foundPass = true;
@@ -6871,7 +6980,7 @@ void loop() {
                                 s_lockedPass = activePass;
                             } else {
                                 // 就地推算精准过境，避免错误固定当前坐标
-                                s_lockedPass.satName = g_satellites[focusSatIndex].name;
+                                s_lockedPass.satName = g_satellites[targetTrackSat].name;
                                 s_lockedPass.maxElevation = max(realEl, 15.0f);
                                 s_lockedPass.maxAz = realAz;
                                 
@@ -6879,7 +6988,7 @@ void loop() {
                                 for (int k = 1; k <= 45; k++) {
                                     uint32_t tb = currentSimTime - k * 20;
                                     double bx=0, by=0, bz=0;
-                                    if (g_satellites[focusSatIndex].calc.getTEME(tb, bx, by, bz)) {
+                                    if (g_satellites[targetTrackSat].calc.getTEME(tb, bx, by, bz)) {
                                         double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(tb));
                                         ECEFCoord bec = CoordTransform::temeToECEF(bx, by, bz, gmst);
                                         TopocentricCoord btp = CoordTransform::ecefToTopocentric(observerPos, bec);
@@ -6891,7 +7000,7 @@ void loop() {
                                 for (int k = 1; k <= 45; k++) {
                                     uint32_t tf = currentSimTime + k * 20;
                                     double fx=0, fy=0, fz=0;
-                                    if (g_satellites[focusSatIndex].calc.getTEME(tf, fx, fy, fz)) {
+                                    if (g_satellites[targetTrackSat].calc.getTEME(tf, fx, fy, fz)) {
                                         double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(tf));
                                         ECEFCoord fec = CoordTransform::temeToECEF(fx, fy, fz, gmst);
                                         TopocentricCoord ftp = CoordTransform::ecefToTopocentric(observerPos, fec);
@@ -6928,7 +7037,7 @@ void loop() {
                         // 优先在推荐过境列表中检索未来过境
                         lockPassMutex();
                         for (const auto& pass : recommendedPasses) {
-                            if (pass.satName == g_satellites[focusSatIndex].name && pass.aosTime > currentSimTime) {
+                            if (pass.satName == g_satellites[targetTrackSat].name && pass.aosTime > currentSimTime) {
                                 if (pass.aosTime < earliestAos) {
                                     earliestAos = pass.aosTime;
                                     aosAz = pass.startAz;
@@ -6949,8 +7058,8 @@ void loop() {
                             static float s_cachedAosAz = 90.0f;
                             static float s_cachedNextMaxEl = 45.0f;
                             
-                            if (s_cachedFocusSat != focusSatIndex) {
-                                s_cachedFocusSat = focusSatIndex;
+                            if (s_cachedFocusSat != targetTrackSat) {
+                                s_cachedFocusSat = targetTrackSat;
                                 s_cachedNextAos = 0;
                                 s_lastProbeMs = 0;
                             }
@@ -6972,7 +7081,7 @@ void loop() {
                                 
                                 while (probeT < probeEnd) {
                                     double px = 0, py = 0, pz = 0;
-                                    if (g_satellites[focusSatIndex].calc.getTEME(probeT, px, py, pz)) {
+                                    if (g_satellites[targetTrackSat].calc.getTEME(probeT, px, py, pz)) {
                                         double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(probeT));
                                         ECEFCoord pEcef = CoordTransform::temeToECEF(px, py, pz, gmst);
                                         TopocentricCoord pTopo = CoordTransform::ecefToTopocentric(obsPos, pEcef);
@@ -7008,14 +7117,14 @@ void loop() {
                         if (foundNext) {
                             float nextHeading = getSatTrackHeading(earliestAos);
                             gimbal.setTargetPrePointArch(nextHeading, nextMaxEl, nextMaxAz);
-                        } else {
+                        } else if (gimbal.getState() != GIMBAL_STATE_HOLD) {
                             gimbal.setHold();
                         }
                     }
-                } else {
+                } else if (gimbal.getState() != GIMBAL_STATE_HOLD) {
                     gimbal.setHold();
                 }
-            } else {
+            } else if (gimbal.getState() != GIMBAL_STATE_HOLD) {
                 gimbal.setHold();
             }
         }

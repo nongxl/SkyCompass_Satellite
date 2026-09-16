@@ -32,10 +32,11 @@ bool GimbalController::begin(TwoWire *wire, uint8_t sda, uint8_t scl, uint32_t f
         _tarInclineAngle = 90.0f;
         _tarProgressAngle = 90.0f;
         
-        // 立即向硬件下发 1500us (90 度中位) 控制信号锁定零位
-        _servo.setServoPulse(GIMBAL_CH_AZ, 1500);
-        _servo.setServoPulse(GIMBAL_CH_INCLINE, 1500);
-        _servo.setServoPulse(GIMBAL_CH_PROGRESS, 1500);
+        // 立即向硬件所有 8 个通道下发 1500us (90 度中位) 控制信号锁定零位
+        for (uint8_t ch = 0; ch < 8; ch++) {
+            _servo.setServoPulse(ch, 1500);
+            _servo.setServoAngle(ch, 90);
+        }
         
         _state = GIMBAL_STATE_INITIALIZING;
         _initStartTime = millis();
@@ -183,13 +184,14 @@ void GimbalController::setStandby() {
 void GimbalController::setHold() {
     // 开机 90° 对齐自检期间受保护，严禁被打断
     if (_state == GIMBAL_STATE_INITIALIZING) return;
+    if (_state == GIMBAL_STATE_HOLD) return; // 已经是 HOLD 状态，无需重复刷新与打断
 
     // 冻结目标角度为当前实际角度，完全保持静止不动
     _tarAzAngle = _curAzAngle;
     _tarInclineAngle = _curInclineAngle;
     _tarProgressAngle = _curProgressAngle;
     
-    if (_state != GIMBAL_STATE_HOLD && _state != GIMBAL_STATE_TEST) {
+    if (_state != GIMBAL_STATE_TEST) {
         log_i("[Gimbal] State changed from %d to HOLD (Stationary at Az:%.1f, Inc:%.1f, Prog:%.1f)", 
               _state, _curAzAngle, _curInclineAngle, _curProgressAngle);
         _state = GIMBAL_STATE_HOLD;
@@ -234,7 +236,16 @@ void GimbalController::setManualTestAngle(uint8_t ch, float angleDeg, bool immed
     }
     
     if (immediate) {
-        updateHardwareServos();
+        if (!_isOnline) {
+            log_w("[Gimbal] Manual Test Warning: Driver board is OFFLINE!");
+        } else {
+            uint16_t p = (uint16_t)(500.0f + (clamped / 180.0f) * 2000.0f + 0.5f);
+            uint8_t a = (uint8_t)clamped;
+            bool okP = _servo.setServoPulse(ch, p);
+            bool okA = _servo.setServoAngle(ch, a);
+            log_i("[Gimbal] Direct Hardware Write -> CH%d Pulse:%dus Angle:%d (I2C Res: Pulse=%d, Angle=%d)", 
+                  ch, p, a, okP, okA);
+        }
     }
 }
 
@@ -278,8 +289,6 @@ void GimbalController::processLerp(float dt) {
 void GimbalController::updateHardwareServos() {
     if (!_isOnline) return;
 
-    // 将浮点角度 [0.0°, 180.0°] 映射为高精度微秒级脉冲 [500us, 2500us]
-    // 2000 个细分台阶，相比 8-bit 整数角度 (180 阶) 分辨率提升 11 倍
     auto angleToPulse = [](float deg) -> uint16_t {
         float clamped = constrain(deg, 0.0f, 180.0f);
         return (uint16_t)(500.0f + (clamped / 180.0f) * 2000.0f + 0.5f);
@@ -306,48 +315,9 @@ void GimbalController::updateHardwareServos() {
 }
 
 void GimbalController::setLEDsByState() {
-    if (!_isOnline) return;
-    switch (_state) {
-        case GIMBAL_STATE_INITIALIZING:
-            // 自检：金黄色
-            for (int i = 0; i < 8; i++) {
-                _servo.setLEDColor(i, 0xFF7A00);
-            }
-            break;
-        case GIMBAL_STATE_PREPOINT:
-            // 预瞄准：橙色
-            for (int i = 0; i < 8; i++) {
-                _servo.setLEDColor(i, 0xFF4500);
-            }
-            break;
-        case GIMBAL_STATE_TRACKING:
-            // 跟踪：前三轴对应亮绿色，其他灭
-            for (int i = 0; i < 8; i++) {
-                if (i < 3) {
-                    _servo.setLEDColor(i, 0x00FF00); // 绿色高亮
-                } else {
-                    _servo.setLEDColor(i, 0x000000);
-                }
-            }
-            break;
-        case GIMBAL_STATE_TEST:
-            // 测试模式：前三轴高亮青蓝色 (Cyan: 0x00FFFF)，其余灭
-            for (int i = 0; i < 8; i++) {
-                if (i < 3) {
-                    _servo.setLEDColor(i, 0x00FFFF);
-                } else {
-                    _servo.setLEDColor(i, 0x000000);
-                }
-            }
-            break;
-        case GIMBAL_STATE_STANDBY:
-        default:
-            // 待命/离线：低亮度暗蓝自锁
-            for (int i = 0; i < 8; i++) {
-                _servo.setLEDColor(i, 0x001133);
-            }
-            break;
-    }
+    // 浑仪接口连接的是三轴舵机，Unit 8Servos 的 Signal 脚如果被写入 WS2812 信号
+    // 会导致 STM32 固件切换为单总线灯珠驱动，破坏舵机 PWM 信号输出并导致舵机锁死。
+    // 因此此处保持纯净，专用于舵机控制。
 }
 
 void GimbalController::tick() {
@@ -394,7 +364,7 @@ void GimbalController::tick() {
         updateHardwareServos();
     }
     
-    // 周期性状态日志 (每1500毫秒)
+    // 周期性状态日志 (仅在有动态追踪/预指向任务时每1500毫秒输出，静止HOLD保持静默)
     if (now - _lastLogTick > 1500) {
         _lastLogTick = now;
         if (_state == GIMBAL_STATE_TRACKING) {
@@ -403,9 +373,6 @@ void GimbalController::tick() {
         } else if (_state == GIMBAL_STATE_PREPOINT) {
             log_i("[Gimbal] PREPOINT | Target -> BaseAz:%.1f, Incline:%.1f | Out -> Az:%.1f, Inc:%.1f, Prog:%.1f",
                 _tarAzAngle, _tarInclineAngle, _curAzAngle, _curInclineAngle, _curProgressAngle);
-        } else if (_state == GIMBAL_STATE_STANDBY || _state == GIMBAL_STATE_HOLD) {
-            log_i("[Gimbal] HOLD | Stationary at -> Az:%.1f, Inc:%.1f, Prog:%.1f",
-                _curAzAngle, _curInclineAngle, _curProgressAngle);
         }
     }
 }

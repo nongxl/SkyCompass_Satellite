@@ -135,10 +135,17 @@ public:
             return false;
         }
 
-        // 由于主循环中 M5Cardputer.update() 已经读取了 IMU 数据
-        // 这里如果检查 M5.Imu.update() 的返回值，几乎永远为 false，导致严重的丢帧卡顿
-        // 我们直接按时间流逝(dt)获取最新数据进行积分即可，这是连续物理系统的标准做法
-        M5.Imu.update();
+        extern SemaphoreHandle_t g_i2cBusMutex;
+        if (g_i2cBusMutex != NULL) {
+            if (xSemaphoreTake(g_i2cBusMutex, pdMS_TO_TICKS(2)) == pdTRUE) {
+                M5.Imu.update();
+                xSemaphoreGive(g_i2cBusMutex);
+            } else {
+                return false; // 舵机正在占用总线，跳过本 10ms 帧，防止硬件级冲突
+            }
+        } else {
+            M5.Imu.update();
+        }
 
         unsigned long currentTime = millis();
         _dt = (currentTime - _lastUpdate) / 1000.0;
