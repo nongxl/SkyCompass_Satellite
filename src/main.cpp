@@ -280,7 +280,7 @@ bool recentLaunchInObjectsView = false;
 int recentLaunchObjectPage = 0;
 
 
-std::vector<LazyObjectItem> g_level3Objects;
+Level3ObjectList g_level3Objects;
 
 void autoAssignIconAndColor(const String& name, SatIconType& icon, uint16_t& color) {
     String nameUpper = name;
@@ -627,17 +627,42 @@ void calculateFormationsForItems(std::vector<RecentLaunchItem>& items, const std
     }
 }
 
-
 void initRecentLaunchCalcs(RecentLaunchItem& item) {
-    if (recentLaunchDownloading) return; // Prevent file read collision during background download
     if (!item.selected) {
         item.calc.reset();
         return;
     }
+    
+    // 极速内存路径：若已有代表星 TLE，直接在内存瞬时初始化 SGP4 运算器（0 毫秒、0 磁盘 I/O）
+    if (item.repTLE.line1.length() >= 14 && item.repTLE.line2.length() >= 14) {
+        if (!item.calc) {
+            item.calc = std::make_shared<SGP4Calc>();
+            item.calc->init(item.repTLE);
+        }
+        item.cache.lastGeoValid = false;
+        item.cache.isVisible = false;
+        if (item.batchId == recentLaunchActiveBatchId) {
+            g_repSatTLE = item.repTLE;
+            if (item.calc) {
+                g_repSatCalc = *(item.calc);
+            }
+            g_repSatName = item.repSatName.length() > 0 ? item.repSatName : item.displayName;
+            g_repSatInitialized = true;
+            g_repSatCache = item.cache;
+        }
+        return;
+    }
+
+    // 兜底慢速路径：仅在缺少 TLE 且无后台下载时才读取原始文件，加看门狗重置与让出 CPU
+    if (recentLaunchDownloading) return;
+    if (!LittleFS.exists("/json_recent_raw.jsonl")) return;
+
     File f = LittleFS.open("/json_recent_raw.jsonl", "r");
     if (f) {
         JSONParser parser;
+        int lineCnt = 0;
         while (f.available()) {
+            lineCnt++;
             String singleLine = f.readStringUntil('\n');
             singleLine.trim();
             if (singleLine.length() == 0) continue;
@@ -649,11 +674,12 @@ void initRecentLaunchCalcs(RecentLaunchItem& item) {
                     item.calc->init(record);
                     item.cache.lastGeoValid = false;
                     item.cache.isVisible = false;
+                    item.repTLE.name = record.name;
+                    item.repTLE.baseScore = 0;
+                    SGP4Calc::buildPseudoTle(record, item.repTLE.line1, item.repTLE.line2);
                     
                     if (item.batchId == recentLaunchActiveBatchId) {
-                        g_repSatTLE.name = record.name;
-                        g_repSatTLE.baseScore = 0;
-                        SGP4Calc::buildPseudoTle(record, g_repSatTLE.line1, g_repSatTLE.line2);
+                        g_repSatTLE = item.repTLE;
                         g_repSatCalc = *(item.calc);
                         g_repSatName = record.name;
                         g_repSatInitialized = true;
@@ -662,10 +688,13 @@ void initRecentLaunchCalcs(RecentLaunchItem& item) {
                     break;
                 }
             }
+            if (lineCnt % 50 == 0) {
+                esp_task_wdt_reset();
+                taskYIELD();
+            }
         }
         f.close();
     }
-    LOG_I("RECENT_LAUNCH", "Initialized representative satellite for batch %s: %s", item.batchId.c_str(), item.repSatName.c_str());
 }
 
 void loadLevel3ObjectsPage(const RecentLaunchItem& item, int page) {
@@ -1243,6 +1272,68 @@ volatile bool triggerPrediction = true;
 uint32_t lastTimeAdjustMillis = 0;
 volatile uint32_t g_currentPredictingBaseTime = 0;
 
+int getTotalSelectedSatelliteCount() {
+    int count = 0;
+    lockSatMutex();
+    for (int i = 0; i < NUM_SATELLITES; i++) {
+        if (g_satellites[i].selected) {
+            count++;
+        }
+    }
+    for (const auto& item : g_recentLaunches) {
+        if (item.selected) {
+            count++;
+        }
+    }
+    unlockSatMutex();
+    return count;
+}
+
+bool isCandidateForPassPrediction(int satIndex) {
+    if (satIndex < 0 || satIndex >= NUM_SATELLITES) return false;
+    
+    bool isSel = false;
+    SatelliteType type = SAT_TYPE_VISUAL;
+    TLEData tle;
+    float stdMag = 3.0f;
+    uint32_t noradId = 0;
+    
+    lockSatMutex();
+    isSel = g_satellites[satIndex].selected;
+    if (isSel) {
+        type = g_satellites[satIndex].type;
+        tle = g_satellites[satIndex].tle;
+        stdMag = g_satellites[satIndex].stdMag;
+        noradId = g_satellites[satIndex].noradId;
+    }
+    unlockSatMutex();
+    
+    if (!isSel) return false;
+    
+    // 排除地球静止同步卫星与深空探测器
+    if (type == SAT_TYPE_GEO_TV || type == SAT_TYPE_DEEP_SPACE) return false;
+    
+    // TLE 合法性检查
+    if (tle.line1.length() < 14 || tle.line2.length() < 14) return false;
+    
+    // 百科收录卫星的高亮度目视与星标筛选（无星标目标预先排除）
+    if (satIndex < NUM_BUILTIN_SATELLITES) {
+        const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(noradId);
+        if (entry) {
+            bool isVisualVisible = (entry->flags & FLAG_VISIBLE) != 0;
+            bool isHighBrightness = (entry->stdMag <= 4.0f);
+            if (!isVisualVisible && !isHighBrightness) {
+                return false; // 无目视星标价值，预先排除
+            }
+        }
+    } else {
+        // 自定义添加卫星：若标准星等过暗 (>= 6.5) 则预先排除
+        if (stdMag >= 6.5f) return false;
+    }
+    
+    return true;
+}
+
 void predictorTask(void* parameter) {
     while (true) {
         static unsigned long lastLoopPrintMs = 0;
@@ -1273,26 +1364,31 @@ void predictorTask(void* parameter) {
         
         try {
             std::unique_ptr<ObservationPredictor> predictor(new ObservationPredictor(baseUserLat, baseUserLon, baseUserAlt / 1000.0, pos_manager));
-            std::vector<PassEvent> allPasses;
-            allPasses.reserve(120);
             
             // Use simulated time for predictions
             uint32_t startTime = current_unix + timeMachineOffset;
             g_currentPredictingBaseTime = startTime;
             
-            int numSatsToPredict = 0;
-            RecentLaunchItem* activeGroup = nullptr;
-            if (g_recentLaunchFocusMode) {
-                numSatsToPredict = 1;
-            } else {
-                for (int i = 0; i < NUM_SATELLITES; i++) {
-                    if (g_satellites[i].selected && g_satellites[i].type != SAT_TYPE_GEO_TV && g_satellites[i].type != SAT_TYPE_DEEP_SPACE) {
-                        numSatsToPredict++;
-                    }
+            // 1. 收集满足预测条件的候选卫星与近期发射项
+            std::vector<int> candidateSatIndices;
+            for (int i = 0; i < NUM_SATELLITES; i++) {
+                if (isCandidateForPassPrediction(i)) {
+                    candidateSatIndices.push_back(i);
                 }
             }
             
-            if (!g_recentLaunchFocusMode && numSatsToPredict == 0) {
+            std::vector<int> candidateRLIndices;
+            lockSatMutex();
+            for (int r = 0; r < (int)g_recentLaunches.size(); r++) {
+                if (g_recentLaunches[r].selected) {
+                    candidateRLIndices.push_back(r);
+                }
+            }
+            unlockSatMutex();
+            
+            int totalCandidates = candidateSatIndices.size() + candidateRLIndices.size();
+            
+            if (totalCandidates == 0) {
                 std::vector<PassEvent> emptyPasses;
                 std::vector<TreeItem> emptyTree;
                 rebuildTreeLocal(emptyTree, emptyPasses, current_unix + timeMachineOffset);
@@ -1314,157 +1410,171 @@ void predictorTask(void* parameter) {
             predictionProgress = 0;
             int completedCount = 0;
             
-            if (g_recentLaunchFocusMode) {
-                if (g_repSatInitialized && g_repSatTLE.line1.length() >= 14 && g_repSatTLE.line2.length() >= 14) {
-                    auto passes = predictor->predictPasses(g_repSatTLE, 3.0, startTime, 7);
-                    
-                    // Cap passes to prevent OOM
-                    if (passes.size() > 8) {
-                        std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
-                            return a.score > b.score;
-                        });
-                        passes.resize(8);
-                    }
-                    
-                    for (auto& p : passes) {
-                        p.satSelected = true;
-                        p.satIndex = -100; // Representative sat fixed to -100
-                    }
-                    allPasses.insert(allPasses.end(), passes.begin(), passes.end());
-                }
-                completedCount = 1;
-                predictionProgress = 100;
-            } else {
-                // === PHASE 1: Fast 24-Hour (Tonight) Pass Calculation (< 300ms) ===
-                std::vector<PassEvent> phase1Passes;
-                phase1Passes.reserve(40);
-                
-                for (int i = 0; i < NUM_SATELLITES; i++) {
-                    vTaskDelay(1); // Yield CPU 0 to IDLE0 task to feed WDT
-                    if (triggerPrediction || cancelPrediction || g_networkActive) break;
-                    
-                    SatelliteType type = SAT_TYPE_VISUAL;
-                    bool isSelected = false;
-                    TLEData tle;
-                    float stdMag = 3.0;
-                    
-                    lockSatMutex();
-                    isSelected = g_satellites[i].selected;
-                    if (isSelected) {
-                        type = g_satellites[i].type;
-                        tle = g_satellites[i].tle;
-                        stdMag = g_satellites[i].stdMag;
-                    }
-                    unlockSatMutex();
-                    
-                    if (!isSelected) continue;
-                    
-                    if (type == SAT_TYPE_GEO_TV || type == SAT_TYPE_DEEP_SPACE) {
-                        completedCount++;
-                        continue;
-                    }
-                    
-                    if (tle.line1.length() < 14 || tle.line2.length() < 14) {
-                        completedCount++;
-                        continue;
-                    }
-                    
-                    // Fast 1-day prediction for Phase 1
-                    auto passes1 = predictor->predictPasses(tle, stdMag, startTime, 1);
-                    for (auto& p : passes1) {
-                        p.satSelected = true;
-                        p.satIndex = i;
-                    }
-                    phase1Passes.insert(phase1Passes.end(), passes1.begin(), passes1.end());
-                    completedCount++;
-                    predictionProgress = (completedCount * 50) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
-                }
-                
-                if (triggerPrediction || cancelPrediction || g_networkActive) {
-                    if (cancelPrediction) {
-                        cancelPrediction = false;
-                        g_orbitCalculating = false;
-                        g_currentPredictingBaseTime = 0;
-                    }
-                    continue;
-                }
-                
-                // Publish Phase 1 (Tonight's passes) IMMEDIATELY to UI in ~300ms!
-                std::vector<PassEvent> upcomingPhase1;
-                upcomingPhase1.reserve(phase1Passes.size());
-                for (const auto& pass : phase1Passes) {
-                    if (pass.losTime >= current_unix + timeMachineOffset) {
-                        upcomingPhase1.push_back(pass);
-                    }
-                }
-                std::sort(upcomingPhase1.begin(), upcomingPhase1.end(), [](const PassEvent& a, const PassEvent& b) {
-                    if (a.score != b.score) return a.score > b.score;
-                    return a.aosTime < b.aosTime;
-                });
-                
-                std::vector<TreeItem> tempDisplayTree1;
-                rebuildTreeLocal(tempDisplayTree1, upcomingPhase1, current_unix + timeMachineOffset);
-                
-                lockPassMutex();
-                recommendedPasses = upcomingPhase1;
-                displayTree = tempDisplayTree1;
-                predictionsReady = true;
-                lastPredictionBaseTime = startTime;
-                unlockPassMutex();
+            // === PHASE 1: Fast 24-Hour (Tonight) Pass Calculation (< 300ms) ===
+            std::vector<PassEvent> phase1Passes;
+            size_t maxAllocP1 = ESP.getMaxAllocHeap();
+            size_t p1Cap = (maxAllocP1 > 2500) ? (maxAllocP1 - 1500) / sizeof(PassEvent) : 8;
+            if (p1Cap > 16) p1Cap = 16;
+            phase1Passes.reserve(p1Cap);
             
-            // === PHASE 2: Background 7-Day Full Pass Calculation ===
-            completedCount = 0;
-            for (int i = 0; i < NUM_SATELLITES; i++) {
-                vTaskDelay(1); // Yield CPU 0
+            // Phase 1 - 候选高亮度目视收录卫星
+            for (int satIdx : candidateSatIndices) {
+                vTaskDelay(1);
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                // Heap Protection: If system heap memory is critically low (< 21KB) during calculation, abort Phase 2 to prevent OOM
-                if (ESP.getFreeHeap() < 21000) {
-                    LOG_I("APP", "Predictor task Phase 2 interrupted: low heap protection triggered (%u bytes free)", ESP.getFreeHeap());
-                    break;
-                }
-                
-                SatelliteType type = SAT_TYPE_VISUAL;
-                bool isSelected = false;
                 TLEData tle;
-                float stdMag = 3.0;
-                
+                float stdMag = 3.0f;
                 lockSatMutex();
-                isSelected = g_satellites[i].selected;
-                if (isSelected) {
-                    type = g_satellites[i].type;
-                    tle = g_satellites[i].tle;
-                    stdMag = g_satellites[i].stdMag;
+                tle = g_satellites[satIdx].tle;
+                stdMag = g_satellites[satIdx].stdMag;
+                unlockSatMutex();
+                
+                auto passes1 = predictor->predictPasses(tle, stdMag, startTime, 1);
+                for (auto& p : passes1) {
+                    p.satSelected = true;
+                    p.satIndex = satIdx;
+                }
+                phase1Passes.insert(phase1Passes.end(), passes1.begin(), passes1.end());
+                completedCount++;
+                predictionProgress = (completedCount * 50) / (totalCandidates > 0 ? totalCandidates : 1);
+            }
+            
+            // Phase 1 - 近期发射已勾选项（只要勾选就参与计算）
+            for (int rlIdx : candidateRLIndices) {
+                vTaskDelay(1);
+                if (triggerPrediction || cancelPrediction || g_networkActive) break;
+                
+                TLEData rlTle;
+                lockSatMutex();
+                if (rlIdx >= 0 && rlIdx < (int)g_recentLaunches.size()) {
+                    rlTle = g_recentLaunches[rlIdx].repTLE;
                 }
                 unlockSatMutex();
                 
-                if (!isSelected) continue;
+                if (rlTle.line1.length() >= 14 && rlTle.line2.length() >= 14) {
+                    auto passes1 = predictor->predictPasses(rlTle, 3.0, startTime, 1);
+                    for (auto& p : passes1) {
+                        p.satSelected = true;
+                        p.satIndex = -100;
+                    }
+                    phase1Passes.insert(phase1Passes.end(), passes1.begin(), passes1.end());
+                }
+                completedCount++;
+                predictionProgress = (completedCount * 50) / (totalCandidates > 0 ? totalCandidates : 1);
+            }
+            
+            if (triggerPrediction || cancelPrediction || g_networkActive) {
+                if (cancelPrediction) {
+                    cancelPrediction = false;
+                    g_orbitCalculating = false;
+                    g_currentPredictingBaseTime = 0;
+                }
+                continue;
+            }
+            
+            // 立即发布 Phase 1 今夜过境至 UI！
+            std::vector<PassEvent> upcomingPhase1;
+            upcomingPhase1.reserve(phase1Passes.size());
+            for (const auto& pass : phase1Passes) {
+                if (pass.losTime >= current_unix + timeMachineOffset) {
+                    upcomingPhase1.push_back(pass);
+                }
+            }
+            std::sort(upcomingPhase1.begin(), upcomingPhase1.end(), [](const PassEvent& a, const PassEvent& b) {
+                if (a.score != b.score) return a.score > b.score;
+                return a.aosTime < b.aosTime;
+            });
+            
+            std::vector<TreeItem> tempDisplayTree1;
+            rebuildTreeLocal(tempDisplayTree1, upcomingPhase1, current_unix + timeMachineOffset);
+            
+            lockPassMutex();
+            recommendedPasses = upcomingPhase1;
+            displayTree = tempDisplayTree1;
+            predictionsReady = true;
+            lastPredictionBaseTime = startTime;
+            unlockPassMutex();
+            
+            // === PHASE 2: Background 7-Day Full Pass Calculation ===
+            completedCount = 0;
+            std::vector<PassEvent> allPasses;
+            size_t maxAllocP2 = ESP.getMaxAllocHeap();
+            size_t p2Cap = (maxAllocP2 > 3500) ? (maxAllocP2 - 2500) / sizeof(PassEvent) : 8;
+            if (p2Cap > 24) p2Cap = 24;
+            allPasses.reserve(p2Cap);
+            
+            // Phase 2 - 候选高亮度目视收录卫星
+            for (int satIdx : candidateSatIndices) {
+                vTaskDelay(1);
+                if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (type == SAT_TYPE_GEO_TV || type == SAT_TYPE_DEEP_SPACE || tle.line1.length() < 14 || tle.line2.length() < 14) {
-                    completedCount++;
-                    predictionProgress = 50 + (completedCount * 50) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
-                    continue;
+                if (ESP.getFreeHeap() < 24000 || allPasses.size() >= 24) {
+                    LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
+                          ESP.getFreeHeap(), (int)allPasses.size());
+                    break;
                 }
                 
-                // Full 7-day prediction for Phase 2
+                TLEData tle;
+                float stdMag = 3.0f;
+                lockSatMutex();
+                tle = g_satellites[satIdx].tle;
+                stdMag = g_satellites[satIdx].stdMag;
+                unlockSatMutex();
+                
                 auto passes = predictor->predictPasses(tle, stdMag, startTime, 7);
-                if (passes.size() > 8) {
+                if (passes.size() > 4) {
                     std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
                         return a.score > b.score;
                     });
-                    passes.resize(8);
+                    passes.resize(4);
                 }
-                
                 for (auto& p : passes) {
                     p.satSelected = true;
-                    p.satIndex = i;
+                    p.satIndex = satIdx;
                 }
                 allPasses.insert(allPasses.end(), passes.begin(), passes.end());
                 completedCount++;
-                predictionProgress = 50 + (completedCount * 50) / (numSatsToPredict > 0 ? numSatsToPredict : 1);
+                predictionProgress = 50 + (completedCount * 50) / (totalCandidates > 0 ? totalCandidates : 1);
             }
+            
+            // Phase 2 - 近期发射已勾选项
+            for (int rlIdx : candidateRLIndices) {
+                vTaskDelay(1);
+                if (triggerPrediction || cancelPrediction || g_networkActive) break;
+                
+                if (ESP.getFreeHeap() < 24000 || allPasses.size() >= 24) {
+                    LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
+                          ESP.getFreeHeap(), (int)allPasses.size());
+                    break;
+                }
+                
+                TLEData rlTle;
+                lockSatMutex();
+                if (rlIdx >= 0 && rlIdx < (int)g_recentLaunches.size()) {
+                    rlTle = g_recentLaunches[rlIdx].repTLE;
+                }
+                unlockSatMutex();
+                
+                if (rlTle.line1.length() >= 14 && rlTle.line2.length() >= 14) {
+                    auto passes = predictor->predictPasses(rlTle, 3.0, startTime, 7);
+                    if (passes.size() > 4) {
+                        std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
+                            return a.score > b.score;
+                        });
+                        passes.resize(4);
+                    }
+                    for (auto& p : passes) {
+                        p.satSelected = true;
+                        p.satIndex = -100;
+                    }
+                    allPasses.insert(allPasses.end(), passes.begin(), passes.end());
+                }
+                completedCount++;
+                predictionProgress = 50 + (completedCount * 50) / (totalCandidates > 0 ? totalCandidates : 1);
+            }
+            
             predictionProgress = 100;
-        }
+
         
         if (triggerPrediction || cancelPrediction || g_networkActive) {
             if (cancelPrediction) {
@@ -1483,24 +1593,19 @@ void predictorTask(void* parameter) {
                 upcomingPasses.push_back(pass);
             }
         }
-        // Serial.printf("[Debug] Predictor: upcomingPasses size: %d (allPasses size: %d), current_unix: %u, offset: %d\n", (int)upcomingPasses.size(), (int)allPasses.size(), current_unix, timeMachineOffset);
         
         // Sort by score descending, then by start time ascending
         std::sort(upcomingPasses.begin(), upcomingPasses.end(), [](const PassEvent& a, const PassEvent& b) {
             if (a.score != b.score) return a.score > b.score;
             return a.aosTime < b.aosTime;
         });
-        
-        // Auto-expand first category on finish removed to keep user manual selection state and avoid UI flicker
-        // catExpanded states are now kept and only initialized on first panel entry
 
         // Compute local temporary variables outside the critical section to prevent malloc/OOM within spinlocks
-        std::vector<PassEvent> tempRecommendedPasses = upcomingPasses;
         std::vector<TreeItem> tempDisplayTree;
-        rebuildTreeLocal(tempDisplayTree, tempRecommendedPasses, current_unix + timeMachineOffset);
+        rebuildTreeLocal(tempDisplayTree, upcomingPasses, current_unix + timeMachineOffset);
         
         lockPassMutex();
-        recommendedPasses.swap(tempRecommendedPasses);
+        recommendedPasses.swap(upcomingPasses);
         displayTree.swap(tempDisplayTree);
         predictionsReady = true;
         lastPredictionBaseTime = startTime; // 写入本次成功的基准时间缓存
@@ -2496,14 +2601,21 @@ void tryLoadRecentLaunchCache() {
     
     // 1. 方案一：优先从极速二进制快照恢复（耗时 < 5ms，开机极速秒过）
     if (OrbitDataProvider::loadRecentLaunchesMeta(tempLaunches) && !tempLaunches.empty()) {
-        lockSatMutex();
-        g_recentLaunches = std::move(tempLaunches);
-        unlockSatMutex();
-        recentLaunchDownloadSuccess = true;
-        recentLaunchSelectedIndex = 0;
-        recentLaunchErrorMsg = "Loaded from fast meta snapshot.";
-        LOG_I("RECENT_LAUNCH", "Fast boot: Loaded %d launches from meta snapshot!", (int)g_recentLaunches.size());
-        return;
+        bool needsTleUpgrade = false;
+        if (tempLaunches[0].repTLE.line1.length() < 14 && LittleFS.exists("/json_recent_raw.jsonl")) {
+            needsTleUpgrade = true;
+        }
+        if (!needsTleUpgrade) {
+            lockSatMutex();
+            g_recentLaunches = std::move(tempLaunches);
+            unlockSatMutex();
+            recentLaunchDownloadSuccess = true;
+            recentLaunchSelectedIndex = 0;
+            recentLaunchErrorMsg = "Loaded from fast meta snapshot.";
+            LOG_I("RECENT_LAUNCH", "Fast boot: Loaded %d launches from meta snapshot!", (int)g_recentLaunches.size());
+            return;
+        }
+        LOG_I("RECENT_LAUNCH", "Meta snapshot lacks repTLE. Upgrading to v2 from local raw JSONL once...");
     }
     
     // 2. 若快照未命中，回退到从原始 JSONL 缓存文件执行单趟流式极速解析
@@ -2638,19 +2750,19 @@ void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int 
     
     // Draw language selection dialog if needed
     if (showLangSelect) {
-        int dialogW = 140;
-        int dialogH = 90;
+        int dialogW = 164;
+        int dialogH = 96;
         int dialogX = 120 - dialogW / 2;
         int dialogY = 67 - dialogH / 2;
         
-        canvas->fillRect(dialogX, dialogY, dialogW, dialogH, canvas->color565(30, 40, 50));
+        canvas->fillRect(dialogX, dialogY, dialogW, dialogH, canvas->color565(25, 35, 45));
         canvas->drawRect(dialogX, dialogY, dialogW, dialogH, TFT_YELLOW);
         
         canvas->setTextColor(TFT_WHITE);
         canvas->setFont(I18N::getFont());
-        canvas->drawString("Select Language", dialogX + (dialogW - canvas->textWidth("Select Language")) / 2, dialogY + 5);
+        canvas->drawString("Select Language", dialogX + (dialogW - canvas->textWidth("Select Language")) / 2, dialogY + 4);
         
-        const char* options[4] = {"English", "简体中文", "日本語", "Espanol"};
+        const char* options[4] = {"1. English", "2. 简体中文", "3. 日本語", "4. Español"};
         const lgfx::IFont* optFonts[4] = {
             &fonts::efontCN_12,
             &fonts::efontCN_12,
@@ -2661,15 +2773,16 @@ void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int 
         for (int i = 0; i < 4; i++) {
             canvas->setFont(optFonts[i]);
             if (selectedLangIndex == i) {
-                canvas->setTextColor(TFT_GREEN);
-                String label = "> " + String(options[i]);
-                canvas->drawString(label.c_str(), dialogX + 20, dialogY + 22 + i * 16);
+                canvas->fillRect(dialogX + 6, dialogY + 18 + i * 15, dialogW - 12, 14, canvas->color565(0, 100, 200));
+                canvas->setTextColor(TFT_WHITE);
             } else {
                 canvas->setTextColor(TFT_LIGHTGRAY);
-                String label = "  " + String(options[i]);
-                canvas->drawString(label.c_str(), dialogX + 20, dialogY + 22 + i * 16);
             }
+            canvas->drawString(options[i], dialogX + 12, dialogY + 19 + i * 15);
         }
+        canvas->setFont(&fonts::Font0);
+        canvas->setTextColor(TFT_YELLOW);
+        canvas->drawString("[1-4] or [;/.] Move  [Enter] OK", dialogX + 6, dialogY + dialogH - 12);
         canvas->setFont(I18N::getFont());
     }
     
@@ -2683,19 +2796,19 @@ void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int 
 void drawLangSelectDialog(LGFX_Sprite* canvas) {
     if (!canvas) return;
     
-    int w = 140, h = 90;
+    int w = 164, h = 96;
     int x = (canvas->width() - w) / 2;
     int y = (canvas->height() - h) / 2;
     
-    canvas->fillRect(x, y, w, h, canvas->color565(30, 40, 50));
+    canvas->fillRect(x, y, w, h, canvas->color565(25, 35, 45));
     canvas->drawRect(x, y, w, h, TFT_YELLOW);
     
     canvas->setTextColor(TFT_WHITE);
     canvas->setTextSize(1);
     canvas->setFont(I18N::getFont());
-    canvas->drawString(I18N::get(TXT_LANGUAGE_MENU), x + (w - canvas->textWidth(I18N::get(TXT_LANGUAGE_MENU))) / 2, y + 5);
+    canvas->drawString(I18N::get(TXT_LANGUAGE_MENU), x + (w - canvas->textWidth(I18N::get(TXT_LANGUAGE_MENU))) / 2, y + 4);
     
-    const char* options[4] = {"English", "简体中文", "日本語", "Espanol"};
+    const char* options[4] = {"1. English", "2. 简体中文", "3. 日本語", "4. Español"};
     const lgfx::IFont* optFonts[4] = {
         &fonts::efontCN_12,
         &fonts::efontCN_12,
@@ -2706,15 +2819,16 @@ void drawLangSelectDialog(LGFX_Sprite* canvas) {
     for (int i = 0; i < 4; i++) {
         canvas->setFont(optFonts[i]);
         if (langSelectedIndex == i) {
-            canvas->setTextColor(TFT_GREEN);
-            String label = "> " + String(options[i]);
-            canvas->drawString(label.c_str(), x + 20, y + 22 + i * 16);
+            canvas->fillRect(x + 6, y + 18 + i * 15, w - 12, 14, canvas->color565(0, 100, 200));
+            canvas->setTextColor(TFT_WHITE);
         } else {
             canvas->setTextColor(TFT_LIGHTGRAY);
-            String label = "  " + String(options[i]);
-            canvas->drawString(label.c_str(), x + 20, y + 22 + i * 16);
         }
+        canvas->drawString(options[i], x + 12, y + 19 + i * 15);
     }
+    canvas->setFont(&fonts::Font0);
+    canvas->setTextColor(TFT_YELLOW);
+    canvas->drawString("[1-4] or [;/.] Move  [Enter] OK", x + 6, y + h - 12);
     canvas->setFont(I18N::getFont());
 }
 
@@ -3154,22 +3268,23 @@ void setup() {
         0
     );
     
-    // Smooth 30 FPS rendering loop on Core 1 (main setup thread)
+    // Smooth rendering loop on Core 1 (main setup thread)
     bool needsLangSelect = I18N::isFirstStart();
-    int selectedLangIdx = 0;
+    int selectedLangIdx = (int)I18N::getLanguage();
+    if (selectedLangIdx < 0 || selectedLangIdx > 3) selectedLangIdx = 1; // 默认简体中文
+
     while (!g_loadingFinished || needsLangSelect) {
         M5Cardputer.update();
         if (needsLangSelect) {
-            static bool lastSemi = false;
-            static bool lastDot = false;
-            static bool lastEnter = false;
-            bool currSemi = M5Cardputer.Keyboard.isKeyPressed(';');
-            bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
+            static bool lastUp = false, lastDown = false, lastEnter = false;
+            bool currUp = M5Cardputer.Keyboard.isKeyPressed(';');
+            bool currDown = M5Cardputer.Keyboard.isKeyPressed('.');
             bool currEnter = M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER);
-            if (currSemi && !lastSemi) {
+
+            if (currUp && !lastUp) {
                 selectedLangIdx = (selectedLangIdx - 1 + 4) % 4;
             }
-            if (currDot && !lastDot) {
+            if (currDown && !lastDown) {
                 selectedLangIdx = (selectedLangIdx + 1) % 4;
             }
             if (currEnter && !lastEnter) {
@@ -3177,13 +3292,13 @@ void setup() {
                 I18N::setFirstStartDone();
                 needsLangSelect = false;
             }
-            lastSemi = currSemi;
-            lastDot = currDot;
+            lastUp = currUp;
+            lastDown = currDown;
             lastEnter = currEnter;
         }
         drawStartupScreen(g_loadingProgress, needsLangSelect, selectedLangIdx);
         updateChainMonoDisplay();
-        delay(33); // ~30 FPS
+        delay(25);
     }
     
     // Draw the final complete state and pause slightly to show completion
@@ -3424,6 +3539,10 @@ void drawSatSelectPage() {
             lower.indexOf("%") != -1) {
             return TFT_YELLOW;
         }
+
+        if (lower.indexOf("limit") != -1 || msg.indexOf(u8"上限") != -1) {
+            return TFT_ORANGE;
+        }
         
         if (lower.indexOf("failed") != -1 || msg.indexOf(u8"失败") != -1 ||
             lower.indexOf("error") != -1 || msg.indexOf(u8"错误") != -1 ||
@@ -3628,9 +3747,10 @@ void drawSatSelectPage() {
             int currentPage = (satSelectedIndex / itemsPerPage) + 1;
             int currentIdx = satSelectedIndex + 1;
             char pageBuf[32];
-            sprintf(pageBuf, "(%d %d/%d)", currentIdx, currentPage, totalPages);
-            canvas->setTextColor(canvas->color565(110, 150, 180));
-            canvas->drawString(pageBuf, 28, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
+            int totalSel = getTotalSelectedSatelliteCount();
+            sprintf(pageBuf, "(%d/%d) [%d/30]", currentPage, totalPages, totalSel);
+            canvas->setTextColor(totalSel >= 30 ? TFT_ORANGE : canvas->color565(110, 150, 180));
+            canvas->drawString(pageBuf, 8, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
         }
         
         // Right Panel (Description)
@@ -4364,9 +4484,10 @@ void drawSatSelectPage() {
                 int currentPage = (recentLaunchSelectedIndex / itemsPerPage) + 1;
                 int currentIdx = recentLaunchSelectedIndex + 1;
                 char pageBuf[32];
-                sprintf(pageBuf, "(%d %d/%d)", currentIdx, currentPage, totalPages);
-                canvas->setTextColor(canvas->color565(110, 150, 180));
-                canvas->drawString(pageBuf, 28, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
+                int totalSel = getTotalSelectedSatelliteCount();
+                sprintf(pageBuf, "(%d/%d) [%d/30]", currentPage, totalPages, totalSel);
+                canvas->setTextColor(totalSel >= 30 ? TFT_ORANGE : canvas->color565(110, 150, 180));
+                canvas->drawString(pageBuf, 8, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
             }
             
             canvas->drawFastVLine(85, 20, bottomLimit - 20, TFT_DARKGREY);
@@ -4449,8 +4570,12 @@ void drawSatSelectPage() {
                     char dateBuf[32];
                     if (epoch > 0) {
                         time_t tEpoch = (time_t)epoch;
-                        struct tm* timeinfo = gmtime(&tEpoch);
-                        strftime(dateBuf, sizeof(dateBuf), "%Y-%m-%d", timeinfo);
+                        struct tm timeinfo;
+                        if (gmtime_r(&tEpoch, &timeinfo) != nullptr) {
+                            strftime(dateBuf, sizeof(dateBuf), "%Y-%m-%d", &timeinfo);
+                        } else {
+                            sprintf(dateBuf, "N/A");
+                        }
                     } else {
                         sprintf(dateBuf, "N/A");
                     }
@@ -4926,6 +5051,22 @@ void loop() {
         bool currL = M5Cardputer.Keyboard.isKeyPressed('l') || M5Cardputer.Keyboard.isKeyPressed('L');
         bool currSpace = M5Cardputer.Keyboard.isKeyPressed(' ');
         bool currM = M5Cardputer.Keyboard.isKeyPressed('m') || M5Cardputer.Keyboard.isKeyPressed('M');
+
+        static bool s_bootKeyFlushed = false;
+        if (!s_bootKeyFlushed) {
+            lastSemi = currSemi; lastDot = currDot; lastComma = currComma; lastSlash = currSlash;
+            lastO = currO; lastV = currV; lastEnter = currEnter; lastBack = currBack;
+            lastEsc = currEsc; lastTick = currTick; lastBracketL = currBracketL; lastBracketR = currBracketR;
+            lastC = currC; lastR = currR; lastW = currW; lastS = currS;
+            lastH = currH; lastG = currG; lastY = currY; lastN = currN;
+            lastD = currD; lastTab = currTab; lastShift = currShift; lastL = currL;
+            lastSpace = currSpace; lastM = currM;
+            s_bootKeyFlushed = true;
+            currSemi = currDot = currComma = currSlash = currO = currV = false;
+            currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = false;
+            currC = currR = currW = currS = currH = currG = currY = currN = currD = false;
+            currTab = currShift = currL = currSpace = currM = false;
+        }
 
         bool justSemi = currSemi && !lastSemi;
         bool justDot = currDot && !lastDot;
@@ -5810,12 +5951,19 @@ void loop() {
                     } else if (justEnter) {
                         if (recentLaunchSelectedIndex >= 0 && recentLaunchSelectedIndex < (int)g_recentLaunches.size()) {
                             RecentLaunchItem& targetItem = g_recentLaunches[recentLaunchSelectedIndex];
-                            targetItem.selected = !targetItem.selected;
-                            if (targetItem.selected) {
-                                g_recentLaunchFocusMode = true;
-                                recentLaunchActiveBatchId = targetItem.batchId;
-                                initRecentLaunchCalcs(targetItem);
+                            if (!targetItem.selected) {
+                                if (getTotalSelectedSatelliteCount() >= 30) {
+                                    recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选30颗" : "Limit reached: Max 30 sats total";
+                                } else {
+                                    targetItem.selected = true;
+                                    recentLaunchErrorMsg = "";
+                                    g_recentLaunchFocusMode = true;
+                                    recentLaunchActiveBatchId = targetItem.batchId;
+                                    initRecentLaunchCalcs(targetItem);
+                                }
                             } else {
+                                targetItem.selected = false;
+                                recentLaunchErrorMsg = "";
                                 if (recentLaunchActiveBatchId == targetItem.batchId) {
                                     bool foundOther = false;
                                     for (auto& item : g_recentLaunches) {
@@ -5951,7 +6099,19 @@ void loop() {
                                 triggerPrediction = true;
                             }
                         } else if (justEnter) {
-                            g_satellites[satSelectedIndex].selected = !g_satellites[satSelectedIndex].selected;
+                            if (satSelectedIndex < NUM_SATELLITES) {
+                                if (!g_satellites[satSelectedIndex].selected) {
+                                    if (getTotalSelectedSatelliteCount() >= 30) {
+                                        downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选30颗" : "Limit reached: Max 30 sats total";
+                                    } else {
+                                        g_satellites[satSelectedIndex].selected = true;
+                                        downloadErrorMsg = "";
+                                    }
+                                } else {
+                                    g_satellites[satSelectedIndex].selected = false;
+                                    downloadErrorMsg = "";
+                                }
+                            }
                         } else if (justD && satSelectedIndex >= NUM_BUILTIN_SATELLITES && satSelectedIndex < NUM_SATELLITES) {
                             deleteConfirmIndex = satSelectedIndex;
                         } else if (justSemi) {
@@ -6677,13 +6837,17 @@ void loop() {
                         }
                         
                         // Uniform display names for all launch target objects with its launch epoch dates
-                        static String sNameCache[5];
-                        if (recentLaunchSelectedIndex < (int)g_recentLaunches.size()) {
-                            sNameCache[i] = getShortNameForDisplay(obj.name, g_recentLaunches[recentLaunchSelectedIndex].epoch);
+                        static String sNameCache[8];
+                        if (i < 8) {
+                            if (recentLaunchSelectedIndex < (int)g_recentLaunches.size()) {
+                                sNameCache[i] = getShortNameForDisplay(obj.name, g_recentLaunches[recentLaunchSelectedIndex].epoch);
+                            } else {
+                                sNameCache[i] = obj.name;
+                            }
+                            data.shortName = sNameCache[i].c_str();
                         } else {
-                            sNameCache[i] = obj.name;
+                            data.shortName = obj.name.c_str();
                         }
-                        data.shortName = sNameCache[i].c_str();
                         
                         sats.push_back(data);
                     }
@@ -6850,282 +7014,234 @@ void loop() {
                 }
             }
         
-        // Update 3-axis Gimbal Targets based on active sat tracking (主地图全景与视口模式均自动追踪)
+        // Update 3-axis Gimbal Targets based on active sat tracking (地表全天自主巡天跟踪站 Autonomous Sky Patrol)
         if (gimbal.isOnline() && appState != STATE_SERVO_TEST) {
+            uint32_t currentSimTime = current_unix + timeMachineOffset;
+            GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+            
+            static int s_trackingSatIndex = -1;
+            static bool s_inPassSession = false;
+            static PassEvent s_lockedPass;
+            static float s_lockedHeading = 90.0f;
+            
+            // 辅助 Lambda：解算指定卫星在特定时刻在天平面的真实飞行航向角 Track Heading
+            auto getSatTrackHeading = [&](int satIdx, uint32_t t) -> float {
+                if (satIdx < 0 || satIdx >= NUM_SATELLITES) return 90.0f;
+                double x0 = 0, y0 = 0, z0 = 0;
+                double x1 = 0, y1 = 0, z1 = 0;
+                if (g_satellites[satIdx].calc.getTEME(t, x0, y0, z0) &&
+                    g_satellites[satIdx].calc.getTEME(t + 15, x1, y1, z1)) {
+                    double g0 = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
+                    double g1 = CoordTransform::getGMST(CoordTransform::unixToJulian(t + 15));
+                    ECEFCoord ec0 = CoordTransform::temeToECEF(x0, y0, z0, g0);
+                    ECEFCoord ec1 = CoordTransform::temeToECEF(x1, y1, z1, g1);
+                    TopocentricCoord tp0 = CoordTransform::ecefToTopocentric(observerPos, ec0);
+                    TopocentricCoord tp1 = CoordTransform::ecefToTopocentric(observerPos, ec1);
+                    
+                    float r0 = cosf(tp0.el * DEG_TO_RAD);
+                    float e0 = r0 * sinf(tp0.az * DEG_TO_RAD);
+                    float n0 = r0 * cosf(tp0.az * DEG_TO_RAD);
+                    
+                    float r1 = cosf(tp1.el * DEG_TO_RAD);
+                    float e1 = r1 * sinf(tp1.az * DEG_TO_RAD);
+                    float n1 = r1 * cosf(tp1.az * DEG_TO_RAD);
+                    
+                    float de = e1 - e0;
+                    float dn = n1 - n0;
+                    if (fabsf(de) > 1e-5f || fabsf(dn) > 1e-5f) {
+                        float hdg = atan2f(de, dn) * RAD_TO_DEG;
+                        if (hdg < 0.0f) hdg += 360.0f;
+                        return hdg;
+                    }
+                }
+                return 90.0f;
+            };
+
             int targetTrackSat = -1;
-            // 1. 如果当前聚焦卫星有效，优先以聚焦卫星为主
-            if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+            bool isTargetPassing = false;
+
+            // =======================================================================
+            // 模式分支 1：用户进入 Sat View 单星特写视口（用户意图最高优先 Focus Override）
+            // =======================================================================
+            if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
                 targetTrackSat = focusSatIndex;
-            }
-            // 2. 如果聚焦卫星不在过境中，自动扫描是否有其他已选卫星正在过境天顶，优先跟进当前过境卫星
-            bool currentFocusPassing = false;
-            if (targetTrackSat >= 0 && g_satCaches[targetTrackSat].lastGeoValid) {
-                GeodeticCoord obs = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                ECEFCoord ec = CoordTransform::geodeticToECEF(g_satCaches[targetTrackSat].lastGeo);
-                TopocentricCoord tp = CoordTransform::ecefToTopocentric(obs, ec);
-                if (tp.el >= 0.0f) currentFocusPassing = true;
-            }
-            if (!currentFocusPassing) {
-                for (int i = 0; i < NUM_SATELLITES; i++) {
-                    if (g_satellites[i].selected && g_satCaches[i].lastGeoValid) {
-                        GeodeticCoord obs = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                        ECEFCoord ec = CoordTransform::geodeticToECEF(g_satCaches[i].lastGeo);
-                        TopocentricCoord tp = CoordTransform::ecefToTopocentric(obs, ec);
-                        if (tp.el >= 0.0f) {
-                            targetTrackSat = i;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (targetTrackSat >= 0 && targetTrackSat < NUM_SATELLITES && g_satellites[targetTrackSat].selected) {
-                if (!g_satCaches[targetTrackSat].lastGeoValid) {
-                    double tx = 0, ty = 0, tz = 0;
-                    if (g_satellites[targetTrackSat].calc.getTEME(simTime, tx, ty, tz)) {
-                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(simTime));
-                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
-                        g_satCaches[targetTrackSat].lastGeo = CoordTransform::ecefToGeodetic(ecef);
-                        g_satCaches[targetTrackSat].lastGeoValid = true;
-                    }
-                }
-                
                 if (g_satCaches[targetTrackSat].lastGeoValid) {
-                    GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                    ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_satCaches[targetTrackSat].lastGeo);
-                    TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
-                    
-                    float realAz = topo.az;
-                    float realEl = topo.el;
-                    uint32_t currentSimTime = current_unix + timeMachineOffset;
-                    
-                    static int s_trackingSatIndex = -1;
-                    static bool s_inPassSession = false;
-                    static PassEvent s_lockedPass;
-                    static float s_lockedHeading = 90.0f;
-                    
-                    // 切换聚焦/过境卫星时，重置过境跟踪会话
-                    if (s_trackingSatIndex != targetTrackSat) {
-                        s_trackingSatIndex = targetTrackSat;
-                        s_inPassSession = false;
-                    }
-                    
-                    // 状态切换与退出判定：
-                    bool isPassActive = false;
-                    if (!s_inPassSession) {
-                        // 未在过境中：卫星仰角大于等于 0 即判定升出地平线
-                        if (realEl >= 0.0f) {
-                            isPassActive = true;
-                        }
-                    } else {
-                        // 已在过境中：只要卫星仰角仍在地上 (realEl > 0)，或尚未到达预计降落时刻，维持过境
-                        // 一旦卫星已经落入地平线 (realEl <= 0) 且时间已过预计落山时刻，过境立即圆满结束！
-                        if (realEl > 0.0f || (s_lockedPass.losTime > 0 && currentSimTime < s_lockedPass.losTime)) {
-                            isPassActive = true;
-                        }
-                    }
-                    
-                    // 解算当前卫星在天平面的真实飞行航向角 Track Heading
-                    auto getSatTrackHeading = [&](uint32_t t) -> float {
-                        double x0 = 0, y0 = 0, z0 = 0;
-                        double x1 = 0, y1 = 0, z1 = 0;
-                        if (g_satellites[targetTrackSat].calc.getTEME(t, x0, y0, z0) &&
-                            g_satellites[targetTrackSat].calc.getTEME(t + 15, x1, y1, z1)) {
-                            double g0 = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
-                            double g1 = CoordTransform::getGMST(CoordTransform::unixToJulian(t + 15));
-                            ECEFCoord ec0 = CoordTransform::temeToECEF(x0, y0, z0, g0);
-                            ECEFCoord ec1 = CoordTransform::temeToECEF(x1, y1, z1, g1);
-                            GeodeticCoord obs = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                            TopocentricCoord tp0 = CoordTransform::ecefToTopocentric(obs, ec0);
-                            TopocentricCoord tp1 = CoordTransform::ecefToTopocentric(obs, ec1);
-                            
-                            float r0 = cosf(tp0.el * DEG_TO_RAD);
-                            float e0 = r0 * sinf(tp0.az * DEG_TO_RAD);
-                            float n0 = r0 * cosf(tp0.az * DEG_TO_RAD);
-                            
-                            float r1 = cosf(tp1.el * DEG_TO_RAD);
-                            float e1 = r1 * sinf(tp1.az * DEG_TO_RAD);
-                            float n1 = r1 * cosf(tp1.az * DEG_TO_RAD);
-                            
-                            float de = e1 - e0;
-                            float dn = n1 - n0;
-                            if (fabsf(de) > 1e-5f || fabsf(dn) > 1e-5f) {
-                                float hdg = atan2f(de, dn) * RAD_TO_DEG;
-                                if (hdg < 0.0f) hdg += 360.0f;
-                                return hdg;
-                            }
-                        }
-                        return 90.0f;
-                    };
-
-                    if (isPassActive) {
-                        // 1. 卫星在过境中：锁定单一会话，CH0基准走向与CH1拱门倾角在整个过境期间绝对恒定，严禁任何跳变！
-                        if (!s_inPassSession) {
-                            bool foundPass = false;
-                            PassEvent activePass;
-                            
-                            lockPassMutex();
-                            for (const auto& pass : recommendedPasses) {
-                                if (pass.satName == g_satellites[targetTrackSat].name) {
-                                    if (currentSimTime >= (pass.aosTime > 60 ? pass.aosTime - 60 : 0) && currentSimTime <= pass.losTime + 60) {
-                                        activePass = pass;
-                                        foundPass = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            unlockPassMutex();
-                            
-                            if (foundPass && activePass.losTime > activePass.aosTime) {
-                                s_lockedPass = activePass;
-                            } else {
-                                // 就地推算精准过境，避免错误固定当前坐标
-                                s_lockedPass.satName = g_satellites[targetTrackSat].name;
-                                s_lockedPass.maxElevation = max(realEl, 15.0f);
-                                s_lockedPass.maxAz = realAz;
-                                
-                                uint32_t tAos = currentSimTime;
-                                for (int k = 1; k <= 45; k++) {
-                                    uint32_t tb = currentSimTime - k * 20;
-                                    double bx=0, by=0, bz=0;
-                                    if (g_satellites[targetTrackSat].calc.getTEME(tb, bx, by, bz)) {
-                                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(tb));
-                                        ECEFCoord bec = CoordTransform::temeToECEF(bx, by, bz, gmst);
-                                        TopocentricCoord btp = CoordTransform::ecefToTopocentric(observerPos, bec);
-                                        if (btp.el < 0.0f) { tAos = tb; break; }
-                                        if (btp.el > s_lockedPass.maxElevation) { s_lockedPass.maxElevation = btp.el; s_lockedPass.maxAz = btp.az; }
-                                    }
-                                }
-                                uint32_t tLos = currentSimTime + 600;
-                                for (int k = 1; k <= 45; k++) {
-                                    uint32_t tf = currentSimTime + k * 20;
-                                    double fx=0, fy=0, fz=0;
-                                    if (g_satellites[targetTrackSat].calc.getTEME(tf, fx, fy, fz)) {
-                                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(tf));
-                                        ECEFCoord fec = CoordTransform::temeToECEF(fx, fy, fz, gmst);
-                                        TopocentricCoord ftp = CoordTransform::ecefToTopocentric(observerPos, fec);
-                                        if (ftp.el < 0.0f) { tLos = tf; break; }
-                                        if (ftp.el > s_lockedPass.maxElevation) { s_lockedPass.maxElevation = ftp.el; s_lockedPass.maxAz = ftp.az; }
-                                    }
-                                }
-                                s_lockedPass.aosTime = tAos;
-                                s_lockedPass.losTime = tLos;
-                            }
-                            uint32_t tMid = (s_lockedPass.aosTime + s_lockedPass.losTime) / 2;
-                            s_lockedHeading = getSatTrackHeading(tMid);
-                            s_inPassSession = true;
-                        }
-                        
-                        // 计算过境平滑进度 (0.0 -> 1.0 -> 0° -> 180°)
-                        float totalDur = (float)(s_lockedPass.losTime - s_lockedPass.aosTime);
-                        if (totalDur < 30.0f) totalDur = 600.0f;
-                        float ratio = (float)(currentSimTime - s_lockedPass.aosTime) / totalDur;
-                        ratio = constrain(ratio, 0.0f, 1.0f);
-                        float progressDeg = ratio * 180.0f;
-                        
-                        // 下发刚性锁定的轨道航向走向、拱高与平滑进度（CH0 与 CH1 恒定不动，只有 CH2 平滑划过天际）
-                        gimbal.setTargetArch(s_lockedHeading, s_lockedPass.maxElevation, progressDeg, s_lockedPass.maxAz);
-                    } else {
-                        // 2. 卫星在地平线以下：结束本次过境会话，寻找该卫星未来最早的下一次过境并预瞄准
-                        s_inPassSession = false;
-                        bool foundNext = false;
-                        uint32_t earliestAos = 0xFFFFFFFF;
-                        float aosAz = 90.0f;
-                        float nextMaxEl = 45.0f;
-                        float nextMaxAz = 90.0f;
-                        
-                        // 优先在推荐过境列表中检索未来过境
-                        lockPassMutex();
-                        for (const auto& pass : recommendedPasses) {
-                            if (pass.satName == g_satellites[targetTrackSat].name && pass.aosTime > currentSimTime) {
-                                if (pass.aosTime < earliestAos) {
-                                    earliestAos = pass.aosTime;
-                                    aosAz = pass.startAz;
-                                    nextMaxEl = pass.maxElevation;
-                                    nextMaxAz = pass.maxAz;
-                                    foundNext = true;
-                                }
-                            }
-                        }
-                        unlockPassMutex();
-                        
-                        // 增强防护：若预计算列表中尚未包含（例如后台正在重算），直接对当前聚焦卫星就地向前推算最近过境
-                        // 注意：若用户正在按键调节时间 (lastTimeAdjustMillis != 0)，严禁执行耗时推算，保证调时绝对丝滑
-                        if (!foundNext) {
-                            static int s_cachedFocusSat = -1;
-                            static uint32_t s_lastProbeMs = 0;
-                            static uint32_t s_cachedNextAos = 0;
-                            static float s_cachedAosAz = 90.0f;
-                            static float s_cachedNextMaxEl = 45.0f;
-                            
-                            if (s_cachedFocusSat != targetTrackSat) {
-                                s_cachedFocusSat = targetTrackSat;
-                                s_cachedNextAos = 0;
-                                s_lastProbeMs = 0;
-                            }
-                            
-                            if (s_cachedNextAos > currentSimTime) {
-                                earliestAos = s_cachedNextAos;
-                                aosAz = s_cachedAosAz;
-                                nextMaxEl = s_cachedNextMaxEl;
-                                foundNext = true;
-                            } else if (lastTimeAdjustMillis == 0 && (millis() - s_lastProbeMs > 3000)) {
-                                s_lastProbeMs = millis();
-                                GeodeticCoord obsPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                                uint32_t probeT = currentSimTime + 60;
-                                uint32_t probeEnd = currentSimTime + 6 * 3600; // 探测未来 6 小时
-                                bool probeInPass = false;
-                                float pAosAz = 0.0f;
-                                float pMaxEl = 0.0f;
-                                uint32_t pAosTime = 0;
-                                
-                                while (probeT < probeEnd) {
-                                    double px = 0, py = 0, pz = 0;
-                                    if (g_satellites[targetTrackSat].calc.getTEME(probeT, px, py, pz)) {
-                                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(probeT));
-                                        ECEFCoord pEcef = CoordTransform::temeToECEF(px, py, pz, gmst);
-                                        TopocentricCoord pTopo = CoordTransform::ecefToTopocentric(obsPos, pEcef);
-                                        
-                                        if (pTopo.el >= 0.0f) {
-                                            if (!probeInPass) {
-                                                probeInPass = true;
-                                                pAosAz = pTopo.az;
-                                                pMaxEl = pTopo.el;
-                                                pAosTime = probeT;
-                                            } else {
-                                                if (pTopo.el > pMaxEl) pMaxEl = pTopo.el;
-                                            }
-                                        } else if (probeInPass) {
-                                            if (pMaxEl >= 10.0f) {
-                                                foundNext = true;
-                                                earliestAos = pAosTime;
-                                                aosAz = pAosAz;
-                                                nextMaxEl = pMaxEl;
-                                                s_cachedNextAos = earliestAos;
-                                                s_cachedAosAz = aosAz;
-                                                s_cachedNextMaxEl = nextMaxEl;
-                                                break;
-                                            }
-                                            probeInPass = false;
-                                        }
-                                    }
-                                    probeT += 120; // 120秒快速巡航探测，计算量减半
-                                }
-                            }
-                        }
-                        
-                        if (foundNext) {
-                            float nextHeading = getSatTrackHeading(earliestAos);
-                            gimbal.setTargetPrePointArch(nextHeading, nextMaxEl, nextMaxAz);
-                        } else if (gimbal.getState() != GIMBAL_STATE_HOLD) {
-                            gimbal.setHold();
-                        }
-                    }
-                } else if (gimbal.getState() != GIMBAL_STATE_HOLD) {
-                    gimbal.setHold();
+                    ECEFCoord ec = CoordTransform::geodeticToECEF(g_satCaches[targetTrackSat].lastGeo);
+                    TopocentricCoord tp = CoordTransform::ecefToTopocentric(observerPos, ec);
+                    if (tp.el >= 3.0f) isTargetPassing = true;
                 }
-            } else if (gimbal.getState() != GIMBAL_STATE_HOLD) {
-                gimbal.setHold();
+            } 
+            // =======================================================================
+            // 模式分支 2：主地球仪大盘全局视图（全天自主巡天 Autonomous Sky Patrol）
+            // =======================================================================
+            else {
+                // 1. 扫描当前所有已选卫星在天穹的实时状态，执行多星评分仲裁
+                int bestPassingSat = -1;
+                float highestScore = -999.0f;
+
+                for (int i = 0; i < NUM_SATELLITES; i++) {
+                    if (!g_satellites[i].selected || !g_satCaches[i].lastGeoValid) continue;
+
+                    ECEFCoord ec = CoordTransform::geodeticToECEF(g_satCaches[i].lastGeo);
+                    TopocentricCoord tp = CoordTransform::ecefToTopocentric(observerPos, ec);
+
+                    // 门槛：仰角需高于地平线 3.0°（过滤遮挡与地平线边缘杂音）
+                    if (tp.el >= 3.0f) {
+                        float score = tp.el * 1.5f; // 仰角越高得分越高
+
+                        // 特权空间站额外加分（优先追踪引人注目的人类空间站）
+                        String satNameUpper = g_satellites[i].name;
+                        satNameUpper.toUpperCase();
+                        if (satNameUpper.indexOf("ISS") >= 0 || satNameUpper.indexOf("CSS") >= 0 || 
+                            satNameUpper.indexOf("TIANGONG") >= 0 || satNameUpper.indexOf("SPACE STATION") >= 0) {
+                            score += 80.0f;
+                        }
+
+                        // 会话黏性加分：当前正在跟踪的卫星赋予 +40 分防抽搐加权
+                        // 保证浑仪顺畅追踪该星至落山，除非有高特权空间站升空才允许中途换星
+                        if (i == s_trackingSatIndex && s_inPassSession) {
+                            score += 40.0f;
+                        }
+
+                        if (score > highestScore) {
+                            highestScore = score;
+                            bestPassingSat = i;
+                        }
+                    }
+                }
+
+                if (bestPassingSat >= 0) {
+                    targetTrackSat = bestPassingSat;
+                    isTargetPassing = true;
+                }
+            }
+
+            // =======================================================================
+            // 执行调度跟踪或全局预瞄
+            // =======================================================================
+            if (isTargetPassing && targetTrackSat >= 0) {
+                // -------------------------------------------------------------
+                // A. 目标卫星正在过境中（平滑推行轨道拱门）
+                // -------------------------------------------------------------
+                if (s_trackingSatIndex != targetTrackSat) {
+                    s_trackingSatIndex = targetTrackSat;
+                    s_inPassSession = false; // 换星转场，重新初始化会话
+                }
+
+                ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_satCaches[targetTrackSat].lastGeo);
+                TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
+
+                if (!s_inPassSession) {
+                    bool foundPass = false;
+                    PassEvent activePass;
+                    
+                    lockPassMutex();
+                    for (const auto& pass : recommendedPasses) {
+                        if (pass.satName == g_satellites[targetTrackSat].name) {
+                            if (currentSimTime >= (pass.aosTime > 60 ? pass.aosTime - 60 : 0) && currentSimTime <= pass.losTime + 60) {
+                                activePass = pass;
+                                foundPass = true;
+                                break;
+                            }
+                        }
+                    }
+                    unlockPassMutex();
+                    
+                    if (foundPass && activePass.losTime > activePass.aosTime) {
+                        s_lockedPass = activePass;
+                    } else {
+                        // 就地推算精准过境
+                        s_lockedPass.satName = g_satellites[targetTrackSat].name;
+                        s_lockedPass.maxElevation = max((float)topo.el, 15.0f);
+                        s_lockedPass.maxAz = topo.az;
+                        
+                        uint32_t tAos = currentSimTime;
+                        for (int k = 1; k <= 45; k++) {
+                            uint32_t tb = currentSimTime - k * 20;
+                            double bx=0, by=0, bz=0;
+                            if (g_satellites[targetTrackSat].calc.getTEME(tb, bx, by, bz)) {
+                                double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(tb));
+                                ECEFCoord bec = CoordTransform::temeToECEF(bx, by, bz, gmst);
+                                TopocentricCoord btp = CoordTransform::ecefToTopocentric(observerPos, bec);
+                                if (btp.el < 0.0f) { tAos = tb; break; }
+                                if (btp.el > s_lockedPass.maxElevation) { s_lockedPass.maxElevation = (float)btp.el; s_lockedPass.maxAz = btp.az; }
+                            }
+                        }
+                        uint32_t tLos = currentSimTime + 600;
+                        for (int k = 1; k <= 45; k++) {
+                            uint32_t tf = currentSimTime + k * 20;
+                            double fx=0, fy=0, fz=0;
+                            if (g_satellites[targetTrackSat].calc.getTEME(tf, fx, fy, fz)) {
+                                double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(tf));
+                                ECEFCoord fec = CoordTransform::temeToECEF(fx, fy, fz, gmst);
+                                TopocentricCoord ftp = CoordTransform::ecefToTopocentric(observerPos, fec);
+                                if (ftp.el < 0.0f) { tLos = tf; break; }
+                                if (ftp.el > s_lockedPass.maxElevation) { s_lockedPass.maxElevation = (float)ftp.el; s_lockedPass.maxAz = ftp.az; }
+                            }
+                        }
+                        s_lockedPass.aosTime = tAos;
+                        s_lockedPass.losTime = tLos;
+                    }
+                    uint32_t tMid = (s_lockedPass.aosTime + s_lockedPass.losTime) / 2;
+                    s_lockedHeading = getSatTrackHeading(targetTrackSat, tMid);
+                    s_inPassSession = true;
+                }
+
+                // 计算过境平滑进度 (0.0 -> 1.0 -> 0° -> 180°)
+                float totalDur = (float)(s_lockedPass.losTime - s_lockedPass.aosTime);
+                if (totalDur < 30.0f) totalDur = 600.0f;
+                float ratio = (float)(currentSimTime - s_lockedPass.aosTime) / totalDur;
+                ratio = constrain(ratio, 0.0f, 1.0f);
+                float progressDeg = ratio * 180.0f;
+                
+                // 下发刚性锁定的轨道航向走向、拱高与平滑进度
+                gimbal.setTargetArch(s_lockedHeading, s_lockedPass.maxElevation, progressDeg, s_lockedPass.maxAz, g_satellites[targetTrackSat].name.c_str());
+            } else {
+                // -------------------------------------------------------------
+                // B. 空中无正在过境卫星：结束当前会话，执行全局最早下一次过境预瞄
+                // -------------------------------------------------------------
+                s_inPassSession = false;
+                s_trackingSatIndex = -1;
+
+                bool foundNext = false;
+                PassEvent nextPass;
+                uint32_t earliestAos = 0xFFFFFFFF;
+                int nextSatIdx = -1;
+
+                // 1. 在推荐过境列表中检索未来过境
+                lockPassMutex();
+                for (const auto& pass : recommendedPasses) {
+                    if (pass.aosTime > currentSimTime && pass.aosTime < earliestAos) {
+                        // 特写模式下仅搜寻焦点卫星；自主巡天模式下搜寻全部已选卫星
+                        if (isSatViewMode && focusSatIndex >= 0) {
+                            if (pass.satName != g_satellites[focusSatIndex].name) continue;
+                        }
+                        // 确认该卫星当前处于已选勾选状态
+                        for (int k = 0; k < NUM_SATELLITES; k++) {
+                            if (g_satellites[k].selected && pass.satName == g_satellites[k].name) {
+                                earliestAos = pass.aosTime;
+                                nextPass = pass;
+                                nextSatIdx = k;
+                                foundNext = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                unlockPassMutex();
+
+                if (foundNext && nextSatIdx >= 0) {
+                    uint32_t waitSec = (earliestAos > currentSimTime) ? (earliestAos - currentSimTime) : 0;
+                    // 若下次过境在 45 分钟（2700秒）内，积极预瞄升起点静候；若超过 45 分钟，待机归中节能
+                    if (waitSec <= 2700) {
+                        float nextHeading = getSatTrackHeading(nextSatIdx, earliestAos);
+                        gimbal.setTargetPrePointArch(nextHeading, nextPass.maxElevation, nextPass.maxAz, nextPass.satName.c_str());
+                    } else if (gimbal.getState() != GIMBAL_STATE_STANDBY) {
+                        gimbal.setStandby();
+                    }
+                } else if (gimbal.getState() != GIMBAL_STATE_HOLD && gimbal.getState() != GIMBAL_STATE_STANDBY) {
+                    gimbal.setStandby();
+                }
             }
         }
         

@@ -89,7 +89,7 @@ int ObservationPredictor::calculateScore(float maxElevation, float visibleDurati
 
 std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, double stdMag, uint32_t startTime, int daysToPredict) {
     std::vector<PassEvent> passes;
-    passes.reserve(20);
+    passes.reserve(6);
     
     // If the standard magnitude is very dim, it will never be visible to the naked eye (limit is 8.5)
     // We bypass calculation to save CPU and avoid Task Watchdog issues on high-altitude/geostationary satellites

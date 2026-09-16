@@ -74,6 +74,7 @@ struct RecentLaunchItem {
     float inclination = 0.0f;  // 轨道倾角缓存
     float avgAlt = 0.0f;       // 平均高度缓存
     String repSatName;         // 缓存的代表卫星名称
+    TLEData repTLE;            // 代表卫星 TLE 缓存，用于过境预测
     
     std::shared_ptr<SGP4Calc> calc;
     RecentLaunchRealtimeCache cache;
@@ -96,4 +97,22 @@ struct LazyObjectItem {
     bool lastGeoValid = false;
     bool isVisible = false;
     OrbitCache cache;
+};
+
+struct Level3ObjectList {
+    static const size_t MAX_ITEMS = 5;
+    LazyObjectItem items[MAX_ITEMS];
+    size_t count = 0;
+    
+    size_t size() const { return count; }
+    bool empty() const { return count == 0; }
+    void clear() { count = 0; }
+    void shrink_to_fit() {}
+    LazyObjectItem& operator[](size_t idx) { return items[idx]; }
+    const LazyObjectItem& operator[](size_t idx) const { return items[idx]; }
+    
+    LazyObjectItem* begin() { return &items[0]; }
+    const LazyObjectItem* begin() const { return &items[0]; }
+    LazyObjectItem* end() { return &items[count]; }
+    const LazyObjectItem* end() const { return &items[count]; }
 };

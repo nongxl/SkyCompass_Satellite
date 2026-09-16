@@ -8,11 +8,55 @@ GimbalController::GimbalController() :
     _lastStatusTick(0),
     _curAzAngle(90.0f), _curInclineAngle(90.0f), _curProgressAngle(90.0f),
     _tarAzAngle(90.0f), _tarInclineAngle(90.0f), _tarProgressAngle(90.0f),
+    _velAz(0.0f), _velIncline(0.0f), _velProgress(0.0f),
     _lastTick(0),
     _initStartTime(0),
-    _lerpFactor(0.08f),
-    _maxDegPerSec(5.0f),
-    _lastLogTick(0) {}
+    _isPrepointing(false),
+    _maxDegPerSec(12.0f),
+    _smoothTime(0.35f),
+    _lastLogTick(0),
+    _motionTaskHandle(NULL) {}
+
+void GimbalController::motionTaskEntry(void *param) {
+    GimbalController *controller = static_cast<GimbalController*>(param);
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    const TickType_t xPeriod = pdMS_TO_TICKS(20); // 严格定频 50Hz (20ms)
+
+    while (true) {
+        vTaskDelayUntil(&xLastWakeTime, xPeriod);
+        if (controller != nullptr) {
+            controller->motionTick(0.020f);
+        }
+    }
+}
+
+float GimbalController::smoothDamp(float current, float target, float &currentVelocity, float smoothTime, float maxSpeed, float dt) {
+    smoothTime = max(0.0001f, smoothTime);
+    float omega = 2.0f / smoothTime;
+
+    float x = omega * dt;
+    float expFactor = 1.0f / (1.0f + x + 0.48f * x * x + 0.235f * x * x * x);
+    
+    float change = current - target;
+    float originalTo = target;
+
+    // 限制最大速度
+    float maxChange = maxSpeed * smoothTime;
+    change = constrain(change, -maxChange, maxChange);
+    target = current - change;
+
+    float temp = (currentVelocity + omega * change) * dt;
+    currentVelocity = (currentVelocity - omega * temp) * expFactor;
+    float output = target + (change + temp) * expFactor;
+
+    // 防止在跨过目标点时出现过冲微小抖动
+    if ((originalTo - current > 0.0f) == (output > originalTo)) {
+        output = originalTo;
+        currentVelocity = (output - originalTo) / dt;
+    }
+
+    return output;
+}
 
 bool GimbalController::begin(TwoWire *wire, uint8_t sda, uint8_t scl, uint32_t freq) {
     // 启用 I2C 超时检测机制，防线缆松动死锁
@@ -31,6 +75,9 @@ bool GimbalController::begin(TwoWire *wire, uint8_t sda, uint8_t scl, uint32_t f
         _tarAzAngle = 90.0f;
         _tarInclineAngle = 90.0f;
         _tarProgressAngle = 90.0f;
+        _velAz = 0.0f;
+        _velIncline = 0.0f;
+        _velProgress = 0.0f;
         
         // 立即向硬件所有 8 个通道下发 1500us (90 度中位) 控制信号锁定零位
         for (uint8_t ch = 0; ch < 8; ch++) {
@@ -45,6 +92,20 @@ bool GimbalController::begin(TwoWire *wire, uint8_t sda, uint8_t scl, uint32_t f
         log_i("*******************************************************");
         log_i("[Gimbal] >>> INITIALIZING: 3 Servos Locked at 90° for Alignment <<<");
         log_i("*******************************************************");
+
+        // 启动 50Hz (20ms) 独立定频运动插补后台任务
+        if (_motionTaskHandle == NULL) {
+            xTaskCreatePinnedToCore(
+                motionTaskEntry,
+                "GimbalMotionTask",
+                3072,
+                this,
+                2, // 优先级 2 (低于 IMU 采样 3，高于/等于空闲任务)
+                &_motionTaskHandle,
+                0  // 绑定至 Core 0，与 Core 1 的 UI/3D 重度渲染彻底解耦
+            );
+            log_i("[Gimbal] Smooth Motion Task (50Hz / 20ms) spawned on Core 0");
+        }
     } else {
         log_i("[Gimbal] Servo Driver Board NOT DETECTED on Grove port (Offline)");
     }
@@ -65,16 +126,7 @@ void GimbalController::calculateArchAngles(float trackHeading, float maxEl, floa
     while (satAz < 0) satAz += 360.0f;
     while (satAz >= 360.0f) satAz -= 360.0f;
 
-    // 1. CH1 理想空间侧向倾角计算 (Ideal Arch Incline)：
-    // 实测物理规律：
-    // CH1 = 90° 为天顶垂直立起；
-    // CH1 < 90° 为向正北倾倒；
-    // CH1 > 90° 为向正南倾倒。
-    // 侧向判定 satAz: 若 cos(satAz) >= 0 (即 satAz 在 270°~90°，偏北天区)，则拱门倒向正北；
-    // 若 cos(satAz) < 0 (satAz 在 90°~270°，偏南天区)，则拱门倒向正南。
-    // 硬件单侧干涉保护：
-    // 浑仪舵机齿轮突出部仅在单侧，当 CH1 角度低于 30° 时会卡到底部白色水平大梁；
-    // 另一侧无突出干涉，因此有效活动范围为 30° ~ 180°。
+    // 1. CH1 空间侧向倾角计算 (Ideal Arch Incline)
     float satAzRad = satAz * 0.0174532925f; // DEG_TO_RAD
     bool isLeaningNorth = (cosf(satAzRad) >= 0.0f);
     
@@ -88,36 +140,29 @@ void GimbalController::calculateArchAngles(float trackHeading, float maxEl, floa
         idealIncline = 180.0f - clampedEl;
     }
 
-    // 2. CH0 (长梁走向) 与航向 TrackHeading 严格对齐：
-    // 实测物理规律：
-    // CH0 = 180° 指向正北 (0°)；
-    // CH0 = 90°  指向正东 (90°)；
-    // CH0 = 0°   指向正南 (180°)。
-    // 线性方程：CH0 = 180° - TrackHeading
+    // 2. CH0 (长梁走向) 与航向 TrackHeading 严格对齐
     bool isOppositeHemisphere = (trackHeading > 180.0f);
     if (!isOppositeHemisphere) {
-        // 航向飞向东半球 (0° ~ 180°)：
-        // 长梁指示端指向去向 (Heading)，滑块 0° 位于来向，滑块向 180° 推进
         outAz = 180.0f - trackHeading;
         outIncline = idealIncline;
         outProgress = progressDeg; // 滑块顺向推进 (0° -> 180°)
     } else {
-        // 航向飞向西半球 (180° ~ 360°)：
-        // 长梁掉头 180° 补偿，滑块反相推进
-        outAz = 360.0f - trackHeading; // 即 180° - (trackHeading - 180°)
+        outAz = 360.0f - trackHeading;
         outIncline = 180.0f - idealIncline;
         outProgress = 180.0f - progressDeg; // 滑块从远端滑回 (180° -> 0°)
     }
 
-    // 硬件限位保护（CH1 单侧防卡大梁保护，有效范围 30° ~ 180°）
+    // 硬件限位保护（CH1 单侧防卡大梁、CH2 机械结构防卡保护，有效范围均为 30° ~ 180°）
     outAz = constrain(outAz, 0.0f, 180.0f);
     outIncline = constrain(outIncline, 30.0f, 180.0f);
-    outProgress = constrain(outProgress, 0.0f, 180.0f);
+    outProgress = constrain(outProgress, 30.0f, 180.0f);
 }
 
-void GimbalController::setTargetArch(float trackHeading, float maxElevation, float progressDeg, float satAz) {
+void GimbalController::setTargetArch(float trackHeading, float maxElevation, float progressDeg, float satAz, const char* targetName) {
     // 开机 90° 对齐自检期间受保护，严禁被打断
     if (_state == GIMBAL_STATE_INITIALIZING || _state == GIMBAL_STATE_TEST) return;
+
+    if (targetName) _activeTargetName = targetName;
 
     float tarAz, tarIncline, tarProgress;
     calculateArchAngles(trackHeading, maxElevation, progressDeg, satAz, tarAz, tarIncline, tarProgress);
@@ -127,17 +172,20 @@ void GimbalController::setTargetArch(float trackHeading, float maxElevation, flo
     _tarProgressAngle = tarProgress;
     
     if (_state != GIMBAL_STATE_TRACKING) {
-        log_i("[Gimbal] State changed from %d to TRACKING (TrackHeading: %.1f, MaxEl: %.1f, SatAz: %.1f)", 
-              _state, trackHeading, maxElevation, satAz);
+        log_i("[Gimbal] State changed from %d to TRACKING [%s] (TrackHeading: %.1f, MaxEl: %.1f, SatAz: %.1f)", 
+              _state, _activeTargetName.c_str(), trackHeading, maxElevation, satAz);
         _state = GIMBAL_STATE_TRACKING;
-        _maxDegPerSec = 15.0f; // 跟踪模式下允许响应稍快
+        _maxDegPerSec = 14.0f; // 动态跟随卫星，速度平稳适中
+        _smoothTime = 0.30f;   // 0.30秒阻尼平滑，消灭微跳
         setLEDsByState();
     }
 }
 
-void GimbalController::setTargetPrePointArch(float trackHeading, float maxElevation, float satAz) {
+void GimbalController::setTargetPrePointArch(float trackHeading, float maxElevation, float satAz, const char* targetName) {
     // 开机 90° 对齐自检期间受保护，严禁被打断
     if (_state == GIMBAL_STATE_INITIALIZING || _state == GIMBAL_STATE_TEST) return;
+
+    if (targetName) _activeTargetName = targetName;
 
     float tarAz, tarIncline, tarProgress;
     calculateArchAngles(trackHeading, maxElevation, 0.0f, satAz, tarAz, tarIncline, tarProgress);
@@ -147,10 +195,11 @@ void GimbalController::setTargetPrePointArch(float trackHeading, float maxElevat
     _tarProgressAngle = tarProgress; // 静止停在拱门起跑线 (0° 或 180°)
     
     if (_state != GIMBAL_STATE_PREPOINT) {
-        log_i("[Gimbal] State changed from %d to PREPOINT (TrackHeading: %.1f, MaxEl: %.1f, SatAz: %.1f)", 
-              _state, trackHeading, maxElevation, satAz);
+        log_i("[Gimbal] State changed from %d to PREPOINT [%s] (TrackHeading: %.1f, MaxEl: %.1f, SatAz: %.1f)", 
+              _state, _activeTargetName.c_str(), trackHeading, maxElevation, satAz);
         _state = GIMBAL_STATE_PREPOINT;
-        _maxDegPerSec = 12.0f; // 提升预瞄准转动速度，顺滑且快速就位
+        _maxDegPerSec = 16.0f; // 调整为 16°/s 优雅从容转速，告别粗暴冲击
+        _smoothTime = 0.45f;   // 0.45秒缓启缓停缓冲，极致丝滑
         setLEDsByState();
     }
 }
@@ -170,13 +219,14 @@ void GimbalController::setStandby() {
     if (_state == GIMBAL_STATE_INITIALIZING) return;
 
     _tarAzAngle = 90.0f;       // 白色横梁居中归位 (90°)
-    _tarInclineAngle = 90.0f;   // 黑色拱门竖直立起归位 (90°，绝不擅自向0°放平)
+    _tarInclineAngle = 90.0f;   // 黑色拱门竖直立起归位 (90°)
     _tarProgressAngle = 90.0f; // 星位指针直指拱顶归位 (90°)
     
     if (_state != GIMBAL_STATE_STANDBY) {
         log_i("[Gimbal] State changed from %d to STANDBY (All 3-Axis Locked at 90°)", _state);
         _state = GIMBAL_STATE_STANDBY;
-        _maxDegPerSec = 3.0f;
+        _maxDegPerSec = 8.0f;
+        _smoothTime = 0.60f;   // 归中动作极其柔和舒缓
         setLEDsByState();
     }
 }
@@ -184,12 +234,14 @@ void GimbalController::setStandby() {
 void GimbalController::setHold() {
     // 开机 90° 对齐自检期间受保护，严禁被打断
     if (_state == GIMBAL_STATE_INITIALIZING) return;
-    if (_state == GIMBAL_STATE_HOLD) return; // 已经是 HOLD 状态，无需重复刷新与打断
+    if (_state == GIMBAL_STATE_HOLD) return;
 
-    // 冻结目标角度为当前实际角度，完全保持静止不动
     _tarAzAngle = _curAzAngle;
     _tarInclineAngle = _curInclineAngle;
     _tarProgressAngle = _curProgressAngle;
+    _velAz = 0.0f;
+    _velIncline = 0.0f;
+    _velProgress = 0.0f;
     
     if (_state != GIMBAL_STATE_TEST) {
         log_i("[Gimbal] State changed from %d to HOLD (Stationary at Az:%.1f, Inc:%.1f, Prog:%.1f)", 
@@ -204,7 +256,11 @@ void GimbalController::enterManualTest() {
     _tarAzAngle = _curAzAngle;
     _tarInclineAngle = _curInclineAngle;
     _tarProgressAngle = _curProgressAngle;
-    _maxDegPerSec = 45.0f; // 测试模式下插补响应更迅速
+    _velAz = 0.0f;
+    _velIncline = 0.0f;
+    _velProgress = 0.0f;
+    _maxDegPerSec = 45.0f;
+    _smoothTime = 0.10f;
     setLEDsByState();
     log_i("[Gimbal] >>> ENTER SERVO TEST MODE (Current: Az=%.1f, Inc=%.1f, Prog=%.1f) <<<", 
           _curAzAngle, _curInclineAngle, _curProgressAngle);
@@ -215,6 +271,9 @@ void GimbalController::exitManualTest() {
     _tarAzAngle = _curAzAngle;
     _tarInclineAngle = _curInclineAngle;
     _tarProgressAngle = _curProgressAngle;
+    _velAz = 0.0f;
+    _velIncline = 0.0f;
+    _velProgress = 0.0f;
     setLEDsByState();
     log_i("[Gimbal] <<< EXIT SERVO TEST MODE -> Back to HOLD (Az=%.1f, Inc=%.1f, Prog=%.1f) >>>",
           _curAzAngle, _curInclineAngle, _curProgressAngle);
@@ -226,16 +285,20 @@ void GimbalController::setManualTestAngle(uint8_t ch, float angleDeg, bool immed
         _tarAzAngle = clamped;
         if (immediate) _curAzAngle = clamped;
     } else if (ch == GIMBAL_CH_INCLINE) {
-        // CH1 框架结构限制：仅单侧突出有干涉，角度不能低于 30°，有效范围 30° ~ 180°
         clamped = constrain(angleDeg, 30.0f, 180.0f);
         _tarInclineAngle = clamped;
         if (immediate) _curInclineAngle = clamped;
     } else if (ch == GIMBAL_CH_PROGRESS) {
+        // CH2 机械结构限制：过低角度会卡到硬件，有效范围 30° ~ 180°
+        clamped = constrain(angleDeg, 30.0f, 180.0f);
         _tarProgressAngle = clamped;
         if (immediate) _curProgressAngle = clamped;
     }
     
     if (immediate) {
+        _velAz = 0.0f;
+        _velIncline = 0.0f;
+        _velProgress = 0.0f;
         if (!_isOnline) {
             log_w("[Gimbal] Manual Test Warning: Driver board is OFFLINE!");
         } else {
@@ -262,28 +325,10 @@ uint16_t GimbalController::getChannelPulse(uint8_t ch) const {
     return (uint16_t)(500.0f + (clamped / 180.0f) * 2000.0f + 0.5f);
 }
 
-void GimbalController::processLerp(float dt) {
-    float maxStep = _maxDegPerSec * dt;
-    
-    // 真线性恒速插补：以恒定线速度向目标移动，无非线性指数衰减，转动平滑且匀速
-    auto linearStep = [&](float &cur, float tar) {
-        float diff = tar - cur;
-        if (fabs(diff) > 0.02f) {
-            if (diff > maxStep) {
-                cur += maxStep;
-            } else if (diff < -maxStep) {
-                cur -= maxStep;
-            } else {
-                cur = tar;
-            }
-        } else {
-            cur = tar;
-        }
-    };
-
-    linearStep(_curAzAngle, _tarAzAngle);
-    linearStep(_curInclineAngle, _tarInclineAngle);
-    linearStep(_curProgressAngle, _tarProgressAngle);
+void GimbalController::processSmoothDamp(float dt) {
+    _curAzAngle = smoothDamp(_curAzAngle, _tarAzAngle, _velAz, _smoothTime, _maxDegPerSec, dt);
+    _curInclineAngle = smoothDamp(_curInclineAngle, _tarInclineAngle, _velIncline, _smoothTime, _maxDegPerSec, dt);
+    _curProgressAngle = smoothDamp(_curProgressAngle, _tarProgressAngle, _velProgress, _smoothTime, _maxDegPerSec, dt);
 }
 
 void GimbalController::updateHardwareServos() {
@@ -299,42 +344,28 @@ void GimbalController::updateHardwareServos() {
     uint16_t p2 = angleToPulse(_curProgressAngle);
 
     static uint16_t s_lastP0 = 0, s_lastP1 = 0, s_lastP2 = 0;
-    // 采用 2us 动态死区（约 0.18° 变动阈值），既保证极致细腻丝滑，又避免无意义的 I2C 总线频繁刷写
-    if (abs((int)p0 - (int)s_lastP0) >= 2) {
+    // 采用 1us 细腻死区（约 0.09°），配合 50Hz 平滑阻尼插补，消灭阶梯顿挫，静止时 0 写入
+    if (abs((int)p0 - (int)s_lastP0) >= 1) {
         _servo.setServoPulse(GIMBAL_CH_AZ, p0);
         s_lastP0 = p0;
     }
-    if (abs((int)p1 - (int)s_lastP1) >= 2) {
+    if (abs((int)p1 - (int)s_lastP1) >= 1) {
         _servo.setServoPulse(GIMBAL_CH_INCLINE, p1);
         s_lastP1 = p1;
     }
-    if (abs((int)p2 - (int)s_lastP2) >= 2) {
+    if (abs((int)p2 - (int)s_lastP2) >= 1) {
         _servo.setServoPulse(GIMBAL_CH_PROGRESS, p2);
         s_lastP2 = p2;
     }
 }
 
 void GimbalController::setLEDsByState() {
-    // 浑仪接口连接的是三轴舵机，Unit 8Servos 的 Signal 脚如果被写入 WS2812 信号
-    // 会导致 STM32 固件切换为单总线灯珠驱动，破坏舵机 PWM 信号输出并导致舵机锁死。
-    // 因此此处保持纯净，专用于舵机控制。
+    // 浑仪专用于舵机控制，不向 Signal 脚发送单总线灯珠信号
 }
 
-void GimbalController::tick() {
-    // 若开机未检测到舵机硬件或硬件离线，完全退出，不进行任何I2C总线探测和CPU运算
-    if (!_isOnline) {
-        return;
-    }
-    
-    updateStatus();
-    
-    unsigned long now = millis();
-    float dt = (now - _lastTick) / 1000.0f;
-    _lastTick = now;
-    if (dt <= 0.0f) dt = 0.001f;
-    if (dt > 0.5f) dt = 0.5f; // 防止大卡顿时跳变
-    
-    // 开机自检对齐：开机前 8 秒死死锁定在 90 度，不响应任何其他指令
+void GimbalController::motionTick(float dt) {
+    if (!_isOnline) return;
+
     if (_state == GIMBAL_STATE_INITIALIZING) {
         _curAzAngle = 90.0f;
         _curInclineAngle = 90.0f;
@@ -342,8 +373,29 @@ void GimbalController::tick() {
         _tarAzAngle = 90.0f;
         _tarInclineAngle = 90.0f;
         _tarProgressAngle = 90.0f;
+        _velAz = 0.0f;
+        _velIncline = 0.0f;
+        _velProgress = 0.0f;
         updateHardwareServos();
-        
+    } else if (_state == GIMBAL_STATE_TEST) {
+        updateHardwareServos();
+    } else {
+        processSmoothDamp(dt);
+        updateHardwareServos();
+    }
+}
+
+void GimbalController::tick() {
+    if (!_isOnline) {
+        return;
+    }
+    
+    updateStatus();
+    
+    unsigned long now = millis();
+    
+    // 开机自检对齐倒计时管理
+    if (_state == GIMBAL_STATE_INITIALIZING) {
         unsigned long elapsed = now - _initStartTime;
         if (elapsed < 8000) {
             if (now - _lastLogTick > 1000) {
@@ -357,24 +409,31 @@ void GimbalController::tick() {
             _tarAzAngle = 90.0f;
             _tarInclineAngle = 90.0f;
             _tarProgressAngle = 90.0f;
+            _velAz = 0.0f;
+            _velIncline = 0.0f;
+            _velProgress = 0.0f;
             setLEDsByState();
         }
     } else {
-        processLerp(dt);
-        updateHardwareServos();
+        // 如果后台任务未正常运行（防御性兜底），则由主循环推进运动插补
+        if (_motionTaskHandle == NULL) {
+            float dt = (now - _lastTick) / 1000.0f;
+            if (dt <= 0.0f) dt = 0.001f;
+            if (dt > 0.1f) dt = 0.1f;
+            motionTick(dt);
+        }
     }
+    _lastTick = now;
     
-    // 周期性状态日志 (仅在有动态追踪/预指向任务时每1500毫秒输出，静止HOLD保持静默)
+    // 周期性状态日志 (仅在有动态追踪/预指向任务时每 1500 毫秒输出，静止 HOLD 保持静默)
     if (now - _lastLogTick > 1500) {
         _lastLogTick = now;
         if (_state == GIMBAL_STATE_TRACKING) {
-            log_i("[Gimbal] TRACKING | Target Arch -> BaseAz:%.1f, Incline:%.1f, Prog:%.1f | Out -> Az:%.1f, Inc:%.1f, Prog:%.1f",
-                _tarAzAngle, _tarInclineAngle, _tarProgressAngle, _curAzAngle, _curInclineAngle, _curProgressAngle);
+            log_i("[Gimbal] TRACKING [%s] | Target Arch -> BaseAz:%.1f, Incline:%.1f, Prog:%.1f | Out -> Az:%.1f, Inc:%.1f, Prog:%.1f",
+                _activeTargetName.c_str(), _tarAzAngle, _tarInclineAngle, _tarProgressAngle, _curAzAngle, _curInclineAngle, _curProgressAngle);
         } else if (_state == GIMBAL_STATE_PREPOINT) {
-            log_i("[Gimbal] PREPOINT | Target -> BaseAz:%.1f, Incline:%.1f | Out -> Az:%.1f, Inc:%.1f, Prog:%.1f",
-                _tarAzAngle, _tarInclineAngle, _curAzAngle, _curInclineAngle, _curProgressAngle);
+            log_i("[Gimbal] PREPOINT [%s] | Target -> BaseAz:%.1f, Incline:%.1f | Out -> Az:%.1f, Inc:%.1f, Prog:%.1f",
+                _activeTargetName.c_str(), _tarAzAngle, _tarInclineAngle, _curAzAngle, _curInclineAngle, _curProgressAngle);
         }
     }
 }
-
-

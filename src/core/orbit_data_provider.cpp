@@ -210,6 +210,9 @@ static void processRecentLaunchItem(std::vector<RecentLaunchItem>& tempLaunches,
         }
         item.repSatName = record.name;
         item.iconType = ICON_SATELLITE;
+        item.repTLE.name = record.name;
+        item.repTLE.baseScore = 0;
+        SGP4Calc::buildPseudoTle(record, item.repTLE.line1, item.repTLE.line2);
         tempLaunches.push_back(item);
         if (outPhases) {
             std::vector<float> pList;
@@ -318,7 +321,7 @@ bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& te
 
 static const char* META_CACHE_PATH = "/recent_launches_meta.bin";
 static const uint32_t META_MAGIC = 0x534B594C; // "SKYL"
-static const uint8_t META_VERSION = 1;
+static const uint8_t META_VERSION = 2;
 
 static void writeBinStr(File& f, const String& s) {
     uint8_t len = (uint8_t)min((size_t)s.length(), (size_t)255);
@@ -390,10 +393,14 @@ bool OrbitDataProvider::saveRecentLaunchesMeta(const std::vector<RecentLaunchIte
             f.write((const uint8_t*)&pt.AlongTrackPhase, sizeof(pt.AlongTrackPhase));
             f.write((const uint8_t*)&pt.brightness, sizeof(pt.brightness));
         }
+
+        // Version 2: Write repTLE
+        writeBinStr(f, item.repTLE.line1);
+        writeBinStr(f, item.repTLE.line2);
     }
     
     f.close();
-    LOG_I("RECENT_LAUNCH", "Saved %d launch items to meta snapshot (%s).", (int)items.size(), META_CACHE_PATH);
+    LOG_I("RECENT_LAUNCH", "Saved %d launch items to meta snapshot (%s, v%d).", (int)items.size(), META_CACHE_PATH, (int)ver);
     return true;
 }
 
@@ -410,7 +417,7 @@ bool OrbitDataProvider::loadRecentLaunchesMeta(std::vector<RecentLaunchItem>& it
         f.close();
         return false;
     }
-    if (f.read(&ver, sizeof(ver)) != sizeof(ver) || ver != META_VERSION) {
+    if (f.read(&ver, sizeof(ver)) != sizeof(ver) || (ver != 1 && ver != 2)) {
         f.close();
         return false;
     }
@@ -458,12 +465,18 @@ bool OrbitDataProvider::loadRecentLaunchesMeta(std::vector<RecentLaunchItem>& it
             f.read((uint8_t*)&pt.brightness, sizeof(pt.brightness));
             item.proxyFormation.push_back(pt);
         }
+
+        if (ver >= 2) {
+            item.repTLE.line1 = readBinStr(f);
+            item.repTLE.line2 = readBinStr(f);
+            item.repTLE.name = item.repSatName.length() > 0 ? item.repSatName : item.displayName;
+        }
         
         items.push_back(item);
     }
     
     f.close();
-    LOG_I("RECENT_LAUNCH", "Fast-loaded %d launch items from meta snapshot!", (int)items.size());
+    LOG_I("RECENT_LAUNCH", "Fast-loaded %d launch items from meta snapshot (v%d)!", (int)items.size(), (int)ver);
     return !items.empty();
 }
 
@@ -513,8 +526,7 @@ bool OrbitDataProvider::loadRecentLaunchesFromCache(std::vector<RecentLaunchItem
 }
 
 // Page load level 3 objects from jsonl file
-// Page load level 3 objects from jsonl file
-extern std::vector<LazyObjectItem> g_level3Objects;
+extern Level3ObjectList g_level3Objects;
 extern volatile bool recentLaunchDownloading;
 bool OrbitDataProvider::loadLevel3ObjectsPage(const RecentLaunchItem& item, int page) {
     if (recentLaunchDownloading) return false;
@@ -525,6 +537,7 @@ bool OrbitDataProvider::loadLevel3ObjectsPage(const RecentLaunchItem& item, int 
     int skipCount = page * 5;
     int loadCount = 0;
     int matchIndex = 0;
+    int lineCount = 0;
     
     String cosparForm = "";
     if (item.batchId.length() == 5 && isdigit(item.batchId[0]) && isdigit(item.batchId[1])) {
@@ -558,6 +571,7 @@ bool OrbitDataProvider::loadLevel3ObjectsPage(const RecentLaunchItem& item, int 
         if (c == '\n' || c == '\r') {
             if (linePos > 0) {
                 lineBuf[linePos] = '\0';
+                lineCount++;
                 
                 // 零堆内存开销极速子串匹配
                 bool match = false;
@@ -570,19 +584,28 @@ bool OrbitDataProvider::loadLevel3ObjectsPage(const RecentLaunchItem& item, int 
                 if (match) {
                     if (matchIndex >= skipCount) {
                         if (parser.parse(lineBuf, record)) {
-                            LazyObjectItem obj;
-                            obj.name = record.name;
-                            obj.orbit = record; 
-                            obj.calc.init(obj.orbit);
-                            obj.lastGeoValid = false;
-                            obj.isVisible = false;
-                            g_level3Objects.push_back(obj);
-                            loadCount++;
+                            if (g_level3Objects.count < Level3ObjectList::MAX_ITEMS) {
+                                auto& obj = g_level3Objects.items[g_level3Objects.count++];
+                                obj.name = record.name;
+                                obj.orbit = record; 
+                                obj.calc.init(obj.orbit);
+                                obj.lastGeoValid = false;
+                                obj.isVisible = false;
+                                obj.cache.lastCalcTime = 0;
+                                obj.cache.past.clear();
+                                obj.cache.future.clear();
+                                loadCount++;
+                            }
                         }
                     }
                     matchIndex++;
                 }
                 linePos = 0;
+                
+                if (lineCount % 50 == 0) {
+                    esp_task_wdt_reset();
+                    taskYIELD();
+                }
             }
         } else {
             if (linePos < sizeof(lineBuf) - 1) {

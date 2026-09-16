@@ -42,19 +42,29 @@ private:
     float _tarAzAngle;
     float _tarInclineAngle;
     float _tarProgressAngle;
+
+    // SmoothDamp 速度记忆变量 (deg/s)
+    float _velAz;
+    float _velIncline;
+    float _velProgress;
     
     // 预瞄准和跟踪参数
     unsigned long _lastTick;
     unsigned long _initStartTime;
     bool _isPrepointing;
+    String _activeTargetName;
     
-    // 平滑滤波器参数
-    float _lerpFactor;      // 跟踪模式的Lerp因子 (0.0f - 1.0f)
-    float _maxDegPerSec;    // 最大度数/秒，防止焦点切换和自检时的骤动
+    // 动力学平滑滤波器参数
+    float _maxDegPerSec;    // 最大线速度限制 (deg/s)
+    float _smoothTime;      // 缓启缓停阻尼平滑时间 (s)
     unsigned long _lastLogTick;
 
+    // 50Hz (20ms) 定频后台运动控制任务句柄
+    TaskHandle_t _motionTaskHandle;
+
+    static void motionTaskEntry(void *param);
     void updateHardwareServos();
-    void processLerp(float dt);
+    void processSmoothDamp(float dt);
     void calculateArchAngles(float trackHeading, float maxEl, float progressDeg, float satAz, float &outAz, float &outIncline, float &outProgress);
     void updateStatus();
     void setLEDsByState();
@@ -64,10 +74,11 @@ public:
     
     bool begin(TwoWire *wire = &Wire, uint8_t sda = 2, uint8_t scl = 1, uint32_t freq = 100000);
     void tick();
+    void motionTick(float dt);
     
     // 轨道拱门专用输入接口 (trackHeading 为轨道天面飞行航向角，satAz 为卫星侧向方位角)
-    void setTargetArch(float trackHeading, float maxElevation, float progressDeg, float satAz = 90.0f);
-    void setTargetPrePointArch(float trackHeading, float maxElevation, float satAz = 90.0f);
+    void setTargetArch(float trackHeading, float maxElevation, float progressDeg, float satAz = 90.0f, const char* targetName = nullptr);
+    void setTargetPrePointArch(float trackHeading, float maxElevation, float satAz = 90.0f, const char* targetName = nullptr);
     
     // 兼容传统输入接口
     void setTargetTrack(float realAz, float realEl, float realAltKm);
@@ -86,7 +97,9 @@ public:
     bool isOnline() const { return _isOnline; }
     float getCurrentmA() const { return _currentmA; }
     GimbalState getState() const { return _state; }
+
+    // 经典临界阻尼平滑数学算法 (Critical Damping SmoothDamp)
+    static float smoothDamp(float current, float target, float &currentVelocity, float smoothTime, float maxSpeed, float dt);
 };
 
 #endif
-

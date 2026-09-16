@@ -738,7 +738,10 @@ const char* I18N::get(TextId id) {
 
 bool I18N::isFirstStart() {
     if (!_initialized) begin();
-    // 如果 lang 还没被写入，即为首次启动
+    int langCode = i18nPrefs.getInt("lang", -1);
+    if (langCode >= 0 && langCode <= 3) {
+        return false;
+    }
     return !i18nPrefs.isKey("lang");
 }
 
