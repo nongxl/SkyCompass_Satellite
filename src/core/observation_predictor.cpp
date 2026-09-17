@@ -87,13 +87,38 @@ int ObservationPredictor::calculateScore(float maxElevation, float visibleDurati
     return score;
 }
 
-std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, double stdMag, uint32_t startTime, int daysToPredict) {
+int ObservationPredictor::calculateRadioScore(float maxElevation, float duration) {
+    int score = 1;
+    if (maxElevation >= 65.0f) {
+        score = 4;
+    } else if (maxElevation >= 40.0f) {
+        score = 3;
+    } else if (maxElevation >= 25.0f) {
+        score = 2;
+    } else {
+        score = 1;
+    }
+    
+    // 通联窗口时长裕量与大仰角加成
+    if (duration >= 480.0f && maxElevation >= 25.0f) {
+        score += 1;
+    }
+    if (maxElevation >= 75.0f) {
+        score += 1;
+    }
+    
+    if (score > 5) score = 5;
+    if (score < 1) score = 1;
+    return score;
+}
+
+std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, double stdMag, uint32_t startTime, int daysToPredict, bool isRadioTarget) {
     std::vector<PassEvent> passes;
     passes.reserve(6);
     
     // If the standard magnitude is very dim, it will never be visible to the naked eye (limit is 8.5)
-    // We bypass calculation to save CPU and avoid Task Watchdog issues on high-altitude/geostationary satellites
-    if (stdMag >= 8.5) {
+    // We bypass calculation for visual satellites, but amateur radio satellites are allowed (day/night RF window)
+    if (stdMag >= 8.5 && !isRadioTarget) {
         return passes;
     }
     
@@ -290,7 +315,19 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                     }
                     currentPass.epoch = parseTleEpoch(tle.line1);
 
-                    if (currentPass.isVisible && currentPass.visibleDuration > 30 && currentPass.maxBrightness <= 8.5) {
+                    if (isRadioTarget && currentPass.maxElevation >= 15.0f) {
+                        // 业余无线电卫星通联过境：全天候（昼夜皆可），以天线仰角与通联窗口时长为核心依据
+                        currentPass.isRadioPass = true;
+                        currentPass.eventType = 8;
+                        currentPass.eventTitle = "Radio Pass";
+                        float durSec = (float)(currentPass.losTime - currentPass.aosTime);
+                        char buf[64];
+                        snprintf(buf, sizeof(buf), "Radio window (El: %.0f°, %.1f min)", currentPass.maxElevation, durSec / 60.0f);
+                        currentPass.eventDesc = buf;
+                        
+                        currentPass.baseScore = calculateRadioScore(currentPass.maxElevation, durSec);
+                        currentPass.score = currentPass.baseScore;
+                    } else if (currentPass.isVisible && currentPass.visibleDuration > 30 && currentPass.maxBrightness <= 8.5) {
                         MoonCalculator moonCalc(_pm);
                         MoonPositionData moonPos = moonCalc.calculatePosition(currentPass.maxElevTime, _userLat, _userLon);
                         
@@ -381,7 +418,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                         if (currentPass.score > 5) currentPass.score = 5;
                         if (currentPass.score < 1) currentPass.score = 1;
                     } else {
-                        // Pass in daytime or Earth shadow (e.g. Hubble, amateur radio)
+                        // Pass in daytime or Earth shadow (e.g. Hubble)
                         currentPass.score = 1;
                     }
                     

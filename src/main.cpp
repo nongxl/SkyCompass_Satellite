@@ -1225,10 +1225,11 @@ void rebuildTreeLocal(std::vector<TreeItem>& tree, const std::vector<PassEvent>&
         if (catExpanded[c]) {
             for (int i = 0; i < passes.size(); i++) {
                 const auto& p = passes[i];
+                bool isPassValid = (p.isVisible || p.isRadioPass);
                 bool match = false;
-                if (c == 0 && p.isVisible && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
-                else if (c == 1 && p.isVisible && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
-                else if (c == 2 && p.isVisible && p.score >= 4 && p.losTime >= current_unix) match = true;
+                if (c == 0 && isPassValid && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
+                else if (c == 1 && isPassValid && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
+                else if (c == 2 && isPassValid && p.score >= 4 && p.losTime >= current_unix) match = true;
                 else if (c == 3 && p.losTime >= current_unix) match = true;
                 
                 if (match) {
@@ -1311,25 +1312,40 @@ bool isCandidateForPassPrediction(int satIndex) {
     
     if (!isSel) return false;
     
-    // 排除地球静止同步卫星与深空探测器
-    if (type == SAT_TYPE_GEO_TV || type == SAT_TYPE_DEEP_SPACE) return false;
+    // 1. 严格排除非近地/无过境预测意义的目标：静止电视星、深空探测器、历史无轨道目标
+    if (type == SAT_TYPE_GEO_TV || type == SAT_TYPE_DEEP_SPACE || type == SAT_TYPE_HISTORICAL) {
+        return false;
+    }
     
-    // TLE 合法性检查
-    if (tle.line1.length() < 14 || tle.line2.length() < 14) return false;
+    // 2. TLE 完整性检查
+    if (tle.line1.length() < 14 || tle.line2.length() < 63) return false;
     
-    // 百科收录卫星的高亮度目视与星标筛选（无星标目标预先排除）
+    // 3. 轨道高度纳秒级快检：必须是近地轨道（LEO），每日运行圈数 mm >= 11.5（对应高度 < 1500km）
+    // 瞬间排除中高轨（MEO 如 GPS/北斗、GEO/HEO 如静止卫星），避免无意义的 SGP4 积分运算开销
+    double meanMotion = tle.line2.substring(52, 63).toDouble();
+    if (meanMotion < 11.5) {
+        return false;
+    }
+    
+    // 4. 百科收录卫星检查：如果是业余无线电卫星，直接放行（支持全天候无线电通联）；若是纯目视卫星，则要求目视可见标签与高亮度
+    bool isRadioSat = (type == SAT_TYPE_HAM);
     if (satIndex < NUM_BUILTIN_SATELLITES) {
         const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(noradId);
         if (entry) {
-            bool isVisualVisible = (entry->flags & FLAG_VISIBLE) != 0;
-            bool isHighBrightness = (entry->stdMag <= 4.0f);
-            if (!isVisualVisible && !isHighBrightness) {
-                return false; // 无目视星标价值，预先排除
+            if ((entry->flags & FLAG_RADIO) != 0) {
+                isRadioSat = true;
+            }
+            if (!isRadioSat) {
+                bool isVisualVisible = (entry->flags & FLAG_VISIBLE) != 0;
+                bool isHighBrightness = (entry->stdMag <= 4.2f);
+                if (!isVisualVisible || !isHighBrightness) {
+                    return false; // 排除暗弱且非无线电的目标
+                }
             }
         }
     } else {
-        // 自定义添加卫星：若标准星等过暗 (>= 6.5) 则预先排除
-        if (stdMag >= 6.5f) return false;
+        // 自定义添加卫星：非无线电卫星若标准星等暗于 4.2 则排除
+        if (!isRadioSat && stdMag > 4.2f) return false;
     }
     
     return true;
@@ -1413,24 +1429,44 @@ void predictorTask(void* parameter) {
             
             // === PHASE 1: Fast 24-Hour (Tonight) Pass Calculation (< 300ms) ===
             std::vector<PassEvent> phase1Passes;
-            size_t maxAllocP1 = ESP.getMaxAllocHeap();
-            size_t p1Cap = (maxAllocP1 > 2500) ? (maxAllocP1 - 1500) / sizeof(PassEvent) : 8;
-            if (p1Cap > 16) p1Cap = 16;
-            phase1Passes.reserve(p1Cap);
+            phase1Passes.reserve(16);
             
-            // Phase 1 - 候选高亮度目视收录卫星
+            // Phase 1 - 候选高亮度目视与业余无线电卫星
             for (int satIdx : candidateSatIndices) {
                 vTaskDelay(1);
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
+                if (phase1Passes.size() >= 16 || ESP.getFreeHeap() < 24000 || ESP.getMaxAllocHeap() < 3500) {
+                    LOG_I("APP", "Predictor task Phase 1 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
+                          (unsigned int)ESP.getFreeHeap(), (int)phase1Passes.size());
+                    break;
+                }
+                
                 TLEData tle;
                 float stdMag = 3.0f;
+                bool isRadioTarget = false;
                 lockSatMutex();
                 tle = g_satellites[satIdx].tle;
                 stdMag = g_satellites[satIdx].stdMag;
+                if (g_satellites[satIdx].type == SAT_TYPE_HAM) {
+                    isRadioTarget = true;
+                }
                 unlockSatMutex();
                 
-                auto passes1 = predictor->predictPasses(tle, stdMag, startTime, 1);
+                if (satIdx < NUM_BUILTIN_SATELLITES) {
+                    const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(g_satellites[satIdx].noradId);
+                    if (entry && (entry->flags & FLAG_RADIO)) {
+                        isRadioTarget = true;
+                    }
+                }
+                
+                auto passes1 = predictor->predictPasses(tle, stdMag, startTime, 1, isRadioTarget);
+                if (passes1.size() > 2) {
+                    std::sort(passes1.begin(), passes1.end(), [](const PassEvent& a, const PassEvent& b) {
+                        return a.score > b.score;
+                    });
+                    passes1.resize(2);
+                }
                 for (auto& p : passes1) {
                     p.satSelected = true;
                     p.satIndex = satIdx;
@@ -1445,6 +1481,10 @@ void predictorTask(void* parameter) {
                 vTaskDelay(1);
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
+                if (phase1Passes.size() >= 16 || ESP.getFreeHeap() < 24000 || ESP.getMaxAllocHeap() < 3500) {
+                    break;
+                }
+                
                 TLEData rlTle;
                 lockSatMutex();
                 if (rlIdx >= 0 && rlIdx < (int)g_recentLaunches.size()) {
@@ -1454,6 +1494,12 @@ void predictorTask(void* parameter) {
                 
                 if (rlTle.line1.length() >= 14 && rlTle.line2.length() >= 14) {
                     auto passes1 = predictor->predictPasses(rlTle, 3.0, startTime, 1);
+                    if (passes1.size() > 2) {
+                        std::sort(passes1.begin(), passes1.end(), [](const PassEvent& a, const PassEvent& b) {
+                            return a.score > b.score;
+                        });
+                        passes1.resize(2);
+                    }
                     for (auto& p : passes1) {
                         p.satSelected = true;
                         p.satIndex = -100;
@@ -1485,16 +1531,28 @@ void predictorTask(void* parameter) {
                 if (a.score != b.score) return a.score > b.score;
                 return a.aosTime < b.aosTime;
             });
+            if (upcomingPhase1.size() > 16) {
+                upcomingPhase1.resize(16);
+            }
             
             std::vector<TreeItem> tempDisplayTree1;
             rebuildTreeLocal(tempDisplayTree1, upcomingPhase1, current_unix + timeMachineOffset);
             
+            // 立即以 swap 零拷贝安全发布至 UI，绝不执行 operator= 避免 bad_alloc 崩溃
             lockPassMutex();
-            recommendedPasses = upcomingPhase1;
-            displayTree = tempDisplayTree1;
+            recommendedPasses.swap(upcomingPhase1);
+            displayTree.swap(tempDisplayTree1);
             predictionsReady = true;
             lastPredictionBaseTime = startTime;
             unlockPassMutex();
+            
+            // 立即彻底释放 Phase 1 临时堆内存，绝不带入 Phase 2
+            phase1Passes.clear();
+            phase1Passes.shrink_to_fit();
+            upcomingPhase1.clear();
+            upcomingPhase1.shrink_to_fit();
+            tempDisplayTree1.clear();
+            tempDisplayTree1.shrink_to_fit();
             
             // === PHASE 2: Background 7-Day Full Pass Calculation ===
             completedCount = 0;
@@ -1517,12 +1575,23 @@ void predictorTask(void* parameter) {
                 
                 TLEData tle;
                 float stdMag = 3.0f;
+                bool isRadioTarget = false;
                 lockSatMutex();
                 tle = g_satellites[satIdx].tle;
                 stdMag = g_satellites[satIdx].stdMag;
+                if (g_satellites[satIdx].type == SAT_TYPE_HAM) {
+                    isRadioTarget = true;
+                }
                 unlockSatMutex();
                 
-                auto passes = predictor->predictPasses(tle, stdMag, startTime, 7);
+                if (satIdx < NUM_BUILTIN_SATELLITES) {
+                    const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(g_satellites[satIdx].noradId);
+                    if (entry && (entry->flags & FLAG_RADIO)) {
+                        isRadioTarget = true;
+                    }
+                }
+                
+                auto passes = predictor->predictPasses(tle, stdMag, startTime, 7, isRadioTarget);
                 if (passes.size() > 4) {
                     std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
                         return a.score > b.score;
@@ -1601,6 +1670,10 @@ void predictorTask(void* parameter) {
             return a.aosTime < b.aosTime;
         });
 
+        if (upcomingPasses.size() > 20) {
+            upcomingPasses.resize(20);
+        }
+
         // Compute local temporary variables outside the critical section to prevent malloc/OOM within spinlocks
         std::vector<TreeItem> tempDisplayTree;
         rebuildTreeLocal(tempDisplayTree, upcomingPasses, current_unix + timeMachineOffset);
@@ -1612,6 +1685,13 @@ void predictorTask(void* parameter) {
         lastPredictionBaseTime = startTime; // 写入本次成功的基准时间缓存
         g_currentPredictingBaseTime = 0;
         unlockPassMutex();
+        
+        allPasses.clear();
+        allPasses.shrink_to_fit();
+        upcomingPasses.clear();
+        upcomingPasses.shrink_to_fit();
+        tempDisplayTree.clear();
+        tempDisplayTree.shrink_to_fit();
         
         if (g_orbitCalculating) {
             g_orbitCalculating = false;
@@ -7550,17 +7630,6 @@ void loop() {
                     int maxElX = isCjk ? 120 : 115;
                     earth_renderer->getCanvas()->drawString((String((int)p.maxElevation) + "°").c_str(), maxElX, 70);
                     
-                    // Reason: (y=82)
-                    earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
-                    earth_renderer->getCanvas()->drawString(I18N::get(TXT_PASS_REASON), 5, 82);
-                    String reason = I18N::get(TXT_PASS_REASON_DARK);
-                    if (p.maxBrightness <= 2.0) reason += I18N::get(TXT_PASS_REASON_BRIGHT);
-                    if (p.maxElevation > 60) reason += I18N::get(TXT_PASS_REASON_ZENITH);
-                    if (p.visibleDuration > 300) reason += I18N::get(TXT_PASS_REASON_LONG);
-                    earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                    int reasonX = isCjk ? 40 : 50;
-                    earth_renderer->getCanvas()->drawString(reason.c_str(), reasonX, 82);
-                    
                     int sIdx = -1;
                     for (int i = 0; i < NUM_SATELLITES; i++) {
                         if (g_satellites[i].name == p.satName) { sIdx = i; break; }
@@ -7583,6 +7652,25 @@ void loop() {
                     } else if (g_recentLaunchFocusMode) {
                         satCalc = &g_repSatCalc;
                     }
+
+                    // Reason: (y=82)
+                    earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
+                    earth_renderer->getCanvas()->drawString(I18N::get(TXT_PASS_REASON), 5, 82);
+                    String reason = "";
+                    if (p.isRadioPass || satType == SAT_TYPE_HAM) {
+                        reason = I18N::get(TXT_PASS_REASON_RADIO);
+                        if (p.maxElevation >= 60) reason += I18N::get(TXT_PASS_REASON_HIGH_EL);
+                        else if (p.maxElevation >= 30) reason += I18N::get(TXT_PASS_REASON_GOOD_EL);
+                        if ((p.losTime - p.aosTime) >= 480) reason += I18N::get(TXT_PASS_REASON_LONG_WINDOW);
+                    } else {
+                        reason = I18N::get(TXT_PASS_REASON_DARK);
+                        if (p.maxBrightness <= 2.0) reason += I18N::get(TXT_PASS_REASON_BRIGHT);
+                        if (p.maxElevation > 60) reason += I18N::get(TXT_PASS_REASON_ZENITH);
+                        if (p.visibleDuration > 300) reason += I18N::get(TXT_PASS_REASON_LONG);
+                    }
+                    earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
+                    int reasonX = isCjk ? 40 : 50;
+                    earth_renderer->getCanvas()->drawString(reason.c_str(), reasonX, 82);
                     
                     if (satCalc != nullptr) {
                         double tx, ty, tz;
@@ -7662,9 +7750,10 @@ void loop() {
                     uint32_t currentSimTime = current_unix + timeMachineOffset;
                     for (const auto& p : localRecommendedPasses) {
                         if (p.losTime >= currentSimTime) {
-                            if (p.aosTime < currentSimTime + 24*3600) catCounts[0]++;
-                            if (p.aosTime < currentSimTime + 7*24*3600) catCounts[1]++;
-                            if (p.score >= 4) catCounts[2]++;
+                            bool isPassValid = (p.isVisible || p.isRadioPass);
+                            if (isPassValid && p.aosTime < currentSimTime + 24*3600) catCounts[0]++;
+                            if (isPassValid && p.aosTime < currentSimTime + 7*24*3600) catCounts[1]++;
+                            if (isPassValid && p.score >= 4) catCounts[2]++;
                             catCounts[3]++;
                         }
                     }

@@ -21,12 +21,13 @@ struct PassEvent {
     
     bool isVisible;         // True if the pass is visually observable (in night + satellite illuminated)
     float visibleDuration;  // Duration of visibility in seconds
+    bool isRadioPass = false; // True if this pass meets amateur radio communication criteria
     
     int score;              // 1 to 5 stars
     int baseScore = 0;
     
     // === Event Engine fields ===
-    uint8_t eventType = 0;   // 0=NONE, 1=ZENITH_PASS, 2=LONG_PASS, 3=BRIGHT_PASS, 4=CONSTELLATION_TRAIN, 5=CONCURRENT_PASS, 6=MOON_PASS, 7=RECENT_LAUNCH
+    uint8_t eventType = 0;   // 0=NONE, 1=ZENITH_PASS, 2=LONG_PASS, 3=BRIGHT_PASS, 4=CONSTELLATION_TRAIN, 5=CONCURRENT_PASS, 6=MOON_PASS, 7=RECENT_LAUNCH, 8=RADIO_PASS
     int eventBonus = 0;
     String eventTitle = "";
     String eventDesc = "";
@@ -41,7 +42,7 @@ public:
     ObservationPredictor(double userLat, double userLon, double userAlt, class PositionManager* pm = nullptr);
     
     // Predict passes for a satellite over a given number of days starting from startTime
-    std::vector<PassEvent> predictPasses(const TLEData& tle, double stdMag, uint32_t startTime, int daysToPredict);
+    std::vector<PassEvent> predictPasses(const TLEData& tle, double stdMag, uint32_t startTime, int daysToPredict, bool isRadioTarget = false);
     
     // Post-process predicted passes to check for multi-satellite events (constellation trains, concurrent passes)
     static void postProcessEvents(std::vector<PassEvent>& passes, uint32_t startTime);
@@ -54,4 +55,7 @@ private:
     
     // Helper to calculate score based on max elevation, visible duration, and max brightness
     int calculateScore(float maxElevation, float visibleDuration, float maxBrightness);
+    
+    // Helper to calculate score for radio passes based on max elevation and pass duration
+    int calculateRadioScore(float maxElevation, float duration);
 };
