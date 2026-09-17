@@ -534,6 +534,182 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         false  // defaultSelected
     },
 
+    // 46494 NORBI (LoRa 科学立方星)
+    {
+        46494,
+        "NORBI",
+        Category::COMMUNICATIONS,
+        ICON_SATELLITE,
+        "俄罗斯新西伯利亚国立大学的6U科研立方星。全天候向全球TinyGS地面站广播436.700MHz LoRa调制遥测数据包(SF9/BW 125kHz, 同步字0x12)，是业余无线电LoRa监测最具代表性的在轨标杆目标。",
+        "6U CubeSat by Novosibirsk State Univ. Broadcasts 436.700 MHz LoRa telemetry (SF9/BW 125kHz, SyncWord 0x12) globally to TinyGS stations, a benchmark amateur satellite for LoRa tracking.",
+        "ノヴォシビルスク大学の6U科学CubeSat。436.700MHz LoRa変調(SF9/BW 125k/SW 0x12)でテレメトリを送信し、TinyGS地上局で最も広く受信される代表的な衛星。",
+        "CubeSat 6U de la Univ. de Novosibirsk. Transmite telemetria LoRa en 436.700 MHz (SF9/BW 125k/SW 0x12) a estaciones TinyGS en todo el mundo, un icono de seguimiento LoRa.",
+        FLAG_RADIO | FLAG_SCIENCE,
+        TFT_CYAN,
+        0,
+        9.0,
+        SAT_TYPE_HAM,
+        "436.700",
+        "LoRa (SF9/BW125/SW18)",
+        "",
+        "",
+        false  // defaultSelected
+    },
+
+    // 62676 FOSSASAT-2E (开源 LoRa 星座)
+    {
+        62676,
+        "FOSSASAT-2E",
+        Category::COMMUNICATIONS,
+        ICON_SATELLITE,
+        "FOSSA Systems研制的皮型微纳卫星。专为全球开源业余无线电与物联网设计，使用436.700MHz下行发射LoRa扩频遥测信号(SF10/BW 125kHz, 同步字0x12)，是TinyGS开源卫星地面站网络的核心成员。",
+        "PocketQube by FOSSA Systems for open-source ham radio and IoT. Downlinks LoRa spread-spectrum telemetry on 436.700 MHz (SF10/BW 125kHz, SyncWord 0x12), a core target of the TinyGS network.",
+        "FOSSA Systemsによるオープンソース超小型ピコ衛星。IoTとアマチュア無線向けに436.700MHzでLoRaテレメトリ(SF10/BW 125k)を送信するTinyGSの中核衛星。",
+        "Pico-satelite de FOSSA Systems para IoT y radioaficionados. Emite telemetria LoRa en 436.700 MHz (SF10/BW 125k/SW 0x12), objetivo esencial de la red TinyGS.",
+        FLAG_RADIO | FLAG_SCIENCE,
+        TFT_MAGENTA,
+        0,
+        10.0,
+        SAT_TYPE_HAM,
+        "436.700",
+        "LoRa (SF10/BW125/SW18)",
+        "",
+        "",
+        false  // defaultSelected
+    },
+
+    // 61751 Vladivostok-1 (符拉迪沃斯托克一号)
+    {
+        61751,
+        "Vladivostok-1",
+        Category::COMMUNICATIONS,
+        ICON_SATELLITE,
+        "远东联邦大学与Space-π联合研制的8U科研立方星。搭载近地空间辐射监测仪与太空物联网载荷，下行以436.805MHz持续发送LoRa遥测信号(SF10/BW 125k, 同步字0x12)，过境欧亚上空信号活跃。",
+        "8U CubeSat by Far Eastern Federal Univ. & Space-Pi. Carries radiation sensors and IoT payloads, transmitting 436.805 MHz LoRa telemetry (SF10/BW 125k, SyncWord 0x12), very active across Eurasia.",
+        "極東連邦大学とSpace-Piによる8U科学CubeSat。宇宙放射線センサーとIoTペイロードを搭載し、436.805MHz LoRa(SF10/BW 125k)でテレメトリを送信。",
+        "CubeSat 8U de la Univ. Federal del Lejano Oriente y Space-Pi. Mide radiacion y transmite telemetria LoRa en 436.805 MHz (SF10/BW 125k/SW 0x12).",
+        FLAG_RADIO | FLAG_SCIENCE,
+        TFT_YELLOW,
+        0,
+        9.5,
+        SAT_TYPE_HAM,
+        "436.805",
+        "LoRa (SF10/BW125/SW18)",
+        "",
+        "",
+        false  // defaultSelected
+    },
+
+    // 57179 NORBY-2 (诺尔比二号)
+    {
+        57179,
+        "NORBY-2",
+        Category::COMMUNICATIONS,
+        ICON_SATELLITE,
+        "新西伯利亚国立大学的二代先进6U立方星。搭载真空紫外太阳日冕望远镜与太空物联网通信试验载荷，以435.600MHz周期性下行广播LoRa遥测包(SF9/BW 125k, 同步字0x12)。",
+        "Second-gen 6U CubeSat by Novosibirsk State Univ. Features a solar UV coronagraph and IoT experiment, broadcasting 435.600 MHz LoRa telemetry (SF9/BW 125k, SyncWord 0x12).",
+        "ノヴォシビルスク大学の第2世代6U先進CubeSat。太陽紫外線コロナ望遠鏡とIoT実験機を搭載し、435.600MHz LoRa(SF9/BW 125k)でテレメトリを周期送信。",
+        "CubeSat 6U de 2da generacion de la Univ. de Novosibirsk. Equipado con coronografo solar e IoT, emite telemetria LoRa en 435.600 MHz (SF9/BW 125k).",
+        FLAG_RADIO | FLAG_SCIENCE,
+        TFT_CYAN,
+        0,
+        9.5,
+        SAT_TYPE_HAM,
+        "435.600",
+        "LoRa (SF9/BW125/SW18)",
+        "",
+        "",
+        false  // defaultSelected
+    },
+
+    // 57172 UMKA-1 (RS40S 乌姆卡一号)
+    {
+        57172,
+        "UMKA-1 (RS40S)",
+        Category::COMMUNICATIONS,
+        ICON_SATELLITE,
+        "莫斯科中学生空间科普教育3U立方星。配备高灵敏度天文望远镜，下行以437.625MHz广播慢扫描电视(SSTV)图像与LoRa/GFSK数字遥测(SF8/BW 125k)，是全球极受欢迎的科普试验星。",
+        "Educational 3U CubeSat built with school students in Moscow. Equipped with an optical telescope, broadcasting 437.625 MHz SSTV images and LoRa/GFSK telemetry (SF8/BW 125k).",
+        "モスクワの中学生による教育用3U CubeSat。高感度光学望遠鏡を搭載し、437.625MHzでSSTV画像やLoRa/GFSKテレメトリ(SF8/BW 125k)を送信する人気衛星。",
+        "CubeSat 3U educativo desarrollado con estudiantes en Moscu. Transmite imagenes SSTV y telemetria LoRa/GFSK en 437.625 MHz (SF8/BW 125k) con telescopio optico.",
+        FLAG_RADIO | FLAG_SCIENCE,
+        TFT_GREEN,
+        0,
+        9.0,
+        SAT_TYPE_HAM,
+        "437.625",
+        "SSTV/LoRa (SF8/BW125)",
+        "",
+        "",
+        false  // defaultSelected
+    },
+
+    // 40908 LilacSat-2 (哈工大 CAS-3H 紫丁香二号)
+    {
+        40908,
+        "LilacSat-2",
+        Category::COMMUNICATIONS,
+        ICON_SATELLITE,
+        "哈工大学生自主研制的微纳卫星(CAS-3H)。下行发射437.200MHz 4800bps GFSK低功耗数字遥测数据包，兼具FM语音中继，是中国业余微纳卫星数字遥测的经典里程碑。",
+        "CubeSat CAS-3H developed by Harbin Institute of Technology. Features 437.200 MHz 4800 bps GFSK digital telemetry and FM repeater, a milestone Chinese amateur satellite.",
+        "ハルビン工業大学開発のCubeSat(CAS-3H)。437.200MHz 4800bps GFSKのデジタルテレメトリとFM中継器を搭載した著名な学生衛星。",
+        "CubeSat CAS-3H del Inst. de Tecnologia de Harbin. Emite telemetria digital GFSK a 4800 bps en 437.200 MHz y repetidor FM, un hito amateur chino.",
+        FLAG_RADIO | FLAG_SCIENCE,
+        TFT_GREEN,
+        0,
+        8.5,
+        SAT_TYPE_HAM,
+        "437.200",
+        "4800 GFSK",
+        "144.350",
+        "",
+        false  // defaultSelected
+    },
+
+    // 50466 XW-3 (CAS-9 希望三号)
+    {
+        50466,
+        "XW-3 (CAS-9)",
+        Category::COMMUNICATIONS,
+        ICON_SATELLITE,
+        "中国业余卫星空间探测项目(CAMSAT)研制的6U业余卫星。下行以435.575MHz全天候发射4800bps GMSK数字遥测信标(AX.25格式)，信号强劲稳定，并搭载V/U线性转发器。",
+        "6U amateur satellite by CAMSAT. Transmits a continuous 435.575 MHz 4800 bps GMSK digital telemetry beacon (AX.25) and carries a V/U linear transponder.",
+        "中国アマチュア衛星(CAMSAT)による6U衛星。435.575MHz 4800bps GMSKのデジタルテレメトリビーコンを常時送信し、V/Uリニアトランスポンダを搭載。",
+        "Satelite de radioaficionados 6U de CAMSAT. Emite baliza digital GMSK a 4800 bps en 435.575 MHz (AX.25) y repetidor lineal V/U.",
+        FLAG_RADIO,
+        TFT_ORANGE,
+        0,
+        8.0,
+        SAT_TYPE_HAM,
+        "435.575",
+        "4800 GMSK",
+        "145.870",
+        "",
+        false  // defaultSelected
+    },
+
+    // 59112 SONATE-2 (高速 GFSK 遥测与星载 AI)
+    {
+        59112,
+        "SONATE-2",
+        Category::ASTRONOMY,
+        ICON_SATELLITE,
+        "德国维尔茨堡大学2024年发射的6U先进立方星。验证星载AI实时处理，下行以437.025MHz广播9600bps GFSK高速数字遥测，并可向爱好者发送太空SSTV慢扫描图像。",
+        "Advanced 6U CubeSat by Univ. of Wuerzburg launched in 2024. Tests on-board AI and transmits 437.025 MHz 9600 bps GFSK digital telemetry and SSTV images.",
+        "ヴュルツブルク大学の2024年打ち上げ6U先進CubeSat。星載AIを実証し、437.025MHz 9600bps GFSKで高速テレメトリやSSTV画像を送信。",
+        "CubeSat 6U de la Univ. de Wurzburgo lanzado en 2024. Prueba IA a bordo y transmite telemetria GFSK a 9600 bps en 437.025 MHz y SSTV.",
+        FLAG_RADIO | FLAG_SCIENCE,
+        TFT_GOLD,
+        0,
+        9.0,
+        SAT_TYPE_HAM,
+        "437.025",
+        "9600 GFSK",
+        "",
+        "",
+        false  // defaultSelected
+    },
+
     // ── 地球观测 ──
 
     // 39084 Landsat 8
@@ -1190,7 +1366,7 @@ String Encyclopedia::getFlagName(uint32_t flag) {
         case FLAG_SCIENCE:
             return (lang == LANG_ZH) ? "科学" : (lang == LANG_JA ? "科学" : (lang == LANG_ES ? "Ciencia" : "Science"));
         case FLAG_EARTH_OBS:
-            return (lang == LANG_ZH) ? "地面观测" : (lang == LANG_JA ? "地球観測" : (lang == LANG_ES ? "Obs terrestre" : "Earth Obs"));
+            return (lang == LANG_ZH) ? "地球观测" : (lang == LANG_JA ? "地球観測" : (lang == LANG_ES ? "Obs terrestre" : "Earth Obs"));
         default:
             return "";
     }

@@ -302,6 +302,11 @@ SkyCompass Satellite 的架构已经按以下路径完成开发并成功落地�
 - `[x]` **多语言国际化支持 (Multi-Language i18n)**：支持英语、简体中文、日语、西班牙语四语种实时切换与 NVS 保存。
 - `[x]` **极光与气辉绚丽视觉模式 (Aurora & Airglow Mode)**：在 3D 地球高纬度极区动态渲染极光带与大气气辉发光层。
 - `[x]` **背景亮星 / 星座参考系**：在 3D 和 2D 视图中渲染几颗极其明亮的导航星体（如天狼星），为用户的观测提供物理位置参照。
+- `[x]` **业余无线电卫星全天候过境预测与推荐 (HAM Pass Engine)**：突破目视夜空约束，全天候（昼夜皆可）计算业余卫星物理升落；依据天线仰角与通联窗口时长建立专属无线电推荐机制（仰角 $\ge 65^\circ$ 高推荐），并在卫星百科中系统收录在轨代表性 LoRa（NORBI、FOSSASAT-2E）与 UHF 数字遥测立方星（LilacSat-2、XW-3、SONATE-2）。
+- `[ ]` **Cap LoRa-1262 口袋卫星地面站 (Pocket Satellite Station)**：
+  - **动态多普勒自动射频调谐 (Doppler Auto-Tuning)**：利用本项目精确的站心距变化率（Range Rate），在过境窗口期通过 SPI 实时调谐 SX1262 射频频率，动态补偿太空无线电的多普勒频移（$\pm 10\text{ kHz}$）。
+  - **太空 LoRa 立方星遥测直收与解码 (LoRa CubeSat Direct Reception)**：针对 NORBI、FOSSASAT 等 436.700 MHz 业余 LoRa 卫星，利用 Cap LoRa-1262 硬件直接捕获太空下行报文，在 Cardputer 彩屏上实时打印信噪比（SNR）、场强（RSSI）与遥测 Hex 数据。
+  - **UHF (435~438 MHz) GFSK/GMSK 数据包引擎 (GFSK Telemetry & Packet Engine)**：依托 SX1262 原生 (G)FSK 硬件调制解调器，实现 AX.25 协议帧解析，接收紫丁香二号（LilacSat-2）或 XW-3 等高校与科研立方星的星上状态遥测。
 - `[ ]` **搜星过程可视化 (GNSS Skyplot)**：在屏幕上直观绘制 GNSS 星盘分布图与各卫星载噪比 (C/N0) 条形图，清晰呈现定位锁定过程。
 - `[ ]` **极度省电与定时唤醒 (Deep Sleep)**：计算出下一次过境的准确时间后，让 ESP32 进入深度睡眠模式，并在过境前几分钟通过 RTC 定时器自动唤醒亮屏。
 - `[ ]` **局域网 WebServer 导出**：建立轻量级本地 Web 服务器，允许用户使用手机通过 WiFi 访问，查看更详细的 24 小时过境日程表。

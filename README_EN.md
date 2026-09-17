@@ -289,6 +289,11 @@ The system is fully compatible with future 6-digit Catalog Numbers. It utilizes 
 - `[x]` **Multi-Language Support (i18n)**: Seamless live switching between English, Simplified Chinese, Japanese, and Spanish, saved in NVS.
 - `[x]` **Aurora & Airglow Visual Mode**: Renders glowing auroral ovals and atmospheric airglow layers on the 3D globe.
 - `[x]` **Celestial Background Stars**: Render bright reference stars (e.g., Sirius) on the 3D globe background.
+- `[x]` **All-Weather Amateur Satellite Pass Engine**: Predict amateur radio passes day and night without optical dark-sky constraints. Features elevation/duration-weighted radio scoring (el $\ge 65^\circ$ highly rated) and curated support for leading on-orbit LoRa (NORBI, FOSSASAT-2E) and UHF digital telemetry CubeSats (LilacSat-2, XW-3, SONATE-2).
+- `[ ]` **Cap LoRa-1262 Pocket Satellite Station**:
+  - **Dynamic Doppler Auto-Tuning**: Leverage real-time line-of-sight range-rate calculations to dynamically retune SX1262 RF frequencies via SPI, compensating for $\pm 10\text{ kHz}$ orbital Doppler shifts throughout the pass window.
+  - **Direct Space LoRa Telemetry Demodulation**: Directly capture and decode 436.700 MHz amateur LoRa packets (NORBI, FOSSASAT, etc.) on the Cardputer, showing real-time SNR, RSSI, and raw telemetry hex dumps on screen.
+  - **UHF (435~438 MHz) GFSK/GMSK Packet Engine**: Utilize the SX1262 hardware FSK/GFSK packet handler for AX.25 frame extraction, capturing orbital state telemetry from university CubeSats (e.g., LilacSat-2, XW-3).
 - `[ ]` **GNSS Satellite Skyplot Visualization**: Render visual skyplot and carrier-to-noise ratio (C/N0) bars for real-time constellation fix inspection.
 - `[ ]` **Deep Sleep Scheduling**: Calculate the next AOS time and put the ESP32 into deep sleep, scheduling an RTC timer to wake it up right before the pass.
 - `[ ]` **Local LAN WebServer**: Host a lightweight web server on the ESP32 to export full 7-day pass timetables to mobile browsers.

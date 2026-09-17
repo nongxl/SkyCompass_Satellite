@@ -188,6 +188,40 @@ volatile bool recentLaunchDownloading = false;
 volatile bool recentLaunchDownloadSuccess = false;
 volatile bool g_timeSynced = false;
 
+// 卫星百科分类筛选状态
+struct FilterCategoryItem {
+    const char* name_zh;
+    const char* name_en;
+    const char* name_ja;
+    const char* name_es;
+    Category cat;
+    uint32_t flag; // 匹配 flag 或 cat
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+    uint16_t textColor;
+};
+
+static const FilterCategoryItem g_filterCategories[9] = {
+    {"肉眼可见", "Visible", "裸眼可視", "Visible", Category::UNKNOWN, FLAG_VISIBLE, 90, 80, 20, TFT_YELLOW},
+    {"载人航天", "Crewed", "有人宇宙", "Tripulado", Category::HUMAN_SPACEFLIGHT, FLAG_CREWED, 20, 90, 50, TFT_GREEN},
+    {"无线电", "Radio", "アマチュア無線", "Radio", Category::UNKNOWN, FLAG_RADIO, 80, 30, 80, TFT_MAGENTA},
+    {"地球观测", "Earth Obs", "地球観測", "Obs Terr", Category::EARTH_OBSERVATION, FLAG_EARTH_OBS, 30, 80, 80, TFT_GREEN},
+    {"科学天文", "Science", "科学", "Ciencia", Category::ASTRONOMY, FLAG_SCIENCE, 50, 30, 90, TFT_GOLD},
+    {"气象", "Weather", "気象", "Meteorol", Category::WEATHER, FLAG_WEATHER, 20, 60, 90, TFT_CYAN},
+    {"导航", "Navigation", "航法", "Navegacion", Category::NAVIGATION, FLAG_NAVIGATION, 80, 20, 20, TFT_RED},
+    {"通信", "Comms", "通信", "Comun", Category::COMMUNICATIONS, 0, 60, 80, 110, TFT_WHITE},
+    {"历史残骸", "Debris/Hist", "歴史・残骸", "Historico", Category::HISTORIC_EVENT, FLAG_HISTORIC | FLAG_ROCKET_BODY | FLAG_DEBRIS, 90, 50, 20, TFT_ORANGE}
+};
+
+bool g_showCategoryFilterDialog = false;
+uint16_t g_selectedCategoryMask = 0; // 0 表示全选（无过滤）
+uint16_t g_tempCategoryMask = 0;
+int g_categoryFocusIndex = 0;
+std::vector<int> g_encyclopediaFilteredIndices;
+
+void updateEncyclopediaFilteredList();
+
 // FreeRTOS Mutex to protect g_satellites data structure from concurrent read/write race conditions
 SemaphoreHandle_t g_satMutex = NULL;
 
@@ -724,8 +758,8 @@ void getRepresentativeOrbitParams(const String& line2, float& inclination, float
 }
 String recentLaunchErrorMsg = "";
 bool recentLaunchBypassed = false;
-// Set to 48 (36 curated builtin + 12 custom) to ensure all entries fit while reclaiming ~27KB internal RAM
-const int MAX_SATELLITES = 48;
+// Set to 72 (59 curated builtin + 13 custom) to ensure all entries fit while keeping ample internal RAM
+const int MAX_SATELLITES = 72;
 SatRealtimeCache g_satCaches[MAX_SATELLITES];
 int NUM_BUILTIN_SATELLITES = 0;
 int NUM_SATELLITES = 0;
@@ -2372,6 +2406,7 @@ void downloadCustomSatTask(void* parameter) {
                 
                 downloadErrorMsg = "Download Success!";
                 noradInput = "";
+                updateEncyclopediaFilteredList();
                 
                 lockPassMutex();
                 predictionsReady = false;
@@ -3224,6 +3259,14 @@ void setup() {
                     else if (norad == 34937) g_satellites[i].tle = TLEManager::getHerschel_TLE();
                     else if (norad == 27607) g_satellites[i].tle = TLEManager::getSO50_TLE();
                     else if (norad == 43017) g_satellites[i].tle = TLEManager::getAO91_TLE();
+                    else if (norad == 46494) g_satellites[i].tle = TLEManager::getNORBI_TLE();
+                    else if (norad == 62676) g_satellites[i].tle = TLEManager::getFOSSASAT2E_TLE();
+                    else if (norad == 40908) g_satellites[i].tle = TLEManager::getLilacSat2_TLE();
+                    else if (norad == 50466) g_satellites[i].tle = TLEManager::getXW3_TLE();
+                    else if (norad == 59112) g_satellites[i].tle = TLEManager::getSONATE2_TLE();
+                    else if (norad == 61751) g_satellites[i].tle = TLEManager::getVladivostok1_TLE();
+                    else if (norad == 57179) g_satellites[i].tle = TLEManager::getNORBY2_TLE();
+                    else if (norad == 57172) g_satellites[i].tle = TLEManager::getUMKA1_TLE();
                     unlockSatMutex();
                 }
                 
@@ -3325,6 +3368,7 @@ void setup() {
                 LOG_I("APP", "Built-in satellites found in custom list. Performing Preferences cleanup.");
                 saveCustomSatellites();
             }
+            updateEncyclopediaFilteredList();
             
             Language currL_boot = I18N::getLanguage();
             g_loadingStatusText = (currL_boot == LANG_ZH) ? "构建火箭与群编队数据..." : ((currL_boot == LANG_JA) ? "ロケット・編隊データの構築中..." : ((currL_boot == LANG_ES) ? "Construyendo formaciones..." : "Building Launch Formations..."));
@@ -3613,6 +3657,115 @@ void drawServoTestPage() {
     canvas->clearClipRect();
 }
 
+void updateEncyclopediaFilteredList() {
+    g_encyclopediaFilteredIndices.clear();
+    for (int i = 0; i < NUM_SATELLITES; i++) {
+        if (g_selectedCategoryMask == 0) {
+            g_encyclopediaFilteredIndices.push_back(i);
+            continue;
+        }
+        
+        bool matched = false;
+        uint32_t noradId = g_satellites[i].noradId;
+        const EncyclopediaEntry* entry = (i < NUM_BUILTIN_SATELLITES) ? Encyclopedia::getEntryByNorad(noradId) : nullptr;
+        
+        for (int bit = 0; bit < 9; bit++) {
+            if (g_selectedCategoryMask & (1 << bit)) {
+                if (g_filterCategories[bit].flag != 0) {
+                    if ((g_filterCategories[bit].flag & FLAG_RADIO) && g_satellites[i].type == SAT_TYPE_HAM) {
+                        matched = true;
+                        break;
+                    }
+                    if (entry && (entry->flags & g_filterCategories[bit].flag)) {
+                        matched = true;
+                        break;
+                    }
+                }
+                if (g_filterCategories[bit].cat != Category::UNKNOWN) {
+                    if (entry && (entry->category == g_filterCategories[bit].cat ||
+                                 (g_filterCategories[bit].cat == Category::HISTORIC_EVENT && entry->category == Category::ROCKET_BODY))) {
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (matched) {
+            g_encyclopediaFilteredIndices.push_back(i);
+        }
+    }
+    
+    int maxIdx = g_encyclopediaFilteredIndices.size();
+    if (satSelectedIndex > maxIdx) {
+        satSelectedIndex = maxIdx > 0 ? (maxIdx - 1) : 0;
+    }
+    if (satSelectedIndex < 0) satSelectedIndex = 0;
+}
+
+void drawCategoryFilterDialog(LGFX_Sprite* canvas) {
+    if (!g_showCategoryFilterDialog) return;
+    
+    int w = 224;
+    int h = 68;
+    int x = (canvas->width() - w) / 2;
+    int y = (canvas->height() - h) / 2;
+    
+    // 半透明深底与青色亮边框
+    canvas->fillRoundRect(x, y, w, h, 4, canvas->color565(15, 20, 28));
+    canvas->drawRoundRect(x, y, w, h, 4, TFT_CYAN);
+    
+    Language currL = I18N::getLanguage();
+    
+    // 3 行 × 3 列 胶囊徽章标签（去除标题，紧凑精致）
+    int startY = y + 6;
+    int rowH = 19;
+    int colW = 66;
+    int startX = x + 7;
+    int colGap = 5;
+    
+    for (int i = 0; i < 9; i++) {
+        int r = i / 3;
+        int c = i % 3;
+        int bx = startX + c * (colW + colGap);
+        int by = startY + r * rowH;
+        
+        bool isChecked = (g_tempCategoryMask & (1 << i)) != 0;
+        bool isFocused = (i == g_categoryFocusIndex);
+        
+        const char* label = (currL == LANG_ZH) ? g_filterCategories[i].name_zh :
+                            ((currL == LANG_JA) ? g_filterCategories[i].name_ja :
+                            ((currL == LANG_ES) ? g_filterCategories[i].name_es : g_filterCategories[i].name_en));
+        
+        // 样式：完全对应百科详情中的徽章背景色与文字颜色体系
+        uint16_t bgColor;
+        uint16_t textColor;
+        uint16_t borderColor;
+        
+        if (isChecked) {
+            bgColor = canvas->color565(g_filterCategories[i].r, g_filterCategories[i].g, g_filterCategories[i].b);
+            textColor = g_filterCategories[i].textColor;
+            borderColor = textColor; // 边框呼应徽章专属高亮色
+        } else {
+            bgColor = canvas->color565(25, 30, 40);
+            textColor = canvas->color565(90, 100, 115);
+            borderColor = canvas->color565(45, 52, 65);
+        }
+        
+        canvas->fillRoundRect(bx, by, colW, 16, 3, bgColor);
+        canvas->drawRoundRect(bx, by, colW, 16, 3, borderColor);
+        
+        // 如果被聚焦，绘制醒目的黄色双层外边框
+        if (isFocused) {
+            canvas->drawRoundRect(bx - 1, by - 1, colW + 2, 18, 3, TFT_YELLOW);
+            canvas->drawRoundRect(bx - 2, by - 2, colW + 4, 20, 4, TFT_WHITE);
+        }
+        
+        canvas->setTextColor(textColor);
+        int tw = canvas->textWidth(label);
+        canvas->drawString(label, bx + (colW - tw) / 2, by + 2);
+    }
+}
+
 void drawSatSelectPage() {
     auto getBannerTextColor = [](const String& msg) -> uint16_t {
         String lower = msg;
@@ -3805,9 +3958,11 @@ void drawSatSelectPage() {
         int yPos = 25;
         int itemsPerPage = showBanner ? 6 : 8;
         int itemSpacing = 12;
+        int filteredCount = g_encyclopediaFilteredIndices.size();
+        int totalItems = filteredCount + 1;
         int startIndex = (satSelectedIndex / itemsPerPage) * itemsPerPage;
         
-        for (int i = 0; i < itemsPerPage && (startIndex + i) <= NUM_SATELLITES; i++) {
+        for (int i = 0; i < itemsPerPage && (startIndex + i) < totalItems; i++) {
             int index = startIndex + i;
             if (index == satSelectedIndex) {
                 canvas->fillRect(2, yPos - 1, 82, 12, canvas->color565(0, 120, 255));
@@ -3816,14 +3971,15 @@ void drawSatSelectPage() {
                 canvas->setTextColor(TFT_LIGHTGRAY);
             }
             
-            if (index < NUM_SATELLITES) {
-                String checkBox = g_satellites[index].selected ? "[x]" : "[ ]";
+            if (index < filteredCount) {
+                int realIdx = g_encyclopediaFilteredIndices[index];
+                String checkBox = g_satellites[realIdx].selected ? "[x]" : "[ ]";
                 canvas->drawString(checkBox.c_str(), 4, yPos);
                 
                 if (index == satSelectedIndex) {
-                    drawScrollingText(canvas, g_satellites[index].name.c_str(), 28, yPos, 56, TFT_WHITE);
+                    drawScrollingText(canvas, g_satellites[realIdx].name.c_str(), 28, yPos, 56, TFT_WHITE);
                 } else {
-                    String nameStr = g_satellites[index].name;
+                    String nameStr = g_satellites[realIdx].name;
                     if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
                     canvas->drawString(nameStr.c_str(), 28, yPos);
                 }
@@ -3837,13 +3993,15 @@ void drawSatSelectPage() {
         
         // Draw page index indicator
         {
-            int totalCount = NUM_SATELLITES + 1;
-            int totalPages = (totalCount + itemsPerPage - 1) / itemsPerPage;
+            int totalPages = (totalItems + itemsPerPage - 1) / itemsPerPage;
             int currentPage = (satSelectedIndex / itemsPerPage) + 1;
-            int currentIdx = satSelectedIndex + 1;
             char pageBuf[32];
             int totalSel = getTotalSelectedSatelliteCount();
-            sprintf(pageBuf, "(%d/%d) [%d/30]", currentPage, totalPages, totalSel);
+            if (g_selectedCategoryMask != 0) {
+                sprintf(pageBuf, "(%d/%d) [%d/30]*", currentPage, totalPages, totalSel);
+            } else {
+                sprintf(pageBuf, "(%d/%d) [%d/30]", currentPage, totalPages, totalSel);
+            }
             canvas->setTextColor(totalSel >= 30 ? TFT_ORANGE : canvas->color565(110, 150, 180));
             canvas->drawString(pageBuf, 8, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
         }
@@ -3853,10 +4011,11 @@ void drawSatSelectPage() {
         
         int rightX = 89;
         int descY = 25;
-        if (satSelectedIndex < NUM_SATELLITES) {
+        if (satSelectedIndex < filteredCount) {
+            int realIdx = g_encyclopediaFilteredIndices[satSelectedIndex];
             SatProfile selSat;
             lockSatMutex();
-            selSat = g_satellites[satSelectedIndex];
+            selSat = g_satellites[realIdx];
             unlockSatMutex();
             
             // Draw 3x Scaled Icon
@@ -4041,7 +4200,7 @@ void drawSatSelectPage() {
             Language currL = I18N::getLanguage();
             bool isZh = (currL == LANG_ZH);
             String finalDesc = "";
-            if (satSelectedIndex >= NUM_BUILTIN_SATELLITES) {
+            if (realIdx >= NUM_BUILTIN_SATELLITES) {
                 if (selSat.description && strlen(selSat.description) > 0) {
                     finalDesc = selSat.description;
                 } else {
@@ -4328,8 +4487,8 @@ void drawSatSelectPage() {
             
             if (fullTextToRender.length() > 0) {
                 int currLang = I18N::getLanguage();
-                if (satSelectedIndex != g_descLastSatIndex || currLang != g_descLastLang) {
-                    g_descLastSatIndex = satSelectedIndex;
+                if (realIdx != g_descLastSatIndex || currLang != g_descLastLang) {
+                    g_descLastSatIndex = realIdx;
                     g_descLastLang = currLang;
                     g_descManualScrolled = false;
                     g_descManualYOffset = 0;
@@ -4887,8 +5046,10 @@ void drawSatSelectPage() {
             drawHotKey(isZh ? "删除自定[d]" : "Del Custom[d]", 'd', x + 8, ty);
             drawHotKey(isZh ? "刷新星历[w]" : "Refresh GP[w]", 'w', x + 112, ty); ty += 14;
             
-            drawHotKey(isZh ? "返回地图[Esc]" : "Exit[Esc]", 'x', x + 8, ty);
+            drawHotKey(isZh ? "分类筛选[f]" : "Filter[f]", 'f', x + 8, ty);
             drawHotKey(isZh ? "主题模式[Tab]" : "Theme[Tab]", 't', x + 112, ty); ty += 14;
+
+            drawHotKey(isZh ? "返回地图[Esc]" : "Exit[Esc]", 'x', x + 8, ty); ty += 14;
 
         } else {
             if (recentLaunchInObjectsView) {
@@ -4911,8 +5072,17 @@ void drawSatSelectPage() {
             }
         }
         
+        const char* closePrompt = (currL == LANG_ZH) ? "按任意键关闭" : 
+                                  ((currL == LANG_JA) ? "任意のキーを押して閉じる" :
+                                  ((currL == LANG_ES) ? "Presione cualquier tecla para cerrar" : "Press any key to Close"));
         canvas->setTextColor(TFT_YELLOW);
-        canvas->drawString(isZh ? "按任意键关闭" : "Press any key to Close", x + 35, y + h - 14);
+        int promptW = canvas->textWidth(closePrompt);
+        canvas->drawString(closePrompt, x + (w - promptW) / 2, y + h - 14);
+    }
+    
+    // 绘制分类筛选弹窗
+    if (g_showCategoryFilterDialog) {
+        drawCategoryFilterDialog(canvas);
     }
 }
 
@@ -5114,6 +5284,8 @@ void loop() {
         static bool lastY = false;
         static bool lastN = false;
         static bool lastD = false;
+        static bool lastF = false;
+        static bool lastA = false;
         static bool lastTab = false;
         static bool lastShift = false;
         static bool lastL = false;
@@ -5141,6 +5313,8 @@ void loop() {
         bool currY = M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y');
         bool currN = M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed('N');
         bool currD = M5Cardputer.Keyboard.isKeyPressed('d') || M5Cardputer.Keyboard.isKeyPressed('D');
+        bool currF = M5Cardputer.Keyboard.isKeyPressed('f') || M5Cardputer.Keyboard.isKeyPressed('F');
+        bool currA = M5Cardputer.Keyboard.isKeyPressed('a') || M5Cardputer.Keyboard.isKeyPressed('A');
         bool currTab = M5Cardputer.Keyboard.isKeyPressed(KEY_TAB);
         bool currShift = M5Cardputer.Keyboard.isKeyPressed(KEY_LEFT_SHIFT) || M5Cardputer.Keyboard.keysState().shift;
         bool currL = M5Cardputer.Keyboard.isKeyPressed('l') || M5Cardputer.Keyboard.isKeyPressed('L');
@@ -5154,12 +5328,12 @@ void loop() {
             lastEsc = currEsc; lastTick = currTick; lastBracketL = currBracketL; lastBracketR = currBracketR;
             lastC = currC; lastR = currR; lastW = currW; lastS = currS;
             lastH = currH; lastG = currG; lastY = currY; lastN = currN;
-            lastD = currD; lastTab = currTab; lastShift = currShift; lastL = currL;
+            lastD = currD; lastF = currF; lastA = currA; lastTab = currTab; lastShift = currShift; lastL = currL;
             lastSpace = currSpace; lastM = currM;
             s_bootKeyFlushed = true;
             currSemi = currDot = currComma = currSlash = currO = currV = false;
             currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = false;
-            currC = currR = currW = currS = currH = currG = currY = currN = currD = false;
+            currC = currR = currW = currS = currH = currG = currY = currN = currD = currF = currA = false;
             currTab = currShift = currL = currSpace = currM = false;
         }
 
@@ -5184,12 +5358,14 @@ void loop() {
         bool justY = currY && !lastY;
         bool justN = currN && !lastN;
         bool justD = currD && !lastD;
+        bool justF = currF && !lastF;
+        bool justA = currA && !lastA;
         bool justTab = currTab && !lastTab;
         bool justShift = currShift && !lastShift;
         bool justL = currL && !lastL;
         bool justSpace = currSpace && !lastSpace;
         bool justM = currM && !lastM;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justTab || justShift || justL || justSpace || justM;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM;
 
         if (showHelp) {
             if (millis() < 3000) {
@@ -5612,6 +5788,9 @@ void loop() {
                 } else if (justS) {
                     appState = STATE_SAT_SELECT;
                     currentSatTab = TAB_ENCYCLOPEDIA;
+                    g_selectedCategoryMask = 0;
+                    g_showCategoryFilterDialog = false;
+                    updateEncyclopediaFilteredList();
                     entrySelectedSatellites.clear();
                     for (int i = 0; i < NUM_SATELLITES; i++) {
                         if (g_satellites[i].selected) {
@@ -5886,6 +6065,34 @@ void loop() {
                     if (justH || justEsc || justBack || justEnter || justTick) {
                         showListHelp = false;
                     }
+                } else if (g_showCategoryFilterDialog) {
+                    int r = g_categoryFocusIndex / 3;
+                    int c = g_categoryFocusIndex % 3;
+                    if (justEnter || justSpace) {
+                        // 使用enter选中/取消
+                        g_tempCategoryMask ^= (1 << g_categoryFocusIndex);
+                    } else if (justEsc || justTick || justBack || justF) {
+                        // 使用esc生效并关闭（Cardputer物理Esc键产生tick/27）
+                        g_selectedCategoryMask = g_tempCategoryMask;
+                        g_showCategoryFilterDialog = false;
+                        updateEncyclopediaFilteredList();
+                    } else if (justSemi || justW) { // 上 (UP)
+                        r = (r - 1 + 3) % 3;
+                        g_categoryFocusIndex = r * 3 + c;
+                    } else if (justDot || justS) { // 下 (DOWN)
+                        r = (r + 1) % 3;
+                        g_categoryFocusIndex = r * 3 + c;
+                    } else if (justComma || justA) { // 左 (LEFT)
+                        c = (c - 1 + 3) % 3;
+                        g_categoryFocusIndex = r * 3 + c;
+                    } else if (justSlash || justD) { // 右 (RIGHT)
+                        c = (c + 1) % 3;
+                        g_categoryFocusIndex = r * 3 + c;
+                    }
+                } else if (justF && currentSatTab == TAB_ENCYCLOPEDIA) {
+                    g_showCategoryFilterDialog = true;
+                    g_tempCategoryMask = g_selectedCategoryMask;
+                    g_categoryFocusIndex = 0;
                 } else if (justTab) {
                     int nextMode = (earth_renderer->getVisualMode() + 1) % 2;
                     earth_renderer->setVisualMode(nextMode);
@@ -5902,6 +6109,7 @@ void loop() {
                             else if (focusSatIndex > deleteConfirmIndex) focusSatIndex--;
                             if (satSelectedIndex >= NUM_SATELLITES) satSelectedIndex = NUM_SATELLITES;
                             saveCustomSatellites();
+                            updateEncyclopediaFilteredList();
                         }
                         deleteConfirmIndex = -1;
                     } else if (justN || justEsc) {
@@ -5979,7 +6187,9 @@ void loop() {
                             }
                         }
                     } else {
-                        if (justC && currentSatTab == TAB_ENCYCLOPEDIA && satSelectedIndex >= 0 && satSelectedIndex < NUM_SATELLITES) {
+                        int filteredCount = g_encyclopediaFilteredIndices.size();
+                        int realIdx = (satSelectedIndex >= 0 && satSelectedIndex < filteredCount) ? g_encyclopediaFilteredIndices[satSelectedIndex] : -1;
+                        if (justC && currentSatTab == TAB_ENCYCLOPEDIA && realIdx >= 0 && realIdx < NUM_SATELLITES) {
                             if (g_networkActive) {
                                 downloadErrorMsg = I18N::get(TXT_SYS_BUSY);
                                 downloadFinishedMs = millis();
@@ -5994,7 +6204,7 @@ void loop() {
                                 downloadErrorMsg = I18N::get(TXT_REFRESHING_GP);
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
-                                BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 6144, (void*)(intptr_t)satSelectedIndex, 1, NULL, 0);
+                                BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 6144, (void*)(intptr_t)realIdx, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
                                     downloadFinishedMs = millis();
@@ -6043,6 +6253,9 @@ void loop() {
                             g_level3Objects.clear();
                             g_level3Objects.shrink_to_fit();
                         } else {
+                            g_selectedCategoryMask = 0;
+                            g_showCategoryFilterDialog = false;
+                            updateEncyclopediaFilteredList();
                             appState = STATE_MAIN;
                             validateSatViewFocusState();
                         }
@@ -6139,16 +6352,22 @@ void loop() {
                     }
                 } else {
                     // TAB_ENCYCLOPEDIA
-                    if (satSelectedIndex == NUM_SATELLITES) {
+                    int filteredCount = g_encyclopediaFilteredIndices.size();
+                    int totalItems = filteredCount + 1;
+                    if (satSelectedIndex == filteredCount) {
                         // Inputting NORAD ID
                         if (justBack) {
                             if (noradInput.length() > 0) noradInput.remove(noradInput.length() - 1);
                             downloadErrorMsg = "";
                         } else if (justEsc || justTick) {
+                            g_selectedCategoryMask = 0;
+                            g_showCategoryFilterDialog = false;
+                            updateEncyclopediaFilteredList();
                             appState = STATE_MAIN;
                             validateSatViewFocusState();
                         } else if (justSemi) {
                             if (satSelectedIndex > 0) satSelectedIndex--;
+                            else satSelectedIndex = totalItems - 1;
                         } else if (justDot) {
                             satSelectedIndex = 0;
                         } else if (justEnter) {
@@ -6189,7 +6408,11 @@ void loop() {
                             }
                         }
                     } else {
+                        int realIdx = (satSelectedIndex >= 0 && satSelectedIndex < filteredCount) ? g_encyclopediaFilteredIndices[satSelectedIndex] : -1;
                         if (justBack || justEsc || justTick) {
+                            g_selectedCategoryMask = 0;
+                            g_showCategoryFilterDialog = false;
+                            updateEncyclopediaFilteredList();
                             appState = STATE_MAIN;
                             validateSatViewFocusState();
                             bool selectionChanged = false;
@@ -6222,26 +6445,26 @@ void loop() {
                                 triggerPrediction = true;
                             }
                         } else if (justEnter) {
-                            if (satSelectedIndex < NUM_SATELLITES) {
-                                if (!g_satellites[satSelectedIndex].selected) {
+                            if (realIdx >= 0 && realIdx < NUM_SATELLITES) {
+                                if (!g_satellites[realIdx].selected) {
                                     if (getTotalSelectedSatelliteCount() >= 30) {
                                         downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选30颗" : "Limit reached: Max 30 sats total";
                                     } else {
-                                        g_satellites[satSelectedIndex].selected = true;
+                                        g_satellites[realIdx].selected = true;
                                         downloadErrorMsg = "";
                                     }
                                 } else {
-                                    g_satellites[satSelectedIndex].selected = false;
+                                    g_satellites[realIdx].selected = false;
                                     downloadErrorMsg = "";
                                 }
                             }
-                        } else if (justD && satSelectedIndex >= NUM_BUILTIN_SATELLITES && satSelectedIndex < NUM_SATELLITES) {
-                            deleteConfirmIndex = satSelectedIndex;
+                        } else if (justD && realIdx >= NUM_BUILTIN_SATELLITES && realIdx < NUM_SATELLITES) {
+                            deleteConfirmIndex = realIdx;
                         } else if (justSemi) {
                             if (satSelectedIndex > 0) satSelectedIndex--;
-                            else satSelectedIndex = NUM_SATELLITES;
+                            else satSelectedIndex = totalItems - 1;
                         } else if (justDot) {
-                            satSelectedIndex = (satSelectedIndex + 1) % (NUM_SATELLITES + 1);
+                            satSelectedIndex = (satSelectedIndex + 1) % totalItems;
                         } else if (justBracketL) {
                             g_descManualScrolled = true;
                             g_descManualYOffset -= 39;
@@ -6336,6 +6559,8 @@ void loop() {
         lastY = currY;
         lastN = currN;
         lastD = currD;
+        lastF = currF;
+        lastA = currA;
         lastTab = currTab;
         lastShift = currShift;
         lastL = currL;

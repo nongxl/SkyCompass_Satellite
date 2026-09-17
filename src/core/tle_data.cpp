@@ -200,6 +200,78 @@ TLEData TLEManager::getAO91_TLE() {
     return ao91;
 }
 
+TLEData TLEManager::getNORBI_TLE() {
+    TLEData d;
+    d.name = "NORBI";
+    d.line1 = "1 46494U 20068J   26260.00274634  .00024463  00000+0  40463-3 0  9993";
+    d.line2 = "2 46494  97.8589 284.3188 0003402 277.1031  82.9833 15.52207859330439";
+    d.baseScore = 0;
+    return d;
+}
+
+TLEData TLEManager::getFOSSASAT2E_TLE() {
+    TLEData d;
+    d.name = "FOSSASAT-2E";
+    d.line1 = "1 62676U 25009BV  26258.67848957  .00002452  00000+0  11186-3 0  9992";
+    d.line2 = "2 62676  97.3898 335.3350 0005870  37.8087 322.3560 15.21547755 92451";
+    d.baseScore = 0;
+    return d;
+}
+
+TLEData TLEManager::getLilacSat2_TLE() {
+    TLEData d;
+    d.name = "LilacSat-2";
+    d.line1 = "1 40908U 15049K   26259.90225052  .00019258  00000+0  29536-3 0  9991";
+    d.line2 = "2 40908  97.4557 300.3766 0004616 276.1708  83.9020 15.54345131609989";
+    d.baseScore = 0;
+    return d;
+}
+
+TLEData TLEManager::getXW3_TLE() {
+    TLEData d;
+    d.name = "XW-3 (CAS-9)";
+    d.line1 = "1 50466U 21131B   26259.96327671  .00000225  00000+0  82910-4 0  9996";
+    d.line2 = "2 50466  98.4973 351.8533 0004215 166.7909 193.3392 14.41425787248334";
+    d.baseScore = 0;
+    return d;
+}
+
+TLEData TLEManager::getSONATE2_TLE() {
+    TLEData d;
+    d.name = "SONATE-2";
+    d.line1 = "1 59112U 24043Q   26259.41493109  .00053443  00000+0  52160-3 0  9991";
+    d.line2 = "2 59112  97.5628  55.9655 0005362 220.4611 139.6251 15.66030541142133";
+    d.baseScore = 0;
+    return d;
+}
+
+TLEData TLEManager::getVladivostok1_TLE() {
+    TLEData d;
+    d.name = "Vladivostok-1";
+    d.line1 = "1 61751U 24199S   26259.91966800  .00008556  00000+0  22911-3 0  9999";
+    d.line2 = "2 61751  97.2835 128.7194 0008702 348.4947  11.6099 15.38226030151232";
+    d.baseScore = 0;
+    return d;
+}
+
+TLEData TLEManager::getNORBY2_TLE() {
+    TLEData d;
+    d.name = "NORBY-2";
+    d.line1 = "1 57179U 23091P   26259.91641061  .00003558  00000+0  18261-3 0  9997";
+    d.line2 = "2 57179  97.4995 314.9911 0015151 161.1096 199.0702 15.17081935177697";
+    d.baseScore = 0;
+    return d;
+}
+
+TLEData TLEManager::getUMKA1_TLE() {
+    TLEData d;
+    d.name = "UMKA-1";
+    d.line1 = "1 57172U 23091G   26259.91749094  .00005592  00000+0  24966-3 0  9994";
+    d.line2 = "2 57172  97.4950 318.2717 0013213 152.9670 207.2257 15.21694931177952";
+    d.baseScore = 0;
+    return d;
+}
+
 uint32_t TLEManager::getMockTimeAnchor() {
     // 2026-06-14 00:00:00 UTC = 1781395200
     // MUST match the 2026 TLE epoch

@@ -23,6 +23,14 @@ public:
     static TLEData getHerschel_TLE();
     static TLEData getSO50_TLE();
     static TLEData getAO91_TLE();
+    static TLEData getNORBI_TLE();
+    static TLEData getFOSSASAT2E_TLE();
+    static TLEData getLilacSat2_TLE();
+    static TLEData getXW3_TLE();
+    static TLEData getSONATE2_TLE();
+    static TLEData getVladivostok1_TLE();
+    static TLEData getNORBY2_TLE();
+    static TLEData getUMKA1_TLE();
     
     // For Phase 3 offline testing, we need a time anchor that matches the TLE epochs.
     // Returns seconds since UNIX epoch for the mock time (June 10, 2024).
