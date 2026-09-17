@@ -9,74 +9,7 @@
 #include <esp_task_wdt.h>
 #include <memory>
 
-// Helper to streamingly read a single JSON object from stream
-static String readNextJsonObject(WiFiClient* stream, int& totalReadBytes) {
-    String json = "";
-    int braceCount = 0;
-    bool inString = false;
-    bool escaped = false;
-    bool foundStart = false;
-    
-    uint32_t waitMs = 0;
-    const uint32_t maxWaitMs = 30000; // 30 seconds timeout for stream gaps
-    
-    while (waitMs < maxWaitMs) { 
-        if (!stream->available()) {
-            delay(10);
-            waitMs += 10;
-            if (!stream->connected() && !stream->available()) {
-                break;
-            }
-            continue;
-        }
-        char c = stream->read();
-        if (c == -1) break;
-        totalReadBytes++;
-        waitMs = 0; // Reset wait timer on successfully reading a byte
-        
-        if (c == '\r' || c == '\n') continue;
-        
-        if (!foundStart) {
-            if (c == '{') {
-                foundStart = true;
-                braceCount = 1;
-                json += c;
-                inString = false;
-                escaped = false;
-            }
-            continue;
-        }
-        
-        json += c;
-        
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-        
-        if (c == '\\') {
-            escaped = true;
-            continue;
-        }
-        
-        if (c == '"') {
-            inString = !inString;
-            continue;
-        }
-        
-        if (!inString) {
-            if (c == '{') {
-                braceCount++;
-            } else if (c == '}') {
-                braceCount--;
-                if (braceCount == 0) {
-                    return json;
-                }
-            }
-        }
-    }
-    return json;
-}
+
 
 // Load single satellite from cache or network (plain HTTP — no TLS memory cost)
 bool OrbitDataProvider::loadByCatalogNumber(uint32_t catNum, OrbitRecord& record, bool forceRefresh, WiFiClient* sharedClient, int* outHttpCode) {
@@ -222,7 +155,7 @@ static void processRecentLaunchItem(std::vector<RecentLaunchItem>& tempLaunches,
     }
 }
 
-// Download Recent Launches and save to JSONL
+// Download Recent Launches and save to JSONL via high-speed chunk-buffered stream
 bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& tempLaunches, int* outHttpCode) {
     if (outHttpCode) *outHttpCode = 0;
 
@@ -235,86 +168,188 @@ bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& te
         }
     }
 
-    std::unique_ptr<WiFiClient> client(new WiFiClient());
-    if (!client) return false;
+    static const char* RAW_TMP_PATH = "/json_recent_raw.tmp";
+    static const char* RAW_JSONL_PATH = "/json_recent_raw.jsonl";
+    static const char* CELESTRAK_URL = "http://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=json";
     
-    std::unique_ptr<HTTPClient> http(new HTTPClient());
-    if (!http) return false;
-    
-    http->setTimeout(60000);
-    http->setConnectTimeout(30000);
-    http->setUserAgent("Mozilla/5.0 (ESP32-Cardputer; SkyCompass Satellite Tracker)");
-    http->setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    
-    String url = "http://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=json";
-    http->begin(*client, url);
-    int httpCode = http->GET();
- 
-    // 如果网络波动导致初次 DNS 或连接失败，自动重试一次
-    if (httpCode < 0) {
-        http->end();
-        delay(1500);
-        http->begin(*client, url);
-        httpCode = http->GET();
-    }
- 
-    if (outHttpCode) *outHttpCode = httpCode;
-    
-    if (httpCode != HTTP_CODE_OK) {
-        http->end();
-        return false;
-    }
-    
-    int expectedSize = http->getSize();
-    WiFiClient* stream = http->getStreamPtr();
-    File f = LittleFS.open("/json_recent_raw.jsonl", "w", true);
-    
-    int rawCount = 0;
-    int totalReadBytes = 0;
-    
-    while (stream->connected() || stream->available()) {
-        int prevReadBytes = totalReadBytes;
-        String singleJson = readNextJsonObject(stream, totalReadBytes);
-        if (singleJson.length() == 0) {
-            if (!stream->connected() && !stream->available()) break;
-            if (expectedSize > 0 && totalReadBytes >= expectedSize) {
-                break;
-            }
-            if (totalReadBytes == prevReadBytes) {
-                LOG_I("RECENT_LAUNCH", "Stream read timed out (%d bytes read)", totalReadBytes);
-                if (outHttpCode) *outHttpCode = -11; // HTTPC_ERROR_READ_TIMEOUT
-                break;
-            }
+    // 静态大缓冲区，彻底消除任务栈负担（0 字节栈开销）
+    static const size_t IN_BUF_SIZE = 2048;
+    static const size_t OUT_BUF_SIZE = 4096;
+    static uint8_t inBuf[IN_BUF_SIZE];
+    static char outBuf[OUT_BUF_SIZE];
+
+    const int MAX_ATTEMPTS = 2;
+    for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        if (attempt > 1) {
+            LOG_I("RECENT_LAUNCH", "Retrying Celestrak download (attempt %d/%d)...", attempt, MAX_ATTEMPTS);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+
+        std::unique_ptr<WiFiClient> client(new WiFiClient());
+        if (!client) {
+            if (outHttpCode) *outHttpCode = -2;
+            return false;
+        }
+        
+        std::unique_ptr<HTTPClient> http(new HTTPClient());
+        if (!http) {
+            if (outHttpCode) *outHttpCode = -2;
+            return false;
+        }
+        
+        client->setTimeout(45);
+        http->setTimeout(45000);
+        http->setConnectTimeout(15000);
+        http->setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        http->setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+        
+        http->begin(*client, CELESTRAK_URL);
+        http->addHeader("Accept", "application/json, text/plain, */*");
+        http->addHeader("Connection", "close");
+        
+        int httpCode = http->GET();
+        if (outHttpCode) *outHttpCode = httpCode;
+        
+        if (httpCode != HTTP_CODE_OK) {
+            http->end();
             continue;
         }
         
-        if (f) {
-            f.println(singleJson);
-            rawCount++;
+        int expectedSize = http->getSize();
+        WiFiClient* stream = http->getStreamPtr();
+        
+        // 每次尝试前清空临时文件，绝不破坏正式缓存 /json_recent_raw.jsonl
+        LittleFS.remove(RAW_TMP_PATH);
+        File f = LittleFS.open(RAW_TMP_PATH, "w", true);
+        if (!f) {
+            LOG_E("RECENT_LAUNCH", "Failed to open %s for writing!", RAW_TMP_PATH);
+            if (outHttpCode) *outHttpCode = -100;
+            http->end();
+            return false;
         }
         
-        if (expectedSize > 0 && totalReadBytes >= expectedSize) {
-            LOG_I("RECENT_LAUNCH", "Stream completed successfully via size checking (%d/%d bytes)", totalReadBytes, expectedSize);
-            break;
+        int rawCount = 0;
+        int totalReadBytes = 0;
+        size_t outLen = 0;
+        
+        auto flushOut = [&]() {
+            if (outLen > 0) {
+                f.write((const uint8_t*)outBuf, outLen);
+                outLen = 0;
+                taskYIELD(); // 写 Flash 后让渡时间片，确保底层 Wi-Fi 驱动接收包不丢失
+            }
+        };
+        auto writeChar = [&](char ch) {
+            outBuf[outLen++] = ch;
+            if (outLen >= OUT_BUF_SIZE) {
+                flushOut();
+            }
+        };
+        
+        bool inString = false;
+        bool escaped = false;
+        int braceDepth = 0;
+        
+        uint32_t lastReadMs = millis();
+        const uint32_t TIMEOUT_MS = 40000; // 提升至40秒以容忍跨洋 TCP 拥塞丢包重传
+        
+        while (stream->connected() || stream->available()) {
+            int avail = stream->available();
+            if (avail > 0) {
+                int toRead = avail > (int)sizeof(inBuf) ? (int)sizeof(inBuf) : avail;
+                int r = stream->read(inBuf, toRead);
+                if (r > 0) {
+                    totalReadBytes += r;
+                    lastReadMs = millis();
+                    
+                    for (int i = 0; i < r; ++i) {
+                        char c = (char)inBuf[i];
+                        if (c == '\r' || c == '\n') continue;
+                        
+                        if (escaped) {
+                            escaped = false;
+                            if (braceDepth > 0) writeChar(c);
+                            continue;
+                        }
+                        if (c == '\\') {
+                            if (inString) escaped = true;
+                            if (braceDepth > 0) writeChar(c);
+                            continue;
+                        }
+                        if (c == '"') {
+                            inString = !inString;
+                            if (braceDepth > 0) writeChar(c);
+                            continue;
+                        }
+                        if (inString) {
+                            if (braceDepth > 0) writeChar(c);
+                            continue;
+                        }
+                        
+                        if (c == '{') {
+                            braceDepth++;
+                            writeChar(c);
+                        } else if (c == '}') {
+                            braceDepth--;
+                            writeChar(c);
+                            if (braceDepth == 0) {
+                                writeChar('\n');
+                                rawCount++;
+                            }
+                        } else {
+                            if (braceDepth > 0) {
+                                writeChar(c);
+                            }
+                        }
+                    }
+                }
+            } else {
+                if (!stream->connected()) {
+                    break;
+                }
+                if (millis() - lastReadMs > TIMEOUT_MS) {
+                    LOG_W("RECENT_LAUNCH", "Stream chunk read timed out (no data for %u ms, total read %d bytes)", 
+                          (unsigned int)TIMEOUT_MS, totalReadBytes);
+                    if (outHttpCode) *outHttpCode = -11;
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(15));
+                esp_task_wdt_reset();
+            }
+            
+            if (expectedSize > 0 && totalReadBytes >= expectedSize) {
+                LOG_I("RECENT_LAUNCH", "Stream completed successfully via size checking (%d/%d bytes)", totalReadBytes, expectedSize);
+                break;
+            }
         }
-    }
-    
-    if (f) {
+        
+        flushOut();
         f.close();
-    }
-    http->end();
-    
-    bool completed = true;
-    if (expectedSize > 0 && totalReadBytes < expectedSize) {
-        completed = false;
-        if (outHttpCode && *outHttpCode == 0) {
-            *outHttpCode = -5; // HTTPC_ERROR_CONNECTION_LOST
+        http->end();
+        
+        bool completed = true;
+        if (expectedSize > 0 && totalReadBytes < expectedSize) {
+            completed = false;
+            if (outHttpCode && *outHttpCode == 0) {
+                *outHttpCode = -5;
+            }
         }
-    }
-    
-    LOG_I("RECENT_LAUNCH", "Download finished. Raw json lines saved: %d. Expected size: %d, actual read size: %d", rawCount, expectedSize, totalReadBytes);
-    if (completed && rawCount > 0) {
-        return true;
+        
+        LOG_I("RECENT_LAUNCH", "Attempt %d finished. Raw json lines: %d. Expected size: %d, actual: %d", 
+              attempt, rawCount, expectedSize, totalReadBytes);
+              
+        if (completed && rawCount > 0) {
+            // 下载完整成功：原子替换正式缓存文件
+            LittleFS.remove(RAW_JSONL_PATH);
+            LittleFS.rename(RAW_TMP_PATH, RAW_JSONL_PATH);
+            LOG_I("RECENT_LAUNCH", "Atomically updated %s with %d objects!", RAW_JSONL_PATH, rawCount);
+            return true;
+        } else {
+            // 下载失败或未完成：删除残缺临时文件，保护原有缓存不受破坏
+            LittleFS.remove(RAW_TMP_PATH);
+            LOG_W("RECENT_LAUNCH", "Incomplete download (%d/%d bytes). Discarded temp file, preserved existing cache.", 
+                  totalReadBytes, expectedSize);
+        }
     }
     return false;
 }

@@ -5,10 +5,10 @@
 #include "../hal/hal_wifi.h"
 
 void TLEUpdater::begin() {
-    if (!LittleFS.begin(true)) {
+    if (!LittleFS.begin(true, "/littlefs", 20)) {
         LOG_I("APP", "LittleFS Mount Failed. Formatting...");
     } else {
-        LOG_I("APP", "LittleFS Mounted.");
+        LOG_I("APP", "LittleFS Mounted with 20 max open files.");
     }
 }
 

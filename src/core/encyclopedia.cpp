@@ -277,9 +277,9 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         false  // defaultSelected
     },
-    // 43539 BeiDou-3
+    // 43001 BeiDou-3 (M1)
     {
-        43539,
+        43001,
         "BeiDou-3",
         Category::NAVIGATION,
         ICON_NAVIGATION,
@@ -319,9 +319,9 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         false  // defaultSelected
     },
-    // 25576 FengYun-1C
+    // 25730 FengYun-1C
     {
-        25576,
+        25730,
         "FengYun-1C",
         Category::EARTH_OBSERVATION,
         ICON_DEBRIS,
@@ -403,10 +403,10 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         false  // defaultSelected
     },
-    // 42956 Iridium 127
+    // 42956 Iridium 100 (NEXT)
     {
         42956,
-        "Iridium 127",
+        "Iridium 100",
         Category::COMMUNICATIONS,
         ICON_SATELLITE,
         "第二代铱星通信卫星。属于第二代铱星系统（Iridium NEXT），为全球提供语音与数据覆盖。",
@@ -812,9 +812,9 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LNB: 10750 MHz",
         false  // defaultSelected
     },
-    // 52235 Chinasat 6D
+    // 52255 Chinasat 6D
     {
-        52235,
+        52255,
         "CHINASAT 6D",
         Category::COMMUNICATIONS,
         ICON_COMMUNICATION,
@@ -854,9 +854,9 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LNB: 10750 MHz",
         false // defaultSelected
     },
-    // 29037 Astra 1KR
+    // 29055 Astra 1KR
     {
-        29037,
+        29055,
         "ASTRA 1KR",
         Category::COMMUNICATIONS,
         ICON_COMMUNICATION,
@@ -875,9 +875,9 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LNB: 9750/10600 MHz",
         false // defaultSelected
     },
-    // 33403 Galaxy 19
+    // 33376 Galaxy 19
     {
-        33403,
+        33376,
         "GALAXY 19",
         Category::COMMUNICATIONS,
         ICON_COMMUNICATION,
@@ -938,9 +938,9 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LNB: 10750 MHz",
         false // defaultSelected
     },
-    // 31792 Chinasat 6B
+    // 31800 Chinasat 6B
     {
-        31792,
+        31800,
         "CHINASAT 6B",
         Category::COMMUNICATIONS,
         ICON_COMMUNICATION,
@@ -959,9 +959,9 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LNB: 5150 MHz",
         false // defaultSelected
     },
-    // 58250 Chinasat 6E
+    // 58253 Chinasat 6E
     {
-        58250,
+        58253,
         "CHINASAT 6E",
         Category::COMMUNICATIONS,
         ICON_COMMUNICATION,
@@ -980,9 +980,9 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LNB: 5150 MHz",
         false // defaultSelected
     },
-    // 32062 JCSAT-3A
+    // 29272 JCSAT-3A
     {
-        32062,
+        29272,
         "JCSAT-3A",
         Category::COMMUNICATIONS,
         ICON_COMMUNICATION,
@@ -1022,9 +1022,9 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LNB: 10600 MHz",
         false // defaultSelected
     },
-    // 37258 KoreaSat 6
+    // 37265 KoreaSat 6
     {
-        37258,
+        37265,
         "KOREASAT 6",
         Category::COMMUNICATIONS,
         ICON_COMMUNICATION,
@@ -1064,9 +1064,9 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LNB: 5150 MHz",
         false // defaultSelected
     },
-    // 52899 Measat 3d
+    // 52904 Measat 3d
     {
-        52899,
+        52904,
         "MEASAT 3D",
         Category::COMMUNICATIONS,
         ICON_COMMUNICATION,
@@ -1085,9 +1085,9 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LNB: 10750 MHz",
         false // defaultSelected
     },
-    // 36832 Nilesat 201
+    // 36830 Nilesat 201
     {
-        36832,
+        36830,
         "NILESAT 201",
         Category::COMMUNICATIONS,
         ICON_COMMUNICATION,
