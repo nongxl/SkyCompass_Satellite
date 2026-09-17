@@ -43,7 +43,12 @@
   - `H`: Slide out the **Keyboard Shortcuts Help Menu** at the center of the screen (multi-language aware).
   - `L`: Open the **Language Selection Menu** (English, Simplified Chinese, Japanese, Spanish), saved to NVS flash.
   - `M`: Open the **Hardware Setup Wizard** to configure and detect WiFi, GNSS, Magnetometer, and Gimbal peripherals.
-  - `aA` (Shift): Enter **3-Axis Gimbal Servo Test Mode**, supporting channel selection (`0/1/2`), fine stepping (`,`/`/`), and preset angles (`Z/X/C/A/S`).
+  - `Aa` (Shift): Enter **3-Axis Gimbal Servo Test Mode**, supporting channel selection (`0/1/2`), fine stepping (`,`/`/`), and preset angles (`Z/X/C/A/S`).
+  - `Ctrl`: Open/close the full-screen **RF & Satellite Telemetry Console**:
+    - Monitor real-time RF receiver status, Doppler frequency offset tracking, and live packet capture logs (auto-listening during satellite passes);
+    - `;` / `.`: Scroll through packet capture history;
+    - `Enter` or `D`: Pop up raw HEX payload viewer for the highlighted packet;
+    - Press `Esc` to close detail modal or exit the console back to the 3D globe.
   - `C`: Enter/exit **Manual Location Mode (Crosshair Mode)** to manually designate any observer position on Earth:
     - `;` (Up) / `.` (Down): Adjust Latitude;
     - `,` (Left) / `/` (Right): Adjust Longitude;
@@ -106,7 +111,7 @@
   - **CH0 (Base Azimuth / Track Heading Axis)**: Aligns rigidly with the satellite's instantaneous orbital ground track heading during passes without drift.
   - **CH1 (Celestial Arch Elevation Axis)**: Controls the tilt angle corresponding to the pass peak elevation and northern/southern celestial hemisphere. **[Mechanical Clearance Protection]**: Due to servo horn offset on one side, CH1 range is constrained to **30° ~ 180°** to prevent binding against the base beam while maximizing physical travel.
   - **CH2 (Satellite Pointer Travel Axis)**: Represents the spacecraft body, sweeping smoothly across the arch from AOS to LOS.
-  - **Dedicated Debug Mode**: Press **`aA (Shift)`** anytime on the main screen to enter Servo Test Mode (`0/1/2` select channel, `,` and `/` fine-step, `Z/X/C/A/S` quick presets).
+  - **Dedicated Debug Mode**: Press **`Aa (Shift)`** anytime on the main screen to enter Servo Test Mode (`0/1/2` select channel, `,` and `/` fine-step, `Z/X/C/A/S` quick presets).
 
 
 ## Technical Details: Orbital Propagations & Visibility Predictions

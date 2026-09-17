@@ -422,6 +422,14 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                         currentPass.score = 1;
                     }
                     
+                    // 推荐过境事件中，无光学亮度的事件减去 1 颗星（保底 1 颗星）
+                    if (!currentPass.isVisible || currentPass.maxBrightness >= 98.0f) {
+                        if (currentPass.score > 1) {
+                            currentPass.score -= 1;
+                            currentPass.baseScore = currentPass.score;
+                        }
+                    }
+                    
                     if (currentPass.losTime >= startTime) {
                         passes.push_back(currentPass);
                     }
@@ -636,12 +644,19 @@ void ObservationPredictor::postProcessEvents(std::vector<PassEvent>& passes, uin
     for (auto& p : passes) {
         p.score = p.baseScore + p.eventBonus;
         
+        // 推荐过境事件中，无光学亮度的事件减去 1 颗星（保底 1 颗星）
+        if (!p.isVisible || p.maxBrightness >= 98.0f) {
+            if (p.score > 1) {
+                p.score -= 1;
+            }
+        }
+        
         // Apply brightness capping to suppress dim satellites to high ratings
-        if (p.maxBrightness > 4.0) {
+        if (p.maxBrightness > 4.0 && p.maxBrightness < 98.0f) {
             if (p.score > 2) p.score = 2;
-        } else if (p.maxBrightness > 3.0) {
+        } else if (p.maxBrightness > 3.0 && p.maxBrightness < 98.0f) {
             if (p.score > 3) p.score = 3;
-        } else if (p.maxBrightness > 1.5) {
+        } else if (p.maxBrightness > 1.5 && p.maxBrightness < 98.0f) {
             if (p.score > 4) p.score = 4;
         }
         

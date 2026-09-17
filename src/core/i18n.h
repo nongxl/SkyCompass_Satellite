@@ -85,6 +85,7 @@ enum TextId {
     TXT_HELP_TAB,
     TXT_HELP_MODULE,
     TXT_HELP_SERVO,
+    TXT_HELP_RF_CONSOLE,
     
     // Recommended Passes Panel
     TXT_RECOMMENDED_PASSES,
@@ -184,6 +185,21 @@ enum TextId {
     TXT_CAT_HIGHLY_REC,
     TXT_CAT_ALL_PASSES,
     
+    // RF Console
+    TXT_RF_TITLE,
+    TXT_RF_HW_NOT_DETECTED,
+    TXT_RF_RX_ACTIVE,
+    TXT_RF_IDLE_STANDBY,
+    TXT_RF_PKTS,
+    TXT_RF_REQ_MODULE,
+    TXT_RF_ENABLE_IN_WIZARD,
+    TXT_RF_LISTENING_PASS,
+    TXT_RF_WAITING_PACKETS,
+    TXT_RF_NO_PASS_IDLE,
+    TXT_RF_AUTO_TRIGGER_TIP,
+    TXT_RF_MODAL_TITLE,
+    TXT_RF_RAW_HEX,
+
     // Max index marker
     TXT_MAX
 };

@@ -81,7 +81,8 @@ static const char* const t_en[TXT_MAX] = {
     "Reset Time[R]",
     "Color Filter[Tab]",
     "Module Setup[M]",
-    "Servo Setup[aA]",
+    "Servo Setup[Aa]",
+    "RF Console[Ctrl]",
     
     // Recommended Passes Panel
     " RECOMMENDED PASSES",
@@ -179,7 +180,22 @@ static const char* const t_en[TXT_MAX] = {
     "Tonight",
     "Next 7 Days",
     "Highly Recommended",
-    "All Passes"
+    "All Passes",
+
+    // RF Console
+    "RF CONSOLE",
+    "[HW NOT DETECTED]",
+    "[RX ACTIVE]",
+    "[IDLE / STANDBY]",
+    "PKTS",
+    "Cap LoRa-1262 module is required.",
+    "Enable it in Hardware Wizard [M].",
+    "Listening to pass radio signals...",
+    "Waiting for airborne downlink packets",
+    "No satellite pass in current window",
+    "Auto-receives when sat elevation > -3 deg",
+    "PACKET DECODE & HEX DUMP",
+    "Raw Hex:"
 };
 
 // 中文文本资源表
@@ -257,7 +273,8 @@ static const char* const t_zh[TXT_MAX] = {
     "重置时间[R]",
     "色彩滤镜[Tab]",
     "硬件模块[M]",
-    "舵机调试[aA]",
+    "舵机调试[Aa]",
+    "射频终端[Ctrl]",
     
     // Recommended Passes Panel
     " 推荐过境事件",
@@ -335,7 +352,7 @@ static const char* const t_zh[TXT_MAX] = {
     "可观测性:",
     "极佳",
     "中等",
-    "无数据",
+    "无",
     "按 'O' 键查看卫星列表",
     "未找到任何卫星。",
     
@@ -354,8 +371,23 @@ static const char* const t_zh[TXT_MAX] = {
     // Tree categories in passes panel
     "今晚",
     "未来7天",
-    "强烈推荐",
-    "所有过境"
+    "重点推荐",
+    "所有过境",
+
+    // RF Console
+    "射频遥测终端",
+    "[未检测到硬件]",
+    "[正在接收]",
+    "[待机中]",
+    "包",
+    "需连接 Cap LoRa-1262 射频模块",
+    "请在硬件配置向导 [M] 中开启并检测",
+    "正在监听过境无线电下行信号...",
+    "等待捕获卫星空中发射的数据包",
+    "当前时段无目标无线电卫星过境",
+    "卫星仰角 > -3° 时将自动启动接收",
+    "数据包解码与 HEX 报文",
+    "原始十六进制:"
 };
 
 // 日文文本资源表
@@ -433,7 +465,8 @@ static const char* const t_ja[TXT_MAX] = {
     "時刻リセット[R]",
     "カラーフィルター[Tab]",
     "モジュール[M]",
-    "サーボ調整[aA]",
+    "サーボ調整[Aa]",
+    "RF端末[Ctrl]",
     
     // Recommended Passes Panel
     " 推奨の通過イベント",
@@ -511,7 +544,7 @@ static const char* const t_ja[TXT_MAX] = {
     "視認性:",
     "極めて良好",
     "中程度",
-    "データなし",
+    "なし",
     "'O'キーで衛星一覧表示",
     "衛星が見つかりません。",
     
@@ -531,7 +564,22 @@ static const char* const t_ja[TXT_MAX] = {
     "今夜",
     "今後7日間",
     "強く推奨",
-    "すべての通過"
+    "すべての通過",
+
+    // RF Console
+    "RFテレメトリ端末",
+    "[HW未検出]",
+    "[受信中]",
+    "[待機中]",
+    "PKTS",
+    "Cap LoRa-1262 モジュールが必要です",
+    "ハードウェア設定 [M] で有効化してください",
+    "通過中の無線信号を受信待機中...",
+    "衛星からのパケット着信を待機中",
+    "現在通過中の無線衛星はありません",
+    "衛星仰角 > -3° で自動受信を開始",
+    "パケット復号 ＆ HEX ダンプ",
+    "生HEXデータ:"
 };
 
 // 西班牙文文本资源表 (Standard ASCII rendering)
@@ -609,7 +657,8 @@ static const char* const t_es[TXT_MAX] = {
     "Reiniciar hora[R]",
     "Filtro de color[Tab]",
     "Modulos[M]",
-    "Calib servos[aA]",
+    "Calib servos[Aa]",
+    "Consola RF[Ctrl]",
     
     // Recommended Passes Panel
     " PASES RECOMENDADOS",
@@ -703,7 +752,22 @@ static const char* const t_es[TXT_MAX] = {
     "Esta noche",
     "Proximos 7 dias",
     "Muy recomendado",
-    "Todos los pases"
+    "Todos los pases",
+
+    // RF Console
+    "CONSOLA RF",
+    "[HW NO DETECTADO]",
+    "[RX ACTIVO]",
+    "[EN ESPERA]",
+    "PKTS",
+    "Se requiere el modulo Cap LoRa-1262.",
+    "Activalo en el asistente de hardware [M].",
+    "Escuchando senales de radio del paso...",
+    "Esperando paquetes aereos de bajada",
+    "No hay satelite pasando en la ventana actual",
+    "Recepcion automatica con elevacion > -3 deg",
+    "DECODIFICACION Y VOLCADO HEX",
+    "Hex sin procesar:"
 };
 
 const lgfx::IFont* I18N::getFont() {

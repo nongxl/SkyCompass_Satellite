@@ -48,6 +48,8 @@ enum MonoState {
 #include "core/mono_animator.h"
 #include "core/hardware_config.h"
 #include "ui/hardware_wizard_view.h"
+#include "core/radio_manager.h"
+#include "ui/rf_console_view.h"
 
 // 硬件外设由 HardwareConfig 动态管理并根据 NVS 配置定向初始化
 bool isMonoInitialized = false;
@@ -2404,7 +2406,14 @@ void downloadCustomSatTask(void* parameter) {
                     }
                 }
                 
-                downloadErrorMsg = "Download Success!";
+                bool hasFreq = false;
+                for (int i = 0; i < NUM_SATELLITES; i++) {
+                    if (g_satellites[i].noradId == id && g_satellites[i].downlinkFreq.length() > 0) {
+                        hasFreq = true;
+                        break;
+                    }
+                }
+                downloadErrorMsg = hasFreq ? "Download Success!" : ((I18N::getLanguage() == LANG_ZH) ? "下载成功! 可按[F]配置频段" : "Success! Press [F] for Radio");
                 noradInput = "";
                 updateEncyclopediaFilteredList();
                 
@@ -2791,6 +2800,24 @@ void tryLoadRecentLaunchCache() {
     }
 }
 
+void saveSatelliteRadioConfig(int noradId, const String& freq, const String& mode) {
+    Preferences prefs;
+    if (prefs.begin("sat_radio", false)) {
+        prefs.putString(("f_" + String(noradId)).c_str(), freq);
+        prefs.putString(("m_" + String(noradId)).c_str(), mode);
+        prefs.end();
+    }
+}
+
+void loadSatelliteRadioConfig(int noradId, String& outFreq, String& outMode) {
+    Preferences prefs;
+    if (prefs.begin("sat_radio", true)) {
+        outFreq = prefs.getString(("f_" + String(noradId)).c_str(), "");
+        outMode = prefs.getString(("m_" + String(noradId)).c_str(), "");
+        prefs.end();
+    }
+}
+
 void saveCustomSatellites() {
     Preferences prefs;
     prefs.begin("satellites", false);
@@ -2798,6 +2825,9 @@ void saveCustomSatellites() {
     for (int i = NUM_BUILTIN_SATELLITES; i < NUM_SATELLITES; i++) {
         idList += String(g_satellites[i].noradId);
         if (i < NUM_SATELLITES - 1) idList += ",";
+        if (g_satellites[i].downlinkFreq.length() > 0) {
+            saveSatelliteRadioConfig(g_satellites[i].noradId, g_satellites[i].downlinkFreq, g_satellites[i].radioMode);
+        }
     }
     prefs.putString("customIds", idList);
     prefs.end();
@@ -2881,7 +2911,7 @@ void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int 
     // Draw language selection dialog if needed
     if (showLangSelect) {
         int dialogW = 164;
-        int dialogH = 96;
+        int dialogH = 84;
         int dialogX = 120 - dialogW / 2;
         int dialogY = 67 - dialogH / 2;
         
@@ -2910,9 +2940,6 @@ void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int 
             }
             canvas->drawString(options[i], dialogX + 12, dialogY + 19 + i * 15);
         }
-        canvas->setFont(&fonts::Font0);
-        canvas->setTextColor(TFT_YELLOW);
-        canvas->drawString("[1-4] or [;/.] Move  [Enter] OK", dialogX + 6, dialogY + dialogH - 12);
         canvas->setFont(I18N::getFont());
     }
     
@@ -3066,6 +3093,10 @@ void setup() {
                 gnss->begin(15, 13, 115200);
                 pos_manager = new PositionManager(gnss);
                 pos_manager->begin();
+
+                // 1.1 Cap LoRa-1262 射频芯片 (SX1262) 初始化
+                LOG_I("APP", "[HW] Cap LoRa-1262 RF selected. Initializing RadioManager...");
+                RadioManager::getInstance().init();
             } else if (hw.isEnabled(HW_MOD_UNIT_GPSV11)) {
                 LOG_I("APP", "[HW] Unit GPS v1.1 selected. Starting GNSS on Grove port (RX=1, TX=2)...");
                 gnss->begin(1, 2, 115200);
@@ -3352,6 +3383,14 @@ void setup() {
                                 p.downlinkFreq = "437.625";
                                 p.radioMode = "SSTV/BPSK";
                                 p.type = SAT_TYPE_HAM;
+                            } else {
+                                String savedFreq = "", savedMode = "";
+                                loadSatelliteRadioConfig(p.noradId, savedFreq, savedMode);
+                                if (savedFreq.length() > 0) {
+                                    p.downlinkFreq = savedFreq;
+                                    if (savedMode.length() > 0) p.radioMode = savedMode;
+                                    p.type = SAT_TYPE_HAM;
+                                }
                             }
                             autoAssignIconAndColor(p.name, p.iconType, p.color);
                             if (NUM_SATELLITES < MAX_SATELLITES) {
@@ -3565,12 +3604,12 @@ void drawServoTestPage() {
     canvas->setTextColor(canvas->color565(0, 220, 255));
     canvas->drawString(isZh ? "浑仪舵机校准标定" : "Gimbal Servo Calibration", 6, 4);
     
-    // 右侧状态与按键提示：在线电流 + [aA/Esc]退出
+    // 右侧状态与按键提示：在线电流 + [Aa/Esc]退出
     int rightX = width - 4;
     canvas->setTextDatum(top_right);
     canvas->setTextColor(canvas->color565(170, 190, 210)); // 浅灰银色
-    canvas->drawString(isZh ? "[aA/Esc]退出" : "[aA/Esc]Exit", rightX, 4);
-    rightX -= (canvas->textWidth(isZh ? "[aA/Esc]退出" : "[aA/Esc]Exit") + 8);
+    canvas->drawString(isZh ? "[Aa/Esc]退出" : "[Aa/Esc]Exit", rightX, 4);
+    rightX -= (canvas->textWidth(isZh ? "[Aa/Esc]退出" : "[Aa/Esc]Exit") + 8);
     
     if (gimbal.isOnline()) {
         char statBuf[32];
@@ -5291,6 +5330,7 @@ void loop() {
         static bool lastL = false;
         static bool lastSpace = false;
         static bool lastM = false;
+        static bool lastCtrl = false;
 
         bool currSemi = M5Cardputer.Keyboard.isKeyPressed(';');
         bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
@@ -5320,6 +5360,7 @@ void loop() {
         bool currL = M5Cardputer.Keyboard.isKeyPressed('l') || M5Cardputer.Keyboard.isKeyPressed('L');
         bool currSpace = M5Cardputer.Keyboard.isKeyPressed(' ');
         bool currM = M5Cardputer.Keyboard.isKeyPressed('m') || M5Cardputer.Keyboard.isKeyPressed('M');
+        bool currCtrl = M5Cardputer.Keyboard.isKeyPressed(KEY_LEFT_CTRL) || M5Cardputer.Keyboard.keysState().ctrl;
 
         static bool s_bootKeyFlushed = false;
         if (!s_bootKeyFlushed) {
@@ -5329,12 +5370,12 @@ void loop() {
             lastC = currC; lastR = currR; lastW = currW; lastS = currS;
             lastH = currH; lastG = currG; lastY = currY; lastN = currN;
             lastD = currD; lastF = currF; lastA = currA; lastTab = currTab; lastShift = currShift; lastL = currL;
-            lastSpace = currSpace; lastM = currM;
+            lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl;
             s_bootKeyFlushed = true;
             currSemi = currDot = currComma = currSlash = currO = currV = false;
             currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = false;
             currC = currR = currW = currS = currH = currG = currY = currN = currD = currF = currA = false;
-            currTab = currShift = currL = currSpace = currM = false;
+            currTab = currShift = currL = currSpace = currM = currCtrl = false;
         }
 
         bool justSemi = currSemi && !lastSemi;
@@ -5365,7 +5406,30 @@ void loop() {
         bool justL = currL && !lastL;
         bool justSpace = currSpace && !lastSpace;
         bool justM = currM && !lastM;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM;
+        bool justCtrl = currCtrl && !lastCtrl;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl;
+
+        // RF Console 全屏终端模式 (仅在主界面下按 Ctrl 开启，退出统一按 Esc 键)
+        if (justCtrl && appState == STATE_MAIN && !RfConsoleView::getInstance().isActive()) {
+            RfConsoleView::getInstance().setActive(true);
+        }
+
+        if (RfConsoleView::getInstance().isActive()) {
+            RfConsoleView::getInstance().handleKeys(justSemi, justDot, justEnter, justD, justEsc);
+            auto c = earth_renderer->getCanvas();
+            if (c) {
+                RfConsoleView::getInstance().draw(c, 240, 135);
+                pushCanvasWithFilter();
+            }
+            lastSemi = currSemi; lastDot = currDot; lastComma = currComma; lastSlash = currSlash;
+            lastO = currO; lastV = currV; lastEnter = currEnter; lastBack = currBack;
+            lastEsc = currEsc; lastTick = currTick; lastBracketL = currBracketL; lastBracketR = currBracketR;
+            lastC = currC; lastR = currR; lastW = currW; lastS = currS;
+            lastH = currH; lastG = currG; lastY = currY; lastN = currN;
+            lastD = currD; lastF = currF; lastA = currA; lastTab = currTab; lastShift = currShift;
+            lastL = currL; lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl;
+            return;
+        }
 
         if (showHelp) {
             if (millis() < 3000) {
@@ -6460,6 +6524,26 @@ void loop() {
                             }
                         } else if (justD && realIdx >= NUM_BUILTIN_SATELLITES && realIdx < NUM_SATELLITES) {
                             deleteConfirmIndex = realIdx;
+                        } else if (justF && realIdx >= 0 && realIdx < NUM_SATELLITES) {
+                            if (g_satellites[realIdx].downlinkFreq.length() == 0) {
+                                g_satellites[realIdx].downlinkFreq = "436.700";
+                                g_satellites[realIdx].radioMode = "LoRa";
+                                g_satellites[realIdx].type = SAT_TYPE_HAM;
+                                downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已设: 436.700 LoRa" : "Set: 436.700 LoRa";
+                            } else if (g_satellites[realIdx].downlinkFreq == "436.700") {
+                                g_satellites[realIdx].downlinkFreq = "436.200";
+                                g_satellites[realIdx].radioMode = "LoRa";
+                                downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已设: 436.200 LoRa" : "Set: 436.200 LoRa";
+                            } else if (g_satellites[realIdx].downlinkFreq == "436.200") {
+                                g_satellites[realIdx].downlinkFreq = "437.500";
+                                g_satellites[realIdx].radioMode = "GFSK";
+                                downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已设: 437.500 GFSK" : "Set: 437.500 GFSK";
+                            } else {
+                                g_satellites[realIdx].downlinkFreq = "";
+                                g_satellites[realIdx].radioMode = "";
+                                downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已清除射频频段" : "Radio Cleared";
+                            }
+                            saveSatelliteRadioConfig(g_satellites[realIdx].noradId, g_satellites[realIdx].downlinkFreq, g_satellites[realIdx].radioMode);
                         } else if (justSemi) {
                             if (satSelectedIndex > 0) satSelectedIndex--;
                             else satSelectedIndex = totalItems - 1;
@@ -6566,6 +6650,7 @@ void loop() {
         lastL = currL;
         lastSpace = currSpace;
         lastM = currM;
+        lastCtrl = currCtrl;
         
         if (appState == STATE_WIFI_SETUP) {
             drawWiFiSetupPage();
@@ -7362,6 +7447,60 @@ void loop() {
                 }
             }
         
+        // =======================================================================
+        // 自动过境无线电监听与调度 (RadioManager Autonomous Satellite Radio Patrol)
+        // 无论是否接入舵机云台，系统均持续监测过境卫星并驱动 Cap LoRa-1262 射频监听
+        // =======================================================================
+        if (appState == STATE_MAIN || RfConsoleView::getInstance().isActive()) {
+            GeodeticCoord obsRadio = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+
+            int chosenRadioSat = -1;
+            // 1. 优先选择：如果在 Sat View 视角，且选中的卫星有无线电下行频率
+            if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+                if (g_satellites[focusSatIndex].downlinkFreq.length() > 0) {
+                    chosenRadioSat = focusSatIndex;
+                }
+            }
+            
+            // 2. 否则全局巡天：在所有已勾选的卫星中，寻找当前仰角 > -3° 且仰角最高的无线电卫星
+            if (chosenRadioSat < 0) {
+                float maxRadioEl = -90.0f;
+                for (int i = 0; i < NUM_SATELLITES; i++) {
+                    if (!g_satellites[i].selected || !g_satCaches[i].lastGeoValid) continue;
+                    if (g_satellites[i].downlinkFreq.length() == 0) continue;
+                    ECEFCoord ec = CoordTransform::geodeticToECEF(g_satCaches[i].lastGeo);
+                    TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
+                    if (tp.el > -3.0f && tp.el > maxRadioEl) {
+                        maxRadioEl = tp.el;
+                        chosenRadioSat = i;
+                    }
+                }
+            }
+
+            uint32_t rNorad = 0;
+            String rName = "";
+            float rEl = -90.0f;
+            bool rHasRadio = false;
+            float rFreq = 0.0f;
+            String rMode = "";
+
+            if (chosenRadioSat >= 0 && chosenRadioSat < NUM_SATELLITES) {
+                rNorad = g_satellites[chosenRadioSat].noradId;
+                rName = g_satellites[chosenRadioSat].name;
+                if (g_satCaches[chosenRadioSat].lastGeoValid) {
+                    ECEFCoord ec = CoordTransform::geodeticToECEF(g_satCaches[chosenRadioSat].lastGeo);
+                    TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
+                    rEl = tp.el;
+                }
+                if (g_satellites[chosenRadioSat].downlinkFreq.length() > 0) {
+                    rHasRadio = true;
+                    rFreq = g_satellites[chosenRadioSat].downlinkFreq.toFloat();
+                    rMode = g_satellites[chosenRadioSat].radioMode;
+                }
+            }
+            RadioManager::getInstance().update(rNorad, rName, rEl, rHasRadio, rFreq, rMode);
+        }
+
         // Update 3-axis Gimbal Targets based on active sat tracking (地表全天自主巡天跟踪站 Autonomous Sky Patrol)
         if (gimbal.isOnline() && appState != STATE_SERVO_TEST) {
             uint32_t currentSimTime = current_unix + timeMachineOffset;
@@ -7663,6 +7802,7 @@ void loop() {
                 bool highlighted = false;
                 int i = 0;
                 int openBracketCount = 0;
+                bool inBracket = false;
                 while (word[i] != '\0') {
                     int charLen = 1;
                     unsigned char head = (unsigned char)word[i];
@@ -7674,6 +7814,8 @@ void loop() {
                     for (int j = 0; j < charLen && word[i + j] != '\0'; j++) {
                         cstr[j] = word[i + j];
                     }
+
+                    if (cstr[0] == '[') inBracket = true;
                     
                     bool isYellow = false;
                     if (keyChar == '[') {
@@ -7690,12 +7832,18 @@ void loop() {
                             isYellow = true;
                             highlighted = true;
                         }
+                    } else if (keyChar == '^') {
+                        if (inBracket && cstr[0] != '[' && cstr[0] != ']') {
+                            isYellow = true;
+                        }
                     } else if (keyChar != '\0') {
                         if (charLen == 1 && !highlighted && tolower((unsigned char)cstr[0]) == tolower((unsigned char)keyChar)) {
                             isYellow = true;
                             highlighted = true;
                         }
                     }
+
+                    if (cstr[0] == ']') inBracket = false;
                     
                     if (isYellow) {
                         canvas->setTextColor(TFT_YELLOW);
@@ -7731,7 +7879,8 @@ void loop() {
             drawHotKey(I18N::get(TXT_HELP_TAB), 't', x + 8, ty);
             drawHotKey(I18N::get(TXT_HELP_MODULE), 'm', x + 112, ty); ty += 13;
             
-            drawHotKey(I18N::get(TXT_HELP_SERVO), '\0', x + 8, ty); ty += 13;
+            drawHotKey(I18N::get(TXT_HELP_SERVO), '\0', x + 8, ty);
+            drawHotKey(I18N::get(TXT_HELP_RF_CONSOLE), '^', x + 112, ty); ty += 13;
         }
         
         if (showRecommendations) {
@@ -7928,44 +8077,6 @@ void loop() {
                                 sprintf(azaltBuf, "Az:%03d° El:%02d°", (int)az, (int)el);
                             }
                             earth_renderer->getCanvas()->drawString(azaltBuf, 5, 95);
-                            
-                            if (satType == SAT_TYPE_SPACE_STATION && noradId == 25544) {
-                                double freq_aprs = 145.825;
-                                double freq_sstv = 145.800;
-                                double shift_aprs = (freq_aprs * -range_rate / 299792.458) * 1000.0;
-                                double shift_sstv = (freq_sstv * -range_rate / 299792.458) * 1000.0;
-                                
-                                char rx1Buf[32];
-                                char rx2Buf[32];
-                                if (isCjk) {
-                                    sprintf(rx1Buf, "下行1:%07.3f", freq_aprs + shift_aprs/1000.0);
-                                    sprintf(rx2Buf, "下行2:%07.3f", freq_sstv + shift_sstv/1000.0);
-                                } else {
-                                    sprintf(rx1Buf, "Rx1:%07.3f", freq_aprs + shift_aprs/1000.0);
-                                    sprintf(rx2Buf, "Rx2:%07.3f", freq_sstv + shift_sstv/1000.0);
-                                }
-                                earth_renderer->getCanvas()->drawString(rx1Buf, 5, 108);
-                                earth_renderer->getCanvas()->drawString(rx2Buf, 5, 120);
-                            }
-                            else if (satType == SAT_TYPE_WEATHER || satType == SAT_TYPE_HAM) {
-                                if (downlinkFreq.length() > 0) {
-                                    double freq_mhz = downlinkFreq.toDouble();
-                                    double shift_khz = (freq_mhz * -range_rate / 299792.458) * 1000.0;
-                                    char rxBuf[32];
-                                    if (isCjk) {
-                                        sprintf(rxBuf, "下行:%s (%+.1f)", downlinkFreq.c_str(), shift_khz);
-                                    } else {
-                                        sprintf(rxBuf, "Rx:%s (%+.1f)", downlinkFreq.c_str(), shift_khz);
-                                    }
-                                    earth_renderer->getCanvas()->drawString(rxBuf, 5, 108);
-                                }
-                                if (satType == SAT_TYPE_HAM && uplinkFreq.length() > 0) {
-                                    earth_renderer->getCanvas()->setTextColor(TFT_ORANGE);
-                                    String txStr = isCjk ? ("上行:" + uplinkFreq) : ("Tx:" + uplinkFreq);
-                                    if (tone.length() > 0) txStr += isCjk ? (" 亚音:" + tone) : (" Tone:" + tone);
-                                    earth_renderer->getCanvas()->drawString(txStr.c_str(), 5, 120);
-                                }
-                            }
                         }
                     }
                 } else {
@@ -8303,6 +8414,19 @@ void loop() {
                     earth_renderer->getCanvas()->setTextColor(satColor);
                     const char* satViewStr = (currL == LANG_ZH) ? "视角锁定" : ((currL == LANG_JA) ? "視点固定" : ((currL == LANG_ES) ? "Vista sat" : "Sat View"));
                     earth_renderer->getCanvas()->drawString(satViewStr, 180, 5);
+
+                    // 绘制正在过境监听的动态 WiFi 弧形辐射波纹图标
+                    if (RadioManager::getInstance().isEmittingWaves()) {
+                        int wx = 168;
+                        int wy = 11;
+                        float phase = RadioManager::getInstance().getWavePhase();
+                        for (int arc = 1; arc <= 3; arc++) {
+                            int r = arc * 3 + (int)(phase * 2.5f);
+                            uint16_t col = (arc == 1) ? 0x07E0 : ((arc == 2) ? 0x07FF : 0x2965);
+                            earth_renderer->getCanvas()->drawCircle(wx, wy, r, col);
+                        }
+                        earth_renderer->getCanvas()->fillCircle(wx, wy, 2, 0x07E0);
+                    }
                     
                     double az = 0, el = 0, dist = 0, range_rate = 0, skew = 0;
                     bool hasValidPos = false;
@@ -8410,6 +8534,31 @@ void loop() {
 
         if (appState == STATE_LANG_SELECT) {
             drawLangSelectDialog(earth_renderer->getCanvas());
+        }
+
+        // 居中顶部 Toast 弹窗渲染 (收到数据包时弹出，5秒自动淡出)
+        if (RadioManager::getInstance().hasActiveToast()) {
+            auto c = earth_renderer->getCanvas();
+            if (c) {
+                String toast = RadioManager::getInstance().getToastText();
+                float alpha = RadioManager::getInstance().getToastAlpha();
+                if (alpha > 0.05f) {
+                    c->setFont(&fonts::Font0);
+                    c->setTextSize(1);
+                    int tw = c->textWidth(toast.c_str()) + 16;
+                    int th = 16;
+                    int tx = (240 - tw) / 2;
+                    int ty = 4;
+                    uint16_t boxBg = (alpha > 0.5f) ? 0x0841 : 0x0000;
+                    uint16_t borderCol = (alpha > 0.5f) ? 0x07FF : 0x2965;
+                    uint16_t textCol = (alpha > 0.5f) ? 0x07E0 : 0x03E0;
+                    c->fillRoundRect(tx, ty, tw, th, 4, boxBg);
+                    c->drawRoundRect(tx, ty, tw, th, 4, borderCol);
+                    c->setTextDatum(MC_DATUM);
+                    c->setTextColor(textCol, boxBg);
+                    c->drawString(toast.c_str(), tx + tw / 2, ty + th / 2);
+                }
+            }
         }
     }
     
