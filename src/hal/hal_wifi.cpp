@@ -7,6 +7,7 @@ static IPAddress s_cachedIp(0, 0, 0, 0);
 static IPAddress s_cachedGateway(0, 0, 0, 0);
 static IPAddress s_cachedSubnet(0, 0, 0, 0);
 static IPAddress s_cachedDns(0, 0, 0, 0);
+static String s_cachedSsid = "";
 
 void HalWifi::begin(const char* ssid, const char* password) {
     if (ssid == nullptr || strlen(ssid) == 0) {
@@ -21,24 +22,36 @@ void HalWifi::begin(const char* ssid, const char* password) {
         return;
     }
     
-    if (WiFi.status() == WL_CONNECTED) {
+    if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == String(ssid)) {
         LOG_I("APP", "WiFi already connected: %s", WiFi.localIP().toString().c_str());
         return;
     }
 
     LOG_I("APP", "Connecting to WiFi: %s", ssid);
     
-    // 1. 启动并置为 STA 模式（系统瘦身后拥有充沛的连续 DMA 内存）
+    // 1. 彻底重置并启动 STA 模式，确保底层 esp_wifi 硬件驱动完全就绪
+    WiFi.disconnect(true, true);
+    delay(50);
+    WiFi.mode(WIFI_OFF);
+    delay(50);
     WiFi.mode(WIFI_STA);
+    esp_wifi_start();
     delay(50);
     
     // 2. 关键：彻底禁用 Wi-Fi 休眠（Modem Sleep），避免 TCP SYN-ACK 握手包被丢弃导致超时！
     WiFi.setSleep(false);
     WiFi.persistent(false);
-    WiFi.setAutoReconnect(false);
+    WiFi.setAutoReconnect(true);
     
-    // 3. 微调发射功率至 15dBm，避免 Cardputer 紧凑天线近距离信号饱和失真
-    WiFi.setTxPower(WIFI_POWER_15dBm);
+    // 3. 恢复标准发射功率
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    
+    // 若 SSID 改变，重置历史缓存以避免跨网 IP 冲突
+    if (s_cachedSsid != String(ssid)) {
+        s_cachedSsid = String(ssid);
+        s_cachedIp = IPAddress(0, 0, 0, 0);
+        WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
+    }
     
     WiFi.begin(ssid, password);
     
@@ -50,8 +63,7 @@ void HalWifi::begin(const char* ssid, const char* password) {
         retries++;
     }
     
-    // 4. 如果物理层已连上 AP，但路由器端 DHCP 响应缓慢（企业 AP / 租约未释放），
-    // 且我们之前在同一个网络下已经成功获取并缓存过有效 IP 租约，立即快速应用该已知有效租约！
+    // 4. 如果是同一 SSID 且之前已获取过有效租约，快速激活备份
     if (WiFi.status() != WL_CONNECTED && s_cachedIp != IPAddress(0, 0, 0, 0)) {
         LOG_I("APP", "Activating active DHCP lease: IP %s, GW %s", 
               s_cachedIp.toString().c_str(), s_cachedGateway.toString().c_str());
@@ -128,6 +140,8 @@ std::vector<WiFiNetwork> HalWifi::scanNetworks() {
     std::vector<WiFiNetwork> networks;
     LOG_I("APP", "Scanning WiFi networks...");
     
+    WiFi.mode(WIFI_OFF);
+    delay(30);
     WiFi.mode(WIFI_STA);
     esp_wifi_start();
     delay(50);
@@ -146,12 +160,7 @@ std::vector<WiFiNetwork> HalWifi::scanNetworks() {
     }
     WiFi.scanDelete(); // 必须无条件释放 ESP32 内部扫描结果内存缓冲区
     
-    // 扫描完成后停止 RF 射频发射器省电
-    WiFi.disconnect(false, false);
-    delay(50);
-    esp_wifi_stop();
-    LOG_I("APP", "WiFi scan complete. RF stopped for power saving.");
-    
+    LOG_I("APP", "WiFi scan complete.");
     return networks;
 }
 
