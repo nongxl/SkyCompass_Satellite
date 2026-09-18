@@ -62,6 +62,8 @@ HardwareWizardView hardware_wizard;
 GimbalController gimbal;
 #include "ui/servo_test_view.h"
 ServoTestView servo_test_view(gimbal);
+#include "ui/wifi_setup_view.h"
+WifiSetupView wifi_setup_view;
 
 #include "core/mono_icons.h"
 
@@ -128,12 +130,7 @@ AppState appState = STATE_MAIN;
 int langSelectedIndex = 0;
 void saveCustomSatellites();
 
-std::vector<WiFiNetwork> wifiNetworks;
-int wifiSelectedIndex = 0;
-bool wifiIsScanning = false;
-bool wifiIsInputtingPassword = false;
-char wifiPasswordBuffer[64] = {0};
-int wifiPasswordLen = 0;
+
 
 int satSelectedIndex = 0;
 
@@ -305,10 +302,7 @@ AppState g_wifiSetupReturnState = STATE_SAT_SELECT;
 
 void exitWiFiSetupScreen() {
     appState = g_wifiSetupReturnState;
-    wifiIsScanning = false;
-    wifiIsInputtingPassword = false;
-    wifiNetworks.clear();
-    wifiNetworks.shrink_to_fit();
+    wifi_setup_view.reset();
     if (!HalWifi::isConnected()) {
         HalWifi::disconnect();
     }
@@ -2170,8 +2164,7 @@ void recentLaunchNetworkTaskImpl() {
             recentLaunchDownloadFinishedMs = millis();
             g_wifiSetupReturnState = STATE_SAT_SELECT;
             appState = STATE_WIFI_SETUP;
-            wifiIsScanning = true;
-            wifiIsInputtingPassword = false;
+            wifi_setup_view.startScan();
             return;
         }
     }
@@ -2472,8 +2465,7 @@ void downloadCustomSatTask(void* parameter) {
         
         if (!wifiReady && !wifiWasConnected) {
             appState = STATE_WIFI_SETUP;
-            wifiIsScanning = true;
-            wifiIsInputtingPassword = false;
+            wifi_setup_view.startScan();
         }
     }
     
@@ -2507,8 +2499,7 @@ void networkTaskImpl(void* parameter) {
         if (manualWifiToggle || appState == STATE_MAIN || appState == STATE_SAT_SELECT) {
             g_wifiSetupReturnState = appState;
             appState = STATE_WIFI_SETUP;
-            wifiIsScanning = true;
-            wifiIsInputtingPassword = false;
+            wifi_setup_view.startScan();
         }
         g_wifiConnecting = false;
         g_dataUpdating = false;
@@ -2529,8 +2520,7 @@ void networkTaskImpl(void* parameter) {
         // 当旧凭据在新网络环境中无法连接时，自动弹出 WiFi 扫描配置供用户选择当前网络
         g_wifiSetupReturnState = appState;
         appState = STATE_WIFI_SETUP;
-        wifiIsScanning = true;
-        wifiIsInputtingPassword = false;
+        wifi_setup_view.startScan();
         
         g_wifiConnecting = false;
         g_dataUpdating = false;
@@ -3531,90 +3521,7 @@ void setup() {
     }
 }
 
-void drawWiFiSetupPage() {
-    auto canvas = earth_renderer->getCanvas();
-    uint16_t width = canvas->width();
-    uint16_t height = canvas->height();
-    
-    // Set font matching current language
-    canvas->setFont(I18N::getFont());
-    canvas->setTextSize(1);
-    
-    // Background
-    canvas->fillRect(0, 0, width, height, canvas->color565(15, 20, 25));
-    
-    // Top Bar
-    canvas->fillRect(0, 0, width, 25, canvas->color565(30, 60, 100));
-    canvas->setTextColor(TFT_WHITE);
-    canvas->drawString(I18N::get(TXT_WIFI_SETUP), 10, 5);
-    
-    canvas->setTextColor(TFT_WHITE);
-    
-    if (wifiIsScanning) {
-        canvas->drawString(I18N::get(TXT_SCANNING_NETWORKS), 20, 50);
-        return; // Will be handled in main loop
-    }
-    
-    if (wifiNetworks.empty() && !wifiIsScanning) {
-        wifiIsInputtingPassword = false;
-        canvas->drawString(I18N::get(TXT_NO_NETWORKS_FOUND), 20, 80);
-        canvas->drawString(I18N::get(TXT_PRESS_R_RESCAN), 20, 100);
-    } else {
-        if (wifiIsInputtingPassword && wifiSelectedIndex >= 0 && wifiSelectedIndex < (int)wifiNetworks.size()) {
-            canvas->drawString(I18N::get(TXT_CONNECT_TO), 20, 40);
-            canvas->setTextColor(TFT_GREEN);
-            String ssid = truncateUtf8Chars(wifiNetworks[wifiSelectedIndex].ssid, 16);
-            canvas->drawString(ssid.c_str(), 20, 55);
-            
-            canvas->setTextColor(TFT_WHITE);
-            canvas->drawString(I18N::get(TXT_PASSWORD), 20, 80);
-            
-            canvas->fillRect(20, 95, width - 40, 25, canvas->color565(50, 50, 50));
-            canvas->drawRect(20, 95, width - 40, 25, TFT_WHITE);
-            
-            char displayStr[66];
-            sprintf(displayStr, "%s_", wifiPasswordBuffer);
-            canvas->drawString(displayStr, 25, 100);
-            
-            canvas->setTextColor(TFT_LIGHTGRAY);
-            canvas->drawString(I18N::get(TXT_WIFI_HELP_CONN), 10, height - 15);
-        } else {
-            canvas->drawString(I18N::get(TXT_SELECT_NETWORK), 10, 30);
-            
-            if (wifiSelectedIndex < 0) wifiSelectedIndex = 0;
-            if (!wifiNetworks.empty() && wifiSelectedIndex >= (int)wifiNetworks.size()) {
-                wifiSelectedIndex = (int)wifiNetworks.size() - 1;
-            }
-            
-            int yPos = 45;
-            int itemsPerPage = 4;
-            int startIndex = (wifiSelectedIndex / itemsPerPage) * itemsPerPage;
-            if (startIndex < 0) startIndex = 0;
-            
-            for (int i = 0; i < itemsPerPage && (startIndex + i) < (int)wifiNetworks.size(); i++) {
-                int index = startIndex + i;
-                if (index == wifiSelectedIndex) {
-                    canvas->fillRect(5, yPos - 2, width - 10, 18, canvas->color565(50, 100, 150));
-                    canvas->setTextColor(TFT_WHITE);
-                } else {
-                    canvas->setTextColor(TFT_LIGHTGRAY);
-                }
-                
-                String ssidStr = truncateUtf8Chars(wifiNetworks[index].ssid, 14);
-                canvas->drawString(ssidStr.c_str(), 10, yPos);
-                
-                char rssiStr[16];
-                sprintf(rssiStr, "%ddBm", wifiNetworks[index].rssi);
-                canvas->drawString(rssiStr, width - 50, yPos);
-                
-                yPos += 20;
-            }
-            
-            canvas->setTextColor(TFT_LIGHTGRAY);
-            canvas->drawString(I18N::get(TXT_WIFI_HELP_SEL), 5, height - 15);
-        }
-    }
-}
+
 
 
 void updateEncyclopediaFilteredList() {
@@ -6166,91 +6073,52 @@ void loop() {
 
 
             } else if (appState == STATE_WIFI_SETUP) {
-                if (justEsc || justTick) {
-                    if (wifiIsInputtingPassword) {
-                        wifiIsInputtingPassword = false;
-                    } else {
+                WifiConnectRequest req;
+                bool shouldExit = false;
+                if (wifi_setup_view.handleInput(justEsc, justTick, justBack, justEnter,
+                                                justR, justSemi, justDot,
+                                                M5Cardputer.Keyboard.keysState(),
+                                                req, shouldExit)) {
+                    if (shouldExit) {
                         exitWiFiSetupScreen();
-                    }
-                } else if (!wifiIsInputtingPassword && justBack) {
-                    exitWiFiSetupScreen();
-                } else if (wifiIsInputtingPassword) {
-                    if (justEnter) {
-                        if (!wifiNetworks.empty() && wifiSelectedIndex >= 0 && wifiSelectedIndex < (int)wifiNetworks.size()) {
-                            // Connect
-                            appState = g_wifiSetupReturnState;
-                            NetworkParams* params = new NetworkParams();
-                            params->ssid = wifiNetworks[wifiSelectedIndex].ssid;
-                            params->pass = String(wifiPasswordBuffer);
-                            params->shouldSave = true;
-                            
-                            wifiNetworks.clear();
-                            wifiNetworks.shrink_to_fit();
-                            wifiIsScanning = false;
-                            wifiIsInputtingPassword = false;
-                            
-                            manualWifiToggle = true; // Stay connected since user explicitly set it up
-                            if (currentSatTab == TAB_RECENT_LAUNCH) {
-                                HalWifi::saveCredentials(params->ssid, params->pass);
+                    } else if (req.triggered) {
+                        appState = g_wifiSetupReturnState;
+                        manualWifiToggle = true; // Stay connected since user explicitly set it up
+                        NetworkParams* params = new NetworkParams();
+                        params->ssid = req.ssid;
+                        params->pass = req.pass;
+                        params->shouldSave = true;
+                        
+                        if (currentSatTab == TAB_RECENT_LAUNCH) {
+                            HalWifi::saveCredentials(params->ssid, params->pass);
+                            delete params;
+                            recentLaunchDownloading = true;
+                            recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
+                            drawSatSelectPage();
+                            pushCanvasWithFilter();
+                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 6144, NULL, 1, NULL, 0);
+                            if (res != pdPASS) {
+                                LOG_I("APP", "Failed to create RecentLaunchNetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
+                                recentLaunchDownloading = false;
+                                recentLaunchErrorMsg = I18N::get(TXT_LOW_MEMORY);
+                                recentLaunchDownloadFinishedMs = millis();
+                                if (!HalWifi::isConnected()) {
+                                    HalWifi::disconnect();
+                                }
+                            }
+                        } else {
+                            BaseType_t res = xTaskCreatePinnedToCore(
+                                networkTask, "NetworkTask", 6144, params, 1, NULL, 0
+                            );
+                            if (res != pdPASS) {
+                                LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
                                 delete params;
-                                recentLaunchDownloading = true;
-                                recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
-                                drawSatSelectPage();
-                                pushCanvasWithFilter();
-                                BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 6144, NULL, 1, NULL, 0);
-                                if (res != pdPASS) {
-                                    LOG_I("APP", "Failed to create RecentLaunchNetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
-                                    recentLaunchDownloading = false;
-                                    recentLaunchErrorMsg = I18N::get(TXT_LOW_MEMORY);
-                                    recentLaunchDownloadFinishedMs = millis();
-                                    if (!HalWifi::isConnected()) {
-                                        HalWifi::disconnect();
-                                    }
-                                }
-                            } else {
-                                BaseType_t res = xTaskCreatePinnedToCore(
-                                    networkTask, "NetworkTask", 6144, params, 1, NULL, 0
-                                );
-                                if (res != pdPASS) {
-                                    LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
-                                    delete params;
-                                    downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
-                                    downloadFinishedMs = millis();
-                                    if (!HalWifi::isConnected()) {
-                                        HalWifi::disconnect();
-                                    }
+                                downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
+                                downloadFinishedMs = millis();
+                                if (!HalWifi::isConnected()) {
+                                    HalWifi::disconnect();
                                 }
                             }
-                        }
-                    } else if (justBack) {
-                        if (wifiPasswordLen > 0) {
-                            wifiPasswordBuffer[--wifiPasswordLen] = '\0';
-                        }
-                    } else {
-                        for (auto c : M5Cardputer.Keyboard.keysState().word) {
-                            if (wifiPasswordLen < 63 && c >= ' ' && c <= '~') {
-                                wifiPasswordBuffer[wifiPasswordLen++] = c;
-                                wifiPasswordBuffer[wifiPasswordLen] = '\0';
-                            }
-                        }
-                    }
-                } else {
-                    if (justR) {
-                        wifiIsScanning = true;
-                    } else if (justEnter) {
-                        if (!wifiNetworks.empty()) {
-                            wifiIsInputtingPassword = true;
-                            memset(wifiPasswordBuffer, 0, sizeof(wifiPasswordBuffer));
-                            wifiPasswordLen = 0;
-                        }
-                    } else if (justSemi) { // UP arrow
-                        if (!wifiNetworks.empty()) {
-                            if (wifiSelectedIndex > 0) wifiSelectedIndex--;
-                            else wifiSelectedIndex = wifiNetworks.size() - 1;
-                        }
-                    } else if (justDot) { // DOWN arrow
-                        if (!wifiNetworks.empty()) {
-                            wifiSelectedIndex = (wifiSelectedIndex + 1) % wifiNetworks.size();
                         }
                     }
                 }
@@ -6756,14 +6624,12 @@ void loop() {
         lastT = currT;
         
         if (appState == STATE_WIFI_SETUP) {
-            drawWiFiSetupPage();
+            wifi_setup_view.draw(earth_renderer->getCanvas());
             pushCanvasWithFilter();
             updateChainMonoDisplay();
             
-            if (wifiIsScanning) {
-                wifiNetworks = HalWifi::scanNetworks();
-                wifiIsScanning = false;
-                wifiSelectedIndex = 0;
+            if (wifi_setup_view.isScanning()) {
+                wifi_setup_view.performScan();
             }
             return;
         } else if (appState == STATE_SAT_SELECT) {
