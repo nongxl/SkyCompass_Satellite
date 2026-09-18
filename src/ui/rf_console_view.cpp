@@ -21,59 +21,76 @@ static void drawTimelineSatellite(LGFX_Sprite* canvas, int cx, int cy, SatIconTy
 
     // 垂直对准微刻度线
     uint16_t pointerCol = isListening ? 0x07E0 : 0x07FF;
-    canvas->drawFastVLine(cx, cy - 6, 2, pointerCol);
-    canvas->drawFastVLine(cx, cy + 5, 2, pointerCol);
+    canvas->drawFastVLine(cx, cy - 8, 3, pointerCol);
+    canvas->drawFastVLine(cx, cy + 6, 3, pointerCol);
 
     // 呼吸动态信标光点
     bool pulse = ((millis() / 400) % 2 == 0);
     uint16_t beaconCol = isListening ? (pulse ? 0x07E0 : 0x04A0) : 0x07FF;
 
-    if (icon == ICON_STATION) {
-        canvas->fillRect(cx - 3, cy - 1, 7, 3, 0xD6BA);
-        canvas->fillRect(cx - 1, cy - 2, 3, 5, 0xE71C);
-        canvas->drawFastHLine(cx - 9, cy, 19, 0x7BEF);
-        canvas->fillRect(cx - 9, cy - 4, 4, 9, 0x1B3F);
-        canvas->drawRect(cx - 9, cy - 4, 4, 9, 0xFDA0);
-        canvas->drawFastHLine(cx - 9, cy, 4, TFT_BLACK);
-        canvas->fillRect(cx + 6, cy - 4, 4, 9, 0x1B3F);
-        canvas->drawRect(cx + 6, cy - 4, 4, 9, 0xFDA0);
-        canvas->drawFastHLine(cx + 6, cy, 4, TFT_BLACK);
-        canvas->drawPixel(cx, cy, beaconCol);
-    } else if (icon == ICON_DFH1) {
-        canvas->fillCircle(cx, cy, 3, 0xD6BA);
-        canvas->drawCircle(cx, cy, 3, 0x7BEF);
-        canvas->drawPixel(cx - 1, cy - 1, 0xFFFF);
-        canvas->drawLine(cx - 2, cy - 2, cx - 6, cy - 5, TFT_WHITE);
-        canvas->drawLine(cx + 2, cy - 2, cx + 6, cy - 5, TFT_WHITE);
-        canvas->drawLine(cx - 2, cy + 2, cx - 6, cy + 5, TFT_WHITE);
-        canvas->drawLine(cx + 2, cy + 2, cx + 6, cy + 5, TFT_WHITE);
-        canvas->drawPixel(cx, cy, beaconCol);
-    } else if (icon == ICON_WEATHER) {
-        canvas->fillRect(cx - 2, cy - 2, 4, 5, 0xCE79);
-        canvas->fillRect(cx - 8, cy - 4, 5, 9, 0x0AD5);
-        canvas->drawRect(cx - 8, cy - 4, 5, 9, 0x345F);
-        canvas->drawFastHLine(cx - 8, cy, 5, TFT_BLACK);
-        canvas->fillRect(cx + 2, cy - 1, 3, 3, 0x4208);
-        canvas->drawPixel(cx + 5, cy, beaconCol);
-    } else if (icon == ICON_NAVIGATION) {
-        canvas->fillRect(cx - 2, cy - 3, 5, 7, 0xD6BA);
-        canvas->fillRect(cx - 8, cy - 2, 5, 5, 0x1B3F);
-        canvas->drawRect(cx - 8, cy - 2, 5, 5, 0xFDA0);
-        canvas->fillRect(cx + 4, cy - 2, 5, 5, 0x1B3F);
-        canvas->drawRect(cx + 4, cy - 2, 5, 5, 0xFDA0);
-        canvas->drawFastHLine(cx - 2, cy + 4, 5, TFT_WHITE);
-        canvas->drawPixel(cx, cy, beaconCol);
-    } else {
-        canvas->fillRect(cx - 2, cy - 2, 5, 5, 0xD6BA);
-        canvas->drawRect(cx - 2, cy - 2, 5, 5, 0x07FF);
-        canvas->drawFastHLine(cx - 7, cy, 5, 0x1B3F);
-        canvas->drawFastHLine(cx + 3, cy, 4, 0x01EF);
-        canvas->drawFastHLine(cx - 3, cy, 7, 0xBDF7);
-        canvas->fillRect(cx - 2, cy - 2, 5, 5, 0xFEA0);
-        canvas->fillRect(cx - 1, cy - 1, 3, 3, 0xFFFF);
-        canvas->drawFastVLine(cx, cy + 3, 2, TFT_WHITE);
-        canvas->drawPixel(cx, cy + 4, beaconCol);
+    static LGFX_Sprite* s_satSprite = nullptr;
+    if (!s_satSprite) {
+        s_satSprite = new LGFX_Sprite(canvas);
+        s_satSprite->setColorDepth(16);
+        s_satSprite->createSprite(26, 26);
+        s_satSprite->setPivot(13, 13);
     }
+
+    const uint16_t CHROMA = 0x0001;
+    s_satSprite->fillScreen(CHROMA);
+
+    int scx = 13;
+    int scy = 13;
+
+    if (icon == ICON_STATION) {
+        s_satSprite->fillRect(scx - 3, scy - 1, 7, 3, 0xD6BA);
+        s_satSprite->fillRect(scx - 1, scy - 2, 3, 5, 0xE71C);
+        s_satSprite->drawFastHLine(scx - 9, scy, 19, 0x7BEF);
+        s_satSprite->fillRect(scx - 9, scy - 4, 4, 9, 0x1B3F);
+        s_satSprite->drawRect(scx - 9, scy - 4, 4, 9, 0xFDA0);
+        s_satSprite->drawFastHLine(scx - 9, scy, 4, TFT_BLACK);
+        s_satSprite->fillRect(scx + 6, scy - 4, 4, 9, 0x1B3F);
+        s_satSprite->drawRect(scx + 6, scy - 4, 4, 9, 0xFDA0);
+        s_satSprite->drawFastHLine(scx + 6, scy, 4, TFT_BLACK);
+        s_satSprite->drawPixel(scx, scy, beaconCol);
+    } else if (icon == ICON_DFH1) {
+        s_satSprite->fillCircle(scx, scy, 3, 0xD6BA);
+        s_satSprite->drawCircle(scx, scy, 3, 0x7BEF);
+        s_satSprite->drawPixel(scx - 1, scy - 1, 0xFFFF);
+        s_satSprite->drawLine(scx - 2, scy - 2, scx - 6, scy - 5, TFT_WHITE);
+        s_satSprite->drawLine(scx + 2, scy - 2, scx + 6, scy - 5, TFT_WHITE);
+        s_satSprite->drawLine(scx - 2, scy + 2, scx - 6, scy + 5, TFT_WHITE);
+        s_satSprite->drawLine(scx + 2, scy + 2, scx + 6, scy + 5, TFT_WHITE);
+        s_satSprite->drawPixel(scx, scy, beaconCol);
+    } else if (icon == ICON_WEATHER) {
+        s_satSprite->fillRect(scx - 2, scy - 2, 4, 5, 0xCE79);
+        s_satSprite->fillRect(scx - 8, scy - 4, 5, 9, 0x0AD5);
+        s_satSprite->drawRect(scx - 8, scy - 4, 5, 9, 0x345F);
+        s_satSprite->drawFastHLine(scx - 8, scy, 5, TFT_BLACK);
+        s_satSprite->fillRect(scx + 2, scy - 1, 3, 3, 0x4208);
+        s_satSprite->drawPixel(scx + 5, scy, beaconCol);
+    } else if (icon == ICON_NAVIGATION) {
+        s_satSprite->fillRect(scx - 2, scy - 3, 5, 7, 0xD6BA);
+        s_satSprite->fillRect(scx - 8, scy - 2, 5, 5, 0x1B3F);
+        s_satSprite->drawRect(scx - 8, scy - 2, 5, 5, 0xFDA0);
+        s_satSprite->fillRect(scx + 4, scy - 2, 5, 5, 0x1B3F);
+        s_satSprite->drawRect(scx + 4, scy - 2, 5, 5, 0xFDA0);
+        s_satSprite->drawFastHLine(scx - 2, scy + 4, 5, TFT_WHITE);
+        s_satSprite->drawPixel(scx, scy, beaconCol);
+    } else {
+        s_satSprite->fillRect(scx - 2, scy - 2, 5, 5, 0xD6BA);
+        s_satSprite->drawRect(scx - 2, scy - 2, 5, 5, 0x07FF);
+        s_satSprite->drawFastHLine(scx - 7, scy, 5, 0x1B3F);
+        s_satSprite->drawFastHLine(scx + 3, scy, 4, 0x01EF);
+        s_satSprite->drawFastHLine(scx - 3, scy, 7, 0xBDF7);
+        s_satSprite->fillRect(scx - 2, scy - 2, 5, 5, 0xFEA0);
+        s_satSprite->fillRect(scx - 1, scy - 1, 3, 3, 0xFFFF);
+        s_satSprite->drawFastVLine(scx, scy + 3, 2, TFT_WHITE);
+        s_satSprite->drawPixel(scx, scy + 4, beaconCol);
+    }
+
+    // 旋转 45° 呈现沿轨滑行姿态
+    s_satSprite->pushRotateZoom(canvas, (float)cx, (float)cy, 45.0f, 1.0f, 1.0f, CHROMA);
 }
 
 static const char* getCompass8Dir(float az) {
