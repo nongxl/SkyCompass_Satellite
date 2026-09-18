@@ -177,7 +177,7 @@ static const char* const t_en[TXT_MAX] = {
     "Update Failed: ",
     
     // Tree categories in passes panel
-    "Tonight",
+    "Today",
     "Next 7 Days",
     "Highly Recommended",
     "All Passes",
@@ -377,7 +377,7 @@ static const char* const t_zh[TXT_MAX] = {
     "更新失败：",
     
     // Tree categories in passes panel
-    "今晚",
+    "今日",
     "未来7天",
     "重点推荐",
     "所有过境",
@@ -577,7 +577,7 @@ static const char* const t_ja[TXT_MAX] = {
     "更新失敗: ",
     
     // Tree categories in passes panel
-    "今夜",
+    "今日",
     "今後7日間",
     "強く推奨",
     "すべての通過",
@@ -773,7 +773,7 @@ static const char* const t_es[TXT_MAX] = {
     "Error al actualizar: ",
     
     // Tree categories in passes panel
-    "Esta noche",
+    "Hoy",
     "Proximos 7 dias",
     "Muy recomendado",
     "Todos los pases",
