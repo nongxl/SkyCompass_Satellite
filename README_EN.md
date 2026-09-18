@@ -113,8 +113,50 @@
   - **CH2 (Satellite Pointer Travel Axis)**: Represents the spacecraft body, sweeping smoothly across the arch from AOS to LOS.
   - **Dedicated Debug Mode**: Press **`Aa (Shift)`** anytime on the main screen to enter Servo Test Mode (`0/1/2` select channel, `,` and `/` fine-step, `Z/X/C/A/S` quick presets).
 
+## Project Architecture & Directory Structure
+
+The project has been modularized and decoupled into a clean, layered architecture (UI Views, Core Algorithms, Hardware Abstraction Layer, Display Drivers, and Main System Loop):
+
+```text
+SkyCompass_Satellite/
+├── src/
+│   ├── app/                      # Application context (time machine, user input states)
+│   ├── core/                     # Core math, celestial mechanics, and utility libraries
+│   │   ├── orbit_utils.*         # SGP4 orbit sampling, GEO slot lookups, formation grouping & focus protection
+│   │   ├── radio_tracking_pipeline.* # Discrete Doppler shift derivatives, pass window detection & RF auto-tuning
+│   │   ├── coord_transform.*     # TEME / ECEF / Geodetic / Topocentric coordinate transformations
+│   │   ├── earth_renderer.*      # 3D Earth vector coastline, celestial sphere projection & day/night terminator
+│   │   ├── observation_predictor.* # 7-day pass prediction, visual magnitude & multi-factor scoring arbitration
+│   │   ├── image_utils.*         # Night vision filter and serial Base64 screenshot streaming
+│   │   ├── text_utils.*          # UTF-8 width wrapping, height-constrained drawing & smooth marquee scrolling
+│   │   ├── encyclopedia.*        # Static spacecraft encyclopedia database and taxonomy tags
+│   │   └── i18n.*                # Multi-language dictionary and font glyph support
+│   ├── gimbal/                   # Three-axis orbital arch gimbal drivers and autonomous sky patrol
+│   │   ├── gimbal_tracking_pipeline.* # Autonomous Sky Patrol arbitration and Sat View close-up tracking
+│   │   └── gimbal_controller.*   # Unit 8Servos / PCA9685 I2C servo drivers and travel protection
+│   ├── hal/                      # Unified Hardware Abstraction Layer (HAL)
+│   │   ├── hal_gnss.*            # GPS/BDS UART driver, NMEA parser and power-saving standby
+│   │   ├── hal_imu.*             # Six-axis IMU driver (MPU6886 / SH200Q)
+│   │   ├── hal_wifi.*            # WiFi STA scanner, connection management and event listener
+│   │   └── hal_radio.*           # SX1262 (Cap LoRa-1262) RF hardware SPI abstraction
+│   ├── hardware/                 # Peripheral display drivers
+│   │   └── chain_mono_view.*     # M5Chain mono sub-screen refresh scheduler, countdown & icons
+│   ├── ui/                       # Independent UI views and dialogs
+│   │   ├── sat_select_view.*     # Satellite selection, encyclopedia detail card & category filter dialog
+│   │   ├── recommendation_view.* # Left-side pass recommendation panel, tree view & dual-row hardware status bar
+│   │   ├── rf_console_view.*     # Fullscreen RF telemetry console & packet raw HEX viewer
+│   │   ├── wifi_setup_view.*     # WiFi scan list and virtual keyboard setup view
+│   │   ├── servo_test_view.*     # Three-axis orbital arch gimbal calibration & fine-tuning view
+│   │   ├── hardware_wizard_view.*# Hardware setup wizard (press M to trigger)
+│   │   ├── dialog_views.*        # Hotkey help dialog (intelligent yellow highlighting) & language selector
+│   │   └── startup_view.*        # Startup 3D Earth motion-sync rotation & progress bar
+│   └── main.cpp                  # System entry setup(), main event pump loop(), and background tasks
+├── scripts/                      # PC-side tools (screenshot receiver, map generator, point-cloud sampler)
+└── platformio.ini                # PlatformIO environment and dependency configurations
+```
 
 ## Technical Details: Orbital Propagations & Visibility Predictions
+
 
 To match the orbital predictions of professional astronomy software, a comprehensive astronomical coordinate transformation, orbital propagation, and optical visibility calculation system is implemented on the ESP32 chip. The key physical models and technical summaries are described below:
 
