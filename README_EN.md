@@ -2,389 +2,144 @@
 
 [简体中文](README.md) | **English**
 
-> **🔥 Firmware is released on M5Burner! You can directly search for `SkyCompass Satellite` in the official M5Burner burning tool and flash it with a single click (no compilation required).**
+> **🔥 Firmware is released on M5Burner! You can directly search for `SkyCompass Satellite` in the official M5Burner tool and flash it with a single click (no compilation required).**
 
 ![SkyCompass Satellite Cover](cover.jpg)
 
 ## Project Overview
 
-**SkyCompass Satellite** is an extended and evolved version of the SkyCompass project, designed to run on the **M5Stack Cardputer ADV (ESP32-S3)**. Unlike the original project which focuses on natural celestial bodies (Sun, Moon, etc.), the Satellite version specializes in **real-time tracking and visibility predictions for human-made spacecrafts (such as the ISS, Tiangong Space Station, Hubble Space Telescope, etc.)**.
+**SkyCompass Satellite** is an extended and evolved version of the SkyCompass project, designed to run on the **M5Stack Cardputer ADV (ESP32-S3)**. Unlike the original project which focuses on natural celestial bodies (Sun, Moon, etc.), the Satellite version specializes in **real-time spatial tracking and pass visibility predictions for human-made spacecrafts (such as the ISS, Tiangong Space Station, Hubble Space Telescope, etc.)**.
 
-**Core Product Value:** Answering the key question: **"Which spacecraft are worth observing tonight?"**. It is not just an orbital trajectory plotter, but a smart recommender system telling you exactly when and where to look up to witness satellite passes.
+**Core Product Value:** Answering the key question: **"Which spacecraft are worth observing tonight?"**. It is not just a 3D orbital path viewer, but an intelligent observation recommender combining orbital mechanics with optical visibility rating.
 
-## Hardware Support
+---
 
-- **M5 Cardputer** (Compatible with both ADV version and v1.1 Standard version):
-  - **ADV Version**: Uses internal slot pins (G13/G15) for communication, built-in IMU and keyboard, supporting full motion sensing and GPS positioning.
-  - **v1.1 Standard Version**: Supports external serial GPS modules (e.g. **GPS v1.1 Unit**) via the Grove port.
-  - **Adaptive Pin Remapping**: The system automatically detects the internal slot. If no GPS module is detected on the internal slot pins `15/13` (slot empty), it **automatically remaps GPS communications to the Grove port (GPIO 2 / GPIO 1) and skips Chain Mono screen probe (displays mono:no)**. This solves the hardware pin conflicts between the rear slot and the physical matrix keyboard scanner lines on v1.1 Standard Cardputer.
-- **Physical Coexistence & Concurrent Working (No IMU contention)**: The built-in IMU on Cardputer-Adv operates on the internal I2C bus (GPIO 8/9), which is physically independent of the external Grove port (GPIO 2/1). Thus, GPS positioning and IMU motion sensing work concurrently without bus conflicts, keeping the Earth globe rendering perfectly smooth.
-- **6-Axis IMU** (Built-in Accelerometer + Gyroscope, supports real-time physical attitude tracking and `Space` lock).
-- **GNSS Module** (Built-in or external GPS/BDS/GLONASS module, used for geographic coordinate locking and atomic UTC time synchronization, default UART baud rate: 115200bps@8N1, equipped with automatic power-saving sleep).
-- **Orbital Arch Gimbal System (3-Axis Lego Armillary Sphere)**:
-  - Connects to an **M5Stack Unit 8Servos** or **PCA9685** servo driver module via Grove I2C.
-  - Drives 3 servos coupled with Lego mechanics:
-    - **CH0 (Base Azimuth / Track Heading Axis)**: Locks rigidly with the satellite's instantaneous orbital ground track heading.
-    - **CH1 (Celestial Arch Elevation Axis)**: Controls arch tilt corresponding to pass peak elevation (30°~180° mechanical clearance protection against base beam).
-    - **CH2 (Satellite Pointer Travel Axis)**: Simulates the spacecraft sweeping along the arch from AOS to LOS.
-- **Hardware Setup Wizard**:
-  - Press **`M`** on the main screen anytime to open the Hardware Setup Wizard to manually test and toggle **WiFi (WF)**, **GNSS (GP)**, **Magnetometer (MN)**, and **Gimbal (GB)** peripherals, with configs persisted to NVS flash.
-  - Features a dual-row module indicator bar at the bottom of the recommended passes list (Row 1: Epoch, WF; Row 2: GP, MN, GB).
-- **Physical Keyboard + Miniature Color TFT Screen** (240x135).
+## Core Highlights
+
+- 🌍 **Minimalist 3D Celestial Earth Globe**: Integrated vector coastlines, solar day/night terminator, polar visual anchors, and 12,000-point NASA nightlight pollution point cloud.
+- ⭐ **Smart Observation Recommender**: Computes elevation, solar illumination, and Earth umbra eclipse to dynamically predict visual magnitude and recommend prime passes.
+- ⏳ **Time Machine (Simulated Time Travel)**: Scrub backward or forward to preview future orbital passes at will, with a 120ms cooldown gate ensuring silky-smooth 60 FPS operation.
+- 📻 **All-Weather Amateur Radio (HAM) Assistance**: Real-time Doppler shift compensation, dual-channel APRS/SSTV monitoring, and space packet capture console.
+- 🧭 **Pioneering Solar Shadow Alignment**: Overcomes the lack of an internal magnetometer by aligning the on-screen shadow projection with physical shadows for 100% spatial orientation alignment.
+- 🪐 **3-Axis Orbital Arch Gimbal**: I2C linkage with a Lego armillary arch mechanism to physically replicate flight heading, peak pass elevation, and along-track progress.
+- 🔋 **Robust Standalone Offline Survival**: 48-hour multi-level TLE flash cache, auto-sleep GNSS power management, and instant sub-second boot in off-grid field conditions.
+
+---
+
+## Hardware Support & Wiring
+
+- **Host Device**: M5Stack Cardputer (Compatible with both ADV and v1.1 Standard versions, with adaptive pin remapping).
+- **GNSS Positioning**: Built-in or external GPS/BDS/GLONASS unit (UART 115200bps@8N1).
+- **Attitude Sensing**: Onboard 6-axis IMU (MPU6886 / SH200Q, isolated I2C bus running concurrently with GPS).
+- **Mechanical Gimbal**: M5Stack Unit 8Servos / PCA9685 driver board + Lego 3-axis armillary structure.
+- **RF Expansion**: M5Stack Cap LoRa-1262 transceiver unit (SX1262).
 
 ![Hardware Connection Diagram](docs/schematic_diagram.png)
 
-## Core Features
+---
 
-- **Tactile Panoramic Interaction & Key Mappings**:
-  - `Enter`: Slide out/in the recommended observation passes list panel; press `Enter` on an item to inspect pass details or jump directly to AOS time.
-  - `S`: Open the Satellite selection and Encyclopedia menu; press `d` to delete custom satellites, or `O` to inspect individual launch mission objects.
-  - `W`: Toggle WiFi on/off to perform NTP time synchronization and TLE data updates.
-  - `H`: Slide out the **Keyboard Shortcuts Help Menu** at the center of the screen (multi-language aware).
-  - `L`: Open the **Language Selection Menu** (English, Simplified Chinese, Japanese, Spanish), saved to NVS flash.
-  - `M`: Open the **Hardware Setup Wizard** to configure and detect WiFi, GNSS, Magnetometer, and Gimbal peripherals.
-  - `Aa` (Shift): Enter **3-Axis Gimbal Servo Test Mode**, supporting channel selection (`0/1/2`), fine stepping (`,`/`/`), and preset angles (`Z/X/C/A/S`).
-  - `Ctrl`: Open/close the full-screen **RF & Satellite Telemetry Console**:
-    - Monitor real-time RF receiver status, Doppler frequency offset tracking, and live packet capture logs (auto-listening during satellite passes);
-    - `;` / `.`: Scroll through packet capture history;
-    - `Enter` or `D`: Pop up raw HEX payload viewer for the highlighted packet;
-    - Press `Esc` to close detail modal or exit the console back to the 3D globe.
-  - `C`: Enter/exit **Manual Location Mode (Crosshair Mode)** to manually designate any observer position on Earth:
-    - `;` (Up) / `.` (Down): Adjust Latitude;
-    - `,` (Left) / `/` (Right): Adjust Longitude;
-    - `[` / `]`: Adjust Altitude (-10m / +10m).
-  - `G`: Toggle **GNSS Forced Always-On Mode**, bypassing automatic sleep to acquire coordinates manually.
-  - `V`: Enter/exit **Spacecraft Follow Mode (Sat View Mode)**:
-    - Press `;` (previous) and `.` (next) to cycle focus between tracked satellites;
-    - When a satellite passes overhead, a neon-cyan 3D laser sight line and `El: xx°` badge are dynamically projected.
-  - `Space`: Lock/unlock **IMU Camera Angle** in Sat View Mode.
-  - `R`: Reset the **Time Machine** simulated offset and crosshairs, immediately reverting to actual real-time and default coordinates.
-  - `Del` (Backspace): Toggle **HUD Data Overlay** (shows/hides corner telemetry labels).
-  - `[` and `]`: Adjust TFT screen backlight brightness (16 to 255).
-  - `,` and `/`: Adjust **Time Machine** simulated offset (tap for 60s step, hold for fast time travel).
-  - `Tab`: Cycle screen visual modes (Normal -> Aurora/Airglow -> Red Night Vision).
-  - `Esc` / `~`: Back / Exit current active modal overlay (Passes List, Help, Crosshairs, Sat View, etc.).
-- **Live Mode & Time Machine (Simulated Time Travel)**:
-  - Vector 3D Earth rendering with **dynamic cold/warm gradient continent outlines** and daylight/shadow terminator.
-  - **Visual Anchors**: Automatically computes and floats a "dynamic compass" at the screen corner; projects a "3D axis & polar crosshair grid" at polar zones to resolve disorientation when looking from an orbital perspective.
-  - Press **, (backward)** or **/ (forward)** to toggle the **Time Machine**, supporting long-press for high-speed time travel to preview future passes. When time is offset, the bottom-right HUD clock will turn **yellow** to provide a clear visual cue; press **`R`** on the main screen to immediately reset the simulated time back to actual system time (the clock font color will return to white).
-  - **NASA Nightlights & Light Pollution Overlay**: Automatically imports global nightlight points from NASA's VIIRS Black Marble dataset. Using importance sampling, it renders **12,000 high-contrast global light pollution spots** at 30 FPS. Faded dynamically at the dark hemisphere with a smooth dusk/dawn transition (glows at sunset, full brightness at night, fades out at dawn).
-- **Smart Observation Recommender (Core Value)**:
-  - Slide out the left panel by pressing **`Enter`**.
-  - Computes Earth's shadow, solar angle, and dynamic **Visual Magnitude (brightness)** prediction to recommend the best "Visible Windows" (AOS/LOS time, peak elevation, and star scores).
-- **Lossless Screen Streaming & Serialization**:
-  - Solves the Cardputer's **lack of PSRAM** (which causes PNG compression library to trigger Out-Of-Memory crashes).
-  - Pressing the side button (BtnA / GPIO0) dumps the 64KB raw RGB565 frame bytes encoded in Base64 via Serial, marked with the magic prefix `==SKYCOMPASS_DATA==`.
-  - A PC-side Python script (`scripts/get_screenshot.py`) intercepts the log channel, filters garbage logs and ANSI colors, and reconstructs the data stream into a lossless 24-bit BMP screenshot.
-- **Standalone Offline Survival Capability**:
-  - Press **`W`** to scan local WiFi networks and input passwords directly on the Cardputer keyboard.
-  - Automatically fetches the latest Celestrak TLEs and caches them in **LittleFS** (with a 48-hour expiration lifecycle).
-  - Automatically parses GNSS NMEA strings to update observer coordinates and synchronize the hardware RTC clock to atomic UTC time.
-- **Aggressive Power Management**:
-  - Shuts down the WiFi RF transceiver immediately after downloading TLEs.
-  - Sends deep sleep commands (e.g., `$PCAS10,0*1C`) to the GNSS chip and releases the serial port once a 3D Lock is achieved or after a 1-minute timeout.
-- **Cloud Frequency Synchronization (GitHub Action API Gateway)**:
-  - Automatically runs a GitHub workflow `.github/workflows/update_frequencies.yml` to filter the massive official frequencies list into a lightweight `data/frequencies.json` file.
-  - The Cardputer pulls this lightweight JSON when online to display the real-time downlink frequencies and modulation modes (e.g., ISS SSTV, NOAA APT) for Amateur Radio (HAM)通联 (contacts).
-- **Mission-Driven Architecture**:
-  To prevent Out-Of-Memory (OOM) crashes caused by eagerly loading and calculating large spacecraft groups (e.g. Starlink launches containing 20-30 satellites), the Recent Launch module is refactored around a **Mission First** architecture:
-  - **3-Level Navigation**: Structured as Mission List (Level 1) -> Mission Overview (Level 2 with Keplerian orbital altitude/inclination, launch age, stars rating and estimated visibility) -> Objects View (Level 3 which lazy-loads exactly 5 satellites in memory, destroying and freeing all SGP4 allocations on exit or page flip).
-  - **Mission Formation Visualization**: Renders high-fidelity spatial distributions of satellite groups on the 3D globe with zero additional SGP4 propagation overhead. The system extracts the Mean Anomaly of each spacecraft from its TLE to serve as its AlongTrackPhase. During loading, an **Agglomerative Hierarchical Clustering algorithm** (specifically tailored for [0, 360) circular boundaries) compresses the fleet into 5–8 representative "Proxy Satellites." By locating the largest gap between spacecraft, it adaptively calculates the exact physical arc range (Occupancy) occupied by the fleet and renders a matching **glowing orbital strip** on the globe. This ensures a highly scientific, smooth, and time-coherent visual progression during fast-forwarding/scrubbing operations.
-- **Tailored Satellite Type UI (Customized Radio & Observation Layouts)**:
-  Satellites are divided into 5 distinct categories according to their physical properties and radio payloads. Customized UI layouts are dynamically rendered in the Encyclopedia Panel, Tracking HUD, and Sidebar List HUD, preventing guess-work or fabrication of radio frequencies:
-  - **HAM (Amateur Radio Satellites)**: Displays real-time Doppler-compensated Rx frequency, Tx uplink frequency with CTCSS sub-tones (Tone), and modulation mode. When not tracking, it dynamically calculates and displays the upcoming AOS, LOS, and Peak Elevation (Max El).
-  - **WEATHER (Meteorological Satellites)**: Such as NOAA or Meteor series. Renders only the Doppler-compensated Rx frequency and weather imaging mode (e.g. APT/LRPT), hiding unused Tx uplink parameters.
-  - **SPACE_STATION (Space Stations)**: For the complex multi-radio payloads of the ISS, it custom-renders dual-channel Doppler shift frequencies for APRS (145.825 MHz) and SSTV (145.800 MHz) simultaneously. For space stations without active HAM operations (e.g. Tiangong), it displays no amateur radio capability.
-  - **VISUAL (Visual-only Spacecrafts)**: Such as the Hubble Space Telescope, JWST, and rocket bodies. Displays `No Amateur Radio Capability` explicitly, without generating fake radio data.
-  - **HISTORICAL (Inactive Monuments)**: Such as China's first satellite Dong Fang Hong I (DFH-1). Shows the launch date (1970) and inactive status. It hides the radio frequency panel completely in both tracking and non-tracking screens.
-- **Magnetometer-Free Solar Shadow Alignment System & 3D Sight Line**:
-  - **Overcoming Hardware Limitations**: Addressing the lack of an onboard magnetometer (compass) on standard Cardputer hardware, the system derives the real-time Subsolar Point and local Solar Azimuth $Az_{\text{sun}}$ from UTC time and GPS coordinates. It renders a dark-gray ground shadow conforming smoothly to the 3D spherical Earth globe (shadow length $1 / \tan(SunEl)$ dynamically adjusts with elevation angle; automatically hidden at night).
-  - **Tactical Alignment Operation**: Outdoors, the operator simply aligns the on-screen 3D shadow line parallel to their physical shadow on the ground, bringing the 3D globe's orientation into **full physical alignment** with the real world.
-  - **3D Sight Line & Elevation Arc**: In Sat View tracking mode, when the satellite is above the horizon ($El > 0^\circ$), a neon-cyan dynamic laser sight line connects the observer to the spacecraft, accompanied by an `El: 42deg` elevation badge. With shadow alignment, operators can directly point their handheld Yagi antenna towards the target satellite in the sky!
-- **Orbital Arch Gimbal System (Ancient Armillary Sphere Inspired)**:
-  Bridging ancient Chinese armillary sphere mechanics with modern orbital dynamics, this feature drives a 3-axis Lego arch gimbal via Grove I2C (Unit 8Servos / PCA9685):
+## Interactive Controls & Keybindings
 
-  <p align="center">
-    <img src="docs/gimbal_lego_demo.gif" alt="Orbital Arch Lego Gimbal Demonstration" width="600" />
-  </p>
+| Key | Action | Description |
+| :--- | :--- | :--- |
+| **`Enter`** | Toggle Recommended Passes Panel | Press `Enter` on an item to inspect details or jump directly to AOS time |
+| **`S`** | Satellite Selection & Encyclopedia | Multi-category filter; `d` to delete custom satellite, `O` for mission objects |
+| **`W`** | WiFi Setup & Sync | Scan hotspots, perform NTP time sync, and fetch latest TLEs |
+| **`H`** | Keyboard Help Modal | Pops up floating shortcut keybindings with multi-language support |
+| **`L`** | Language Selection (i18n) | Real-time switching between English, Chinese, Japanese, and Spanish (NVS saved) |
+| **`M`** | Hardware Setup Wizard | Test and toggle WiFi, GNSS, Magnetometer, and Gimbal peripherals |
+| **`V`** | Satellite Follow Mode (Sat View) | Center camera on target; `;` / `.` to switch targets; renders 3D sight line & elevation |
+| **`Ctrl`** | RF Telemetry Console | Real-time Doppler monitoring, space packet capture log & raw HEX inspector |
+| **`Aa` (Shift)** | Gimbal Servo Test Mode | `0/1/2` to select axis, `,`/`/` for stepping, with built-in 30°~180° anti-jamming limit |
+| **`C`** | Crosshair Manual Location | `;`/`.` for Latitude, `,`/`/` for Longitude, `[`/`]` for Altitude |
+| **`,` / `/`** | Time Machine Backward / Forward | Short press steps 60s; hold for fast travel (HUD clock turns yellow when offset) |
+| **`R`** | Reset Time Machine & Location | Instantly reverts to real system time and default observer coordinates |
+| **`Tab`** | Cycle Display Modes | Normal Mode ➔ Aurora/Airglow Mode ➔ Red Night Vision Mode |
+| **`Space`** | Lock IMU Perspective | Locks / releases motion-sensor camera orientation |
+| **`Del`** | Toggle HUD Overlay | Shows / hides corner telemetry badges |
+| **`[` / `]`** | Adjust Backlight Brightness | Hardware backlight dimming (16 ~ 255) |
+| **`G0` (Side)** | Lossless Screen Capture | Dumps raw RGB565 via serial; PC script reconstructs 24-bit BMP |
+| **`Esc` / `~`** | Back / Exit Overlay | Dismisses dialogs, passes panel, or exits Sat View mode |
 
-  - **CH0 (Base Azimuth / Track Heading Axis)**: Aligns rigidly with the satellite's instantaneous orbital ground track heading during passes without drift.
-  - **CH1 (Celestial Arch Elevation Axis)**: Controls the tilt angle corresponding to the pass peak elevation and northern/southern celestial hemisphere. **[Mechanical Clearance Protection]**: Due to servo horn offset on one side, CH1 range is constrained to **30° ~ 180°** to prevent binding against the base beam while maximizing physical travel.
-  - **CH2 (Satellite Pointer Travel Axis)**: Represents the spacecraft body, sweeping smoothly across the arch from AOS to LOS.
-  - **Dedicated Debug Mode**: Press **`Aa (Shift)`** anytime on the main screen to enter Servo Test Mode (`0/1/2` select channel, `,` and `/` fine-step, `Z/X/C/A/S` quick presets).
+---
 
-## Project Architecture & Directory Structure
+## Directory & Code Architecture
 
-The project has been modularized and decoupled into a clean, layered architecture (UI Views, Core Algorithms, Hardware Abstraction Layer, Display Drivers, and Main System Loop):
+The codebase is organized into high-cohesion, decoupled architectural layers:
 
 ```text
 SkyCompass_Satellite/
 ├── src/
-│   ├── app/                      # Application context (time machine, user input states)
-│   ├── core/                     # Core math, celestial mechanics, and utility libraries
-│   │   ├── orbit_utils.*         # SGP4 orbit sampling, GEO slot lookups, formation grouping & focus protection
-│   │   ├── radio_tracking_pipeline.* # Discrete Doppler shift derivatives, pass window detection & RF auto-tuning
-│   │   ├── coord_transform.*     # TEME / ECEF / Geodetic / Topocentric coordinate transformations
-│   │   ├── earth_renderer.*      # 3D Earth vector coastline, celestial sphere projection & day/night terminator
-│   │   ├── observation_predictor.* # 7-day pass prediction, visual magnitude & multi-factor scoring arbitration
-│   │   ├── image_utils.*         # Night vision filter and serial Base64 screenshot streaming
-│   │   ├── text_utils.*          # UTF-8 width wrapping, height-constrained drawing & smooth marquee scrolling
-│   │   ├── encyclopedia.*        # Static spacecraft encyclopedia database and taxonomy tags
-│   │   └── i18n.*                # Multi-language dictionary and font glyph support
-│   ├── gimbal/                   # Three-axis orbital arch gimbal drivers and autonomous sky patrol
-│   │   ├── gimbal_tracking_pipeline.* # Autonomous Sky Patrol arbitration and Sat View close-up tracking
-│   │   └── gimbal_controller.*   # Unit 8Servos / PCA9685 I2C servo drivers and travel protection
-│   ├── hal/                      # Unified Hardware Abstraction Layer (HAL)
-│   │   ├── hal_gnss.*            # GPS/BDS UART driver, NMEA parser and power-saving standby
-│   │   ├── hal_imu.*             # Six-axis IMU driver (MPU6886 / SH200Q)
-│   │   ├── hal_wifi.*            # WiFi STA scanner, connection management and event listener
-│   │   └── hal_radio.*           # SX1262 (Cap LoRa-1262) RF hardware SPI abstraction
+│   ├── app/                      # Application state (time machine, key context)
+│   ├── core/                     # Math, astrodynamics & utility libraries
+│   │   ├── orbit_utils.*         # SGP4 propagation, GEO slots, formation tracking & viewport focus
+│   │   ├── radio_tracking_pipeline.* # Discrete Doppler shift derivatives & pass detection
+│   │   ├── coord_transform.*     # TEME / ECEF / Geocentric / ENU precision coordinate conversions
+│   │   ├── earth_renderer.*      # 3D vector Earth, satellite projections & day/night terminator
+│   │   ├── observation_predictor.* # 7-day pass prediction, magnitude estimation & score engine
+│   │   ├── image_utils.*         # Night vision red filter & Base64 serial screenshot pipeline
+│   │   ├── text_utils.*          # UTF-8 character width wrapping & smooth marquee scrolling
+│   │   ├── encyclopedia.*        # Satellite database & categorization taxonomy
+│   │   └── i18n.*                # Multi-language dictionary & font glyph support
+│   ├── gimbal/                   # Lego 3-axis armillary gimbal drivers & tracking
+│   │   ├── gimbal_tracking_pipeline.* # Sky Patrol arbitration & single-target Sat View tracking
+│   │   └── gimbal_controller.*   # Unit 8Servos / PCA9685 I2C servo controller & mechanical limits
+│   ├── hal/                      # Hardware Abstraction Layer (HAL)
+│   │   ├── hal_gnss.*            # GPS/BDS UART driver, NMEA parsing & power-saving sleep
+│   │   ├── hal_imu.*             # 6-axis IMU driver (MPU6886 / SH200Q)
+│   │   ├── hal_wifi.*            # WiFi STA scanning, connection management & state listener
+│   │   └── hal_radio.*           # SX1262 (Cap LoRa-1262) SPI RF transceiver abstraction
 │   ├── hardware/                 # Peripheral display drivers
-│   │   └── chain_mono_view.*     # M5Chain mono sub-screen refresh scheduler, countdown & icons
-│   ├── ui/                       # Independent UI views and dialogs
-│   │   ├── sat_select_view.*     # Satellite selection, encyclopedia detail card & category filter dialog
-│   │   ├── recommendation_view.* # Left-side pass recommendation panel, tree view & dual-row hardware status bar
-│   │   ├── rf_console_view.*     # Fullscreen RF telemetry console & packet raw HEX viewer
-│   │   ├── wifi_setup_view.*     # WiFi scan list and virtual keyboard setup view
-│   │   ├── servo_test_view.*     # Three-axis orbital arch gimbal calibration & fine-tuning view
-│   │   ├── hardware_wizard_view.*# Hardware setup wizard (press M to trigger)
-│   │   ├── dialog_views.*        # Hotkey help dialog (intelligent yellow highlighting) & language selector
-│   │   └── startup_view.*        # Startup 3D Earth motion-sync rotation & progress bar
-│   └── main.cpp                  # System entry setup(), main event pump loop(), and background tasks
-├── scripts/                      # PC-side tools (screenshot receiver, map generator, point-cloud sampler)
-└── platformio.ini                # PlatformIO environment and dependency configurations
+│   │   └── chain_mono_view.*     # M5Chain monochrome secondary screen refresh & icons
+│   ├── ui/                       # View components & presentation pages
+│   │   ├── sat_select_view.*     # Satellite picker, encyclopedia views & category filters
+│   │   ├── recommendation_view.* # Left pass recommendation drawer & dual-row hardware status bar
+│   │   ├── rf_console_view.*     # Fullscreen RF console & raw HEX payload inspector
+│   │   ├── wifi_setup_view.*     # WiFi scan pager & on-screen virtual keyboard setup
+│   │   ├── servo_test_view.*     # 3-axis gimbal servo calibration & tuning view
+│   │   ├── hardware_wizard_view.*# Peripheral configuration wizard (invoked via M key)
+│   │   ├── dialog_views.*        # Shortcuts help dialog (with active highlight) & language picker
+│   │   └── startup_view.*        # Boot-up 3D spinning globe & progress bar
+│   └── main.cpp                  # setup(), loop() event pump & background orbit task
+├── docs/                         # Technical whitepapers and hardware design documents
+├── scripts/                      # PC companion utilities (screenshot listener, map/pointcloud generators)
+└── platformio.ini                # PlatformIO build configurations and library dependencies
 ```
 
-## Technical Details: Orbital Propagations & Visibility Predictions
+---
 
+## Technical Documentation & Whitepapers
 
-To match the orbital predictions of professional astronomy software, a comprehensive astronomical coordinate transformation, orbital propagation, and optical visibility calculation system is implemented on the ESP32 chip. The key physical models and technical summaries are described below:
+For detailed mathematical models, physical formulations, and developer documentation, please refer to the documents in the `docs/` directory:
 
-### 1. Time System and Sidereal Time Conversions
-* **Julian Date (JD)**
-  The system converts the high-precision UTC timestamp acquired from GNSS/NTP to the Julian Date (JD), providing a precise time baseline for subsequent SGP4 model computations.
-* **Greenwich Mean Sidereal Time (GMST)**
-  Due to Earth's rotation, transformations between inertial and terrestrial coordinate systems require calculating the Greenwich Mean Sidereal Time (GMST). This is computed using standard astronomical formulas to determine the Earth's current rotation angle, which is normalized to the range [0, 2π] in radians.
+| Technical Whitepaper | Topic Overview |
+| :--- | :--- |
+| 📐 [**Orbital Mechanics & Visibility Prediction**](docs/orbital_calculation_details.md) | SGP4 perturbation model, TEME/ECEF/ENU transforms, atmospheric refraction/extinction, phase function visual magnitude, Doppler derivations & Solar Shadow Alignment |
+| 💾 [**Data Layer & Multi-Level Caching**](docs/data_layer_architecture.md) | 6-digit NORAD Catalog ID pseudo-TLE bridge, CelesTrak GP JSON parser, 48h TLE / 7d API offline tiered caching strategy |
+| 🛠️ [**Firmware Build & Flash Guide**](docs/firmware_build_guide.md) | M5Burner one-click flashing, PlatformIO Core CLI local compilation and upload, dependency management, and troubleshooting |
+| 📸 [**Lossless Screenshot & Toolchain Guide**](docs/screenshot_and_tools_guide.md) | PSRAM-free RGB565 chunked serial streaming, Python receiver script, and offline point-cloud/map preprocessing tools |
+| 🔭 [**Armillary Gimbal Design & Operation**](docs/浑仪卫星过境指向功能设计与使用指南.md) | 3-axis Lego mechanics, servo angular ranges and anti-jamming limit protections |
+| 📡 [**LoRa & UHF Telemetry Reception System**](docs/卫星LoRa+UHF-GFSK数据接收解析与长期记录系统实现方案v2.md) | SX1262 RF frontend, Doppler auto-tuning, and AX.25 telemetry frame parsing architecture |
 
-### 2. Coordinate Transformations (TEME -> ECEF -> ENU)
-* **TEME Inertial to Terrestrial (ECEF)**
-  The spacecraft state vectors output by the SGP4 propagator reside in the TEME (True Equator Mean Equinox) inertial frame. A rotation matrix using the GMST angle projects them to the ECEF (Earth-Centered, Earth-Fixed) terrestrial frame, transforming the inertial position coordinates into Earth-surface 3D coordinates.
-* **WGS-84 Earth Ellipsoid Model**
-  To model Earth's flattening shape accurately, the WGS-84 ellipsoid parameters are adopted (introducing semi-major axis and flattening parameters).
-  - **Geodetic to ECEF**: The observer's coordinates (latitude, longitude, and altitude, automatically acquired from GNSS or network positioning) are converted to the 3D ECEF position.
-  - **ECEF to Geodetic (Ground Track)**: An iterative method is implemented to solve and correct geodetic distortion, yielding the exact ground track (latitude/longitude) and altitude of the satellite.
-* **Topocentric Coordinate System (ENU: East-North-Up)**
-  To solve the satellite's position relative to the local observer, the delta vector is projected onto the local horizon plane, producing the East-North-Up (ENU) coordinates. From these, the Azimuth (Az), Elevation (El), and Range (Range) are derived.
+---
 
-### 3. Atmospheric Refraction Correction
-For satellites at low elevations, Earth's atmosphere bends incoming light, making the satellite appear slightly higher than its geometric position. An atmospheric refraction compensation is applied when the elevation is low, aligning the predicted Acquisition of Signal (AOS) and Loss of Signal (LOS) times with professional online databases such as Heavens-Above.
+## Live Screenshots
 
-### 4. Tri-Criterion Optical Visibility
-For a spacecraft to be visible to the naked eye, three conditions must be satisfied simultaneously:
-1. **Minimum Elevation**: The corrected elevation must satisfy a minimum threshold (typically 10.0°) to clear local obstructions and atmospheric refraction.
-2. **Local Dark Sky**: The Sun's local elevation at the observer's location must be below civil twilight (typically less than -6.0°), indicating the sky is dark.
-3. **Earth Umbra Check (Illuminated Satellite)**: The satellite must be illuminated by sunlight. A spherical approximation is used to model Earth's shadow cone and determine if the satellite is eclipsed (in Earth's umbra) and receives no sunlight, making it optically invisible.
+| 3D Globe & Orbital Trajectory | Satellite Encyclopedia & HAM Info | Shortcut Help Floating Dialog |
+| :---: | :---: | :---: |
+| ![3D Trajectory](screenshot/skycompass_20260621_142730.png) | ![Encyclopedia](screenshot/skycompass_20260621_142358.png) | ![Help Dialog](screenshot/skycompass_20260621_142315.png) |
 
-### 5. Visual Magnitude, Phase Angle & Atmospheric Extinction
-To estimate the satellite's brightness, the visual magnitude is calculated by taking into account the standard magnitude, observer distance, solar phase angle, and atmospheric extinction:
-* **Phase Angle (ψ)**: Calculates the "Sun - Satellite - Observer" three-dimensional angle to determine the reflection geometry.
-* **Diffuse Sphere Phase Function**: Models diffuse solar reflection scattering from a spherical surface to represent how sunlight scatters off the satellite's body.
-* **Atmospheric Extinction**: Integrates the Kasten-Young Air Mass model with an atmospheric extinction coefficient to correct for brightness attenuation at low elevation angles due to the thicker air mass.
-* **Apparent Magnitude Formulation**: Synthesizes range, phase angle, and low-elevation atmospheric extinction to compute the apparent magnitude, ensuring high-fidelity correlation with mainstream astronomical tools.
+---
 
-### 6. Power-Efficient Dual-Step Prediction Engine & Time Machine Optimization
-To bypass ESP32's processing limits during 24-hour pass searches, several energy-efficiency algorithms are implemented:
-* **Dual-Step Propagation**: The propagator sweeps forward using a coarse **120-second (2-minute)** step size to quickly bypass long periods of invisibility. Once the elevation rises above the horizon, the engine **rewinds the timeline by 120 seconds** and switches to a fine **10-second** step size for precise calculations (determining the exact AOS, peak elevation time, magnitude, and LOS). Once the satellite sets, the engine resumes the coarse 120-second steps, optimizing precision and CPU cycle consumption.
-* **Scrubbing Cooldown Gate**: Since shortening the prediction step to 10 seconds increases the pass calculator load, rapid time axis scrubbing (such as holding keys `,`/`/` or fast-tapping in Time Machine) could trigger high-frequency recalculations of full 3D orbit paths for all selected satellites (each requiring SGP4 coordinates propagation and geodetic coordinate iterations for 30 steps). To maintain smooth inputs, a **120ms physical cooldown gate** is implemented in `calculateOrbit`. During active scrubbing, any heavy path recalculation is blocked within a 120ms window, rendering only the core spacecraft real-time position. The orbital paths instantly redraw once keys are released or scrolling stops, completely eliminating lag spikes and maintaining a locked **60 FPS** frame rate.
+## Data Sources & Acknowledgements
 
-### 7. Amateur Radio (HAM) Parameters & Doppler Shift Calculations
-For satellites supporting Amateur Radio (HAM) payloads (such as FM transponder satellites SO-50, AO-91, or the International Space Station ISS which carries multiple radio setups), the system displays real-time radio tuning parameters in the Encyclopedia and Tracking HUDs. The physical meanings and mathematical definitions are as follows:
+- **TLE Orbital Elements**: Special thanks to [CelesTrak](https://celestrak.org/) for providing high-precision, real-time two-line element datasets.
+- **3D Coastline Vector Data**: Thanks to [Natural Earth](https://www.naturalearthdata.com/) for offering free 50m resolution global boundary datasets.
+- **Global Nightlight Points**: Thanks to [NASA GIBS](https://gibs.earthdata.nasa.gov/) for the VIIRS Black Marble global nightlight imagery.
+- **Model Verification & Reference**: Thanks to [Laysky (天文通)](https://laysky.com/) and [Heavens-Above](https://www.heavens-above.com/) for providing ground-truth pass predictions.
 
-* **RX (Receive - Downlink Frequency)**: The frequency on which the satellite transmits and the ground station receives. The RX value displayed in the UI is the **real-time Doppler-compensated frequency**, indicating the actual frequency to tune your receiver to.
-* **TX (Transmit - Uplink Frequency)**: The frequency on which the ground station transmits to the satellite. The UI displays the static center frequency (in practice, the operator needs to manually apply reverse Doppler compensation on their transmitter).
-* **T (Tone - CTCSS Sub-tone)**: Continuous Tone-Coded Squelch System. Displayed in the UI as `T: [Hz]` (e.g., `T:67.0`). This sub-audible tone is required to open the squelch of the satellite's FM repeater. If your transmitter does not inject this specific sub-tone, the satellite will not relay your voice. A value of `None` indicates no sub-tone is required.
-* **Doppler Deviation (The bracketed number)**: Shown to the right of the RX frequency (e.g., `(+1.5k)` or `(-3.2k)`), this indicates the **real-time Doppler frequency shift $\Delta f$ in kHz**.
-  * **Physical Model of Doppler Shift**:
-    Because the satellite moves at high orbital velocity (approx. 7.8 km/s) relative to the observer, the received radio frequency shifts. The Doppler shift is computed dynamically based on the relationship between the nominal center frequency, radial velocity, and the speed of light. Frequency shifts higher as the satellite approaches and lower as it recedes.
-* **Operational Meaning for Operators**:
-    * **Acquisition of Signal (AOS)**: The satellite approaches rapidly. The Doppler shift reaches its positive maximum (e.g., `+3.5k`). Operators must tune their receivers higher.
-    * **Time of Closest Approach (TCA / Max El)**: The radial velocity is zero, yielding $\Delta f = 0$. The received frequency matches the nominal center frequency.
-    * **Loss of Signal (LOS)**: The satellite recedes rapidly. The Doppler shift reaches its negative maximum (e.g., `-3.5k`). Operators must tune their receivers lower.
-* **Difference Between RX1/RX2 and U/D**:
-  * In standard amateur satellite operations, **U (Uplink)** refers to the transmission frequency, and **D (Downlink)** refers to the reception frequency.
-  * For complex platforms like the ISS, multiple downlink channels can be active simultaneously (e.g., APRS packet radio at 145.825 MHz, and SSTV image downlink at 145.800 MHz). To optimize screen real estate and deliver maximum situational awareness, the system designates these dual channels as **RX1** and **RX2** side-by-side. This allows operators to track Doppler shifts for both downlinks simultaneously, rather than showing a generic single uplink/downlink (U/D) layout.
-
-### 8. Magnetometer-Free Solar Shadow Alignment System & 3D Sight Line
-To overcome the physical limitation of standard Cardputer hardware (which lacks an onboard magnetometer/electronic compass, making traditional magnetic compass readings prone to local interference), an innovative **"Solar Shadow Alignment System"** was engineered:
-
-* **Physical Mechanics**:
-  * The system combines high-precision UTC time with observer geodetic coordinates to calculate the real-time Subsolar Point and derive the local Solar Azimuth $Az_{\text{sun}}$.
-  * In the physical world, any shadow cast by sunlight points strictly in the opposite direction of the Sun ($Az_{\text{shadow}} = (Az_{\text{sun}} + 180^\circ) \bmod 360^\circ$).
-  * The renderer projects a dark-gray shadow line extending along the 3D spherical surface of the Earth globe at the observer's location. The shadow length $d_{\text{dist}} \propto 1 / \tan(SunEl)$ dynamically expands/contracts based on solar elevation angle (short at noon, long at dawn/dusk, automatically hidden at night).
-* **Tactical Alignment Operation for HAM Satellite Trackers**:
-  1. **Shadow Orientation Calibration**: When outdoors without a compass, the operator rotates the Cardputer until the rendered ground shadow line on the screen aligns parallel with their own physical shadow cast on the ground. The 3D orientation of the device is now **100% physically aligned with the real world**.
-  2. **3D Sight Line & Elevation Arc**: In Sat View tracking mode, when the target satellite is above the horizon ($El > 0^\circ$), a neon-cyan 3D laser sight line connects the ground pin to the satellite, accompanied by a HUD elevation badge (e.g., `El: 42deg`). With the shadow aligned, the operator can directly point their handheld Yagi antenna into the sky along the 3D sight vector and elevation angle!
-
-## Helper Utilities & Build Scripts
-
-To minimize runtime overhead on the ESP32 and facilitate data preparation, several offline pre-processing and PC-side utility scripts are included in the repository:
-
-### 1. Scripts Directory (`scripts/`)
-1. **[gen_light_points.py](scripts/gen_light_points.py)** (Nightlights Point Cloud Generator)
-   * **Purpose**: Downloads global nightlight tiles from NASA's GIBS VIIRS Black Marble service, merges them into a 1024x1024 master map, and performs Stratified Importance Sampling to extract the 3000 brightest light pollution coords.
-   * **Output**: Generates [light_points_data.h](src/core/light_points_data.h) containing pre-calculated spherical coordinates for fast, math-free 3D rendering of city glow on the globe.
-2. **[generate_timezone_grid.py](scripts/generate_timezone_grid.py)** (Offline Timezone Grid Generator)
-   * **Purpose**: Queries the timezone name and UTC offset for a $1^\circ \times 1^\circ$ global grid (180 rows $\times$ 360 columns), using nautical timezones to fill ocean zones.
-   * **Output**: Generates [timezone_grid.h](src/core/timezone_grid.h), enabling the device to determine the correct local UTC offset offline instantly when GPS lock is acquired.
-3. **[get_screenshot.py](scripts/get_screenshot.py)** (PC Serial Screenshot Receiver)
-   * **Purpose**: Monitors the Cardputer serial port. Intercepts the Base64-encoded frame buffer segments (using the magic prefix `==SKYCOMPASS_DATA==`) and filters terminal escape codes.
-   * **Output**: Decodes the raw big-endian RGB565 buffer into 24-bit lossless BMP images saved under `screenshot/`, bypassing the ESP32's PSRAM restrictions.
-4. **[optimize_earth_data.py](scripts/optimize_earth_data.py)** (Continental Lines Trigonometric Pre-processor)
-   * **Purpose**: Performs offline pre-computation of trigonometric values ($\sin Lat$, $\cos Lat$, $\sin Lon$, $\cos Lon$) for the continental polygon coordinates.
-   * **Output**: Refactors [earth_data.h](src/core/earth_data.h). This eliminates expensive trigonometric calls during 3D rotations, ensuring smooth 30 FPS globe rendering.
-5. **[update_frequencies.py](scripts/update_frequencies.py)** (HAM Downlink Frequency Fetcher)
-   * **Purpose**: Runs inside the GitHub Action workflow to fetch satellite transceiver frequencies from public databases (e.g., SatNOGS DB) and filter them down to active amateur satellites.
-   * **Output**: Updates `data/frequencies.json` and pushes to GitHub Pages for over-the-air (OTA) updates.
-
-### 2. Scratch Directory (`scratch/`)
-The `scratch/` folder hosts development tools, math verifications, and refactoring utilities used during the construction of the application:
-* **Orbit & Coordinate Verification**:
-  * [test_sgp4_2024.py](scratch/test_sgp4_2024.py) / [test_sgp4_2026.py](scratch/test_sgp4_2026.py): Feeds TLEs into the Python `sgp4` library to output reference state vectors, allowing cross-verification of the ESP32 C++ SGP4 library numerical output.
-  * [test_gmst.py](scratch/test_gmst.py) / [verify_coord.py](scratch/verify_coord.py): Compares Greenwich Mean Sidereal Time calculations and ECEF-to-ENU coordinate mappings against astronomical standard references.
-* **Lighting & Shadow Simulations**:
-  * [test_shadow4.py](scratch/test_shadow4.py) / [test_shadow5.py](scratch/test_shadow5.py): Prototypes of the Earth cylindrical/spherical umbra shadow math to verify exit/entry thresholds prior to C++ translation.
-  * [test_sun_alt.py](scratch/test_sun_alt.py) / [test_sun_alt_exact.py](scratch/test_sun_alt_exact.py): Solves the subsolar point and solar elevations to calibrate the day/night terminator lines.
-* **Stars and Sky Map Generation**:
-  * [generate_stars.py](scratch/generate_stars.py): Parses the Yale Bright Star Catalog to filter and export high-brightness navigation stars (e.g., Sirius) into C headers.
-  * [test_star_proj.py](scratch/test_star_proj.py): Validates orthographic camera projections for stars on the background canvas.
-  * [gen_map.py](scratch/gen_map.py): Global land boundaries and coastline outline generator. Downloads 50m medium-resolution global geojson vectors from Natural Earth, simplifying and resampling them to output the lightweight `earth_data.h` header for fast 3D globe outline rendering.
-* **Automated Refactoring & Patching**:
-  * [update_main.py](scratch/update_main.py) / [patch_main.py](scratch/patch_main.py) / [modify.py](scratch/modify.py): Automates text-search-replace operations and safety-checking insertions into the large `src/main.cpp` code file during remote pair programming sessions.
-  * [benchmark.cpp](scratch/benchmark.cpp) / [test5.cpp](scratch/test5.cpp): Measures computation latency and runs compiler math optimizations benchmarks on the physical target hardware.
-
-## Relation to Original SkyCompass
-
-**Shared Foundation:**
-- Time systems and GNSS NMEA parsing.
-- Coordinate transformation system (ECEF/LatLon/Alt -> Az/Alt).
-- Low-level UI rendering and canvas libraries.
-- Astronomical models (Sun Calculator).
-
-**Functional Differences:**
-| Feature | Original SkyCompass | SkyCompass Satellite |
-| ---- | ---------- | ---------- |
-| Targets | Natural bodies (Sun, Moon, Milky Way) | Human spacecraft (Satellites, Space Stations) |
-| Orbit Speed | Slow periodic changes | Ultra-fast velocity (~90 min to orbit Earth) |
-| Core UX | Spatial pointing & 3D stellar observation | Pass predictions & visible window planner |
-| Data Source | Astronomical Ephemeris formulas | TLE + SGP4 propagation model |
-## Data Layer Architecture
-
-To support CelesTrak's transition to 6-digit Catalog Numbers (100000+) starting in 2026 and the discontinuation of the legacy TLE format, the data layer has been completely refactored to decouple data formats from orbital calculations:
-
-### Architecture Design
-
-```text
-Network / WIFI
-      │
-      ▼
-OrbitDataProvider
-      │
-      ▼
-OrbitParser (TLEParser / JSONParser)
-      │
-      ▼
-OrbitRecord (DTO / Single Source of Truth)
-      │
-      ▼
-SGP4 (Propagation Engine)
-      │
-      ▼
-Application (Earth View / Recommended / HAM / GUI)
-```
-
-### Supported Formats
-
-* **TLE (Legacy)**: Legacy Two-Line Element sets. Automatically compatible with existing offline caches.
-* **CelesTrak GP JSON (Default)**: Modern default exchange format derived from the CCSDS OMM standard. The system has fully implemented this format, utilizing [JSONParser](file:///d:/workspace/SkyCompass_Satellite/src/core/json_parser.h) to natively parse and load 6-digit Catalog Number satellites' orbital elements.
-* **OMM (Reserved)**: Raw CCSDS Orbit Mean-Elements Messages (including XML and KVN formats). Since OMM XML message bodies are highly verbose (often over 7x larger than TLEs), parsing complex XML trees and streaming them on low-power microcontrollers like ESP32 consumes excessive resources. Therefore, by design:
-  * We reserved the [OrbitParser](file:///d:/workspace/SkyCompass_Satellite/src/core/orbit_parser.h) base class, ensuring that if we must parse raw OMM XML/KVN formats in the future, we can extend the system with components like `XMLOMMParser`.
-  * For the current implementation, we chose CelesTrak's GP JSON format (implemented by [JSONParser](file:///d:/workspace/SkyCompass_Satellite/src/core/json_parser.h)) as our default exchange format because it is far easier to stream and deserialize on resource-constrained embedded systems.
-
-The system is fully compatible with future 6-digit Catalog Numbers. It utilizes a pseudo-TLE bridge adapter to reconstruct compatible lines for the SGP4 physical solver, keeping the core database and GUI layers populated with genuine, unaltered 6-digit NORAD satellite IDs.
-
-## Architecture & Roadmap
-
-- `[x]` **Phase 0 (Verification)**: Ported SGP4 propagation model, parsing TLEs and solving ECEF coordinates.
-- `[x]` **Phase 1 (MVP Globe)**: Plotted 3D globe and orbit mapping, running closed-loop orbit calculations on screen.
-- `[x]` **Phase 2 (Day/Night Terminator)**: Implemented SunCalculator to solve shadow/eclipsed states.
-- `[x]` **Phase 3 (Recommender System)**: Developed rule-engine rankings based on peak elevation and visual magnitude.
-- `[x]` **Phase 4 (WiFi & Storage)**: Implemented WiFi scanner UI, LittleFS cache storage, and GeoIP city lookup.
-- `[x]` **Phase 5 (Interaction Upgrades)**: Added TLE multi-select list, spring-mass anti-overlapping UI labels, and Time Machine travel.
-- `[x]` **Phase 6 (Amateur Radio Frequencies)**: Integrated real-time uplink/downlink frequencies (ISS SSTV, NOAA APT) for field SDR tuning.
-- `[x]` **Phase 7 (Nightlights & Lossless Screen Stream)**: Embedded 12,000 NASA nightlight dots at 30 FPS and lossless RGB565 serial screenshot receiver.
-
-## Future Outlook (TODO List)
-
-- `[x]` **Night Vision Mode**: One-click red-tinted screen filter to preserve dark adaptation for outdoor observations.
-- `[x]` **Visual Magnitude Modeling**: Predict brightness based on satellite RCS and solar phase angle.
-- `[x]` **HAM Radio Downlinks**: Display live transceiver tuning parameters.
-- `[x]` **Starlink Train Tracker**: Real-time orbital train & formation tracking using clustered physical phase data.
-- `[x]` **Countdowns & Buzzer Alerts**: Audible alarms triggered by the buzzer a few minutes prior to AOS.
-- `[x]` **Orbital Arch Gimbal System**: Drives a 3-axis Lego armillary sphere via Unit 8Servos / PCA9685, physically syncing satellite ground track heading, elevation arch, and pass progression. Includes manual servo test mode.
-- `[x]` **Hardware Setup Wizard**: Press `M` to open graphical peripheral configuration for WiFi, GNSS, Magnetometer, and Gimbal, saved to NVS flash.
-- `[x]` **Solar Shadow Alignment & 3D Sight Line**: Outdoor physical compass-free alignment via simulated solar ground shadow, with dynamic 3D laser sight line and elevation badge for antenna pointing.
-- `[x]` **Multi-Language Support (i18n)**: Seamless live switching between English, Simplified Chinese, Japanese, and Spanish, saved in NVS.
-- `[x]` **Aurora & Airglow Visual Mode**: Renders glowing auroral ovals and atmospheric airglow layers on the 3D globe.
-- `[x]` **Celestial Background Stars**: Render bright reference stars (e.g., Sirius) on the 3D globe background.
-- `[x]` **All-Weather Amateur Satellite Pass Engine**: Predict amateur radio passes day and night without optical dark-sky constraints. Features elevation/duration-weighted radio scoring (el $\ge 65^\circ$ highly rated) and curated support for leading on-orbit LoRa (NORBI, FOSSASAT-2E) and UHF digital telemetry CubeSats (LilacSat-2, XW-3, SONATE-2).
-- `[ ]` **Cap LoRa-1262 Pocket Satellite Station**:
-  - **Dynamic Doppler Auto-Tuning**: Leverage real-time line-of-sight range-rate calculations to dynamically retune SX1262 RF frequencies via SPI, compensating for $\pm 10\text{ kHz}$ orbital Doppler shifts throughout the pass window.
-  - **Direct Space LoRa Telemetry Demodulation**: Directly capture and decode 436.700 MHz amateur LoRa packets (NORBI, FOSSASAT, etc.) on the Cardputer, showing real-time SNR, RSSI, and raw telemetry hex dumps on screen.
-  - **UHF (435~438 MHz) GFSK/GMSK Packet Engine**: Utilize the SX1262 hardware FSK/GFSK packet handler for AX.25 frame extraction, capturing orbital state telemetry from university CubeSats (e.g., LilacSat-2, XW-3).
-- `[ ]` **GNSS Satellite Skyplot Visualization**: Render visual skyplot and carrier-to-noise ratio (C/N0) bars for real-time constellation fix inspection.
-- `[ ]` **Deep Sleep Scheduling**: Calculate the next AOS time and put the ESP32 into deep sleep, scheduling an RTC timer to wake it up right before the pass.
-- `[ ]` **Local LAN WebServer**: Host a lightweight web server on the ESP32 to export full 7-day pass timetables to mobile browsers.
-- `[ ]` **External 3-Axis Magnetometer Integration**: Connect external I2C digital compass (e.g., QMC5883L/BMM150) for true physical magnetic heading tracking.
-
-## Screenshot Guide
-
-The project uses a zero-memory, uncompressed RGB565 serial stream screenshot system to bypass the lack of PSRAM on the Cardputer.
-
-### 1. Device Trigger
-- On any screen, press the physical **BtnA button (GPIO0, located on the right side of the switch)**.
-- The TFT screen will overlay a yellow `Capturing screen...` warning, and dump the Base64-encoded frame stream to the serial output.
-
-### 2. PC Listener Setup
-To intercept and save screenshots on your PC:
-
-1. **Install Python dependencies**:
-   ```bash
-   pip install pyserial Pillow
-   ```
-2. **Launch the listener**:
-   Run this script from the project root directory (it automatically scans COM ports to hook onto Cardputer):
-   ```bash
-   python scripts/get_screenshot.py
-   ```
-3. **Capture**:
-   Keep the script running. When you press the side button on Cardputer, the PC terminal will intercept the Base64 stream and reconstruct it into a lossless 24-bit `.bmp` file, stored under the `screenshot/` folder.
-
-## User Interface Screenshots
-
-| 3D Trajectory Orbit View | Satellite List & HAM Freqs | Shortcuts Help HUD |
-|:---:|:---:|:---:|
-| ![3D Orbits](screenshot/skycompass_20260621_142730.png) | ![Encyclopedia](screenshot/skycompass_20260621_142358.png) | ![Help Dialog](screenshot/skycompass_20260621_142315.png) |
-
-## Data Sources & Acknowledgments
-
-- **TLE Orbital Data**: Special thanks to [CelesTrak](https://celestrak.org/) for providing high-precision, real-time Two-Line Element (TLE) datasets for satellite tracking and propagation.
-- **3D Coastline Vector Data**: Special thanks to [Natural Earth](https://www.naturalearthdata.com/) for providing free 50m medium-resolution global land boundary datasets (used by `scratch/gen_map.py` to generate the `earth_data.h` coastline path coordinates).
-- **Nightlights & Light Pollution Data**: Special thanks to [NASA GIBS (Global Imagery Browse Services)](https://gibs.earthdata.nasa.gov/) for providing the VIIRS Black Marble nightlight tiles (used by `scripts/gen_light_points.py` to generate the 12,000 nightlight points).
-- **Model Calibration & Reference**: Special thanks to [Tianwentong](https://laysky.com/) and [Heavens-Above](https://www.heavens-above.com/) for their simulated prediction results which served as essential references during model calibration and verification.
-
-
+---
 
 ## License
 
-Licensed under the [GNU General Public License v3.0 (GPLv3)](LICENSE).
-
+This project is licensed under the [GNU General Public License v3.0 (GPLv3)](LICENSE).
