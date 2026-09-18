@@ -1510,9 +1510,10 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             drawHotKey(isZh ? "刷新星历[w]" : "Refresh GP[w]", 'w', x + 112, ty); ty += 14;
             
             drawHotKey(isZh ? "分类筛选[f]" : "Filter[f]", 'f', x + 8, ty);
-            drawHotKey(isZh ? "主题模式[Tab]" : "Theme[Tab]", 't', x + 112, ty); ty += 14;
+            drawHotKey(isZh ? "射频配置[p]" : "Radio[p]", 'p', x + 112, ty); ty += 14;
 
-            drawHotKey(isZh ? "返回地图[Esc]" : "Exit[Esc]", 'x', x + 8, ty); ty += 14;
+            drawHotKey(isZh ? "主题模式[Tab]" : "Theme[Tab]", 't', x + 8, ty);
+            drawHotKey(isZh ? "返回地图[Esc]" : "Exit[Esc]", 'x', x + 112, ty); ty += 14;
 
         } else {
             if (recentLaunchInObjectsView) {

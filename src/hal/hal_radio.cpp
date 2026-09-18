@@ -168,13 +168,20 @@ bool HalRadio::sleep() {
     return (_radio->sleep(true) == RADIOLIB_ERR_NONE);
 }
 
-bool HalRadio::pollPacket(RadioPacket& outPacket) {
-    if (!_isDetected || !_radio || !_isReceiving) return false;
+RadioPollResult HalRadio::pollPacket(RadioPacket& outPacket) {
+    if (!_isDetected || !_radio || !_isReceiving) return RADIO_POLL_NONE;
 
-    // 检查是否有数据包接收完成
+    // 检查是否有数据包接收完成或 CRC 错误中断
     uint16_t irqFlags = _radio->getIrqStatus();
+
+    if (irqFlags & RADIOLIB_SX126X_IRQ_CRC_ERR) {
+        // 捕获硬件 CRC 校验错误中断
+        _radio->standby();
+        _radio->startReceive();
+        return RADIO_POLL_CRC_ERROR;
+    }
+
     if (irqFlags & RADIOLIB_SX126X_IRQ_RX_DONE) {
-        // 数据包已接收
         size_t len = _radio->getPacketLength();
         if (len > 0 && len <= sizeof(outPacket.payload)) {
             int16_t state = _radio->readData(outPacket.payload, len);
@@ -187,12 +194,23 @@ bool HalRadio::pollPacket(RadioPacket& outPacket) {
 
                 // 重新进入接收状态
                 _radio->startReceive();
-                return true;
+                return RADIO_POLL_PACKET_OK;
+            } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
+                _radio->standby();
+                _radio->startReceive();
+                return RADIO_POLL_CRC_ERROR;
             }
         }
         // 若读取失败或超长，重置接收
         _radio->standby();
         _radio->startReceive();
     }
-    return false;
+    return RADIO_POLL_NONE;
+}
+
+float HalRadio::getInstantRSSI() {
+    if (!_isDetected || !_radio || !_isReceiving) {
+        return -120.0f;
+    }
+    return _radio->getRSSI();
 }

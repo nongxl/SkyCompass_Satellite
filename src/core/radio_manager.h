@@ -58,10 +58,17 @@ public:
     // 历史接收数据包列表访问与管理
     const std::vector<ReceivedLogItem>& getRecentPackets() const { return _recentPackets; }
     size_t getTotalPacketsCount() const { return _totalPacketsReceived; }
+    size_t getValidPacketsCount() const { return _validPackets; }
+    size_t getCrcErrorCount() const { return _crcErrorPackets; }
+    float getPacketLossRate() const {
+        size_t total = _validPackets + _crcErrorPackets;
+        return (total > 0) ? ((float)_crcErrorPackets * 100.0f / (float)total) : 0.0f;
+    }
     bool deletePacket(size_t index);
 
     // 测试数据包注入 (用于在无卫星过境或室内无信号时调试确认界面与解码器)
     void injectTestPacket();
+    void injectTestCrcError();
 
     // Toast 提示状态
     bool hasActiveToast() const;
@@ -89,6 +96,8 @@ private:
 
     std::vector<ReceivedLogItem> _recentPackets;
     size_t _totalPacketsReceived = 0;
+    size_t _validPackets = 0;
+    size_t _crcErrorPackets = 0;
 
     // Toast 提示
     String _toastText = "";

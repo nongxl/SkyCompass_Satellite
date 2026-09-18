@@ -111,20 +111,20 @@
 
 ## 阶段化实施计划（Roadmap）
 
-* [ ] **Phase 1：硬件层驱动与自定义卫星录入扩展**
+* [x] **Phase 1：硬件层驱动与自定义卫星录入扩展**
   * 引入 RadioLib 库，完成 Cap LoRa-1262 SPI 通信初始化与开机自检；
-  * 完善自定义卫星录入流程，增加“下行频率”与“调制模式”输入向导及 NVS 持久化。
-* [ ] **Phase 2：轨道联动自动监听与屏幕动态辐射波纹**
-  * 编写 `RadioManager`，实现根据卫星过境仰角的自动唤醒与自动休眠；
+  * 在卫星百科中确立 `P` 键专属射频配置入口，支持 LoRa SF9/SF10 与 GFSK 预设及 NVS 持久化。
+* [x] **Phase 2：轨道联动自动监听与屏幕动态辐射波纹**
+  * 编写 `RadioManager`，实现根据卫星过境仰角（El > -3°）的自动唤醒与自动休眠；
   * 在 2D/3D 天空罗盘中为过境卫星图标增加动态扩散的 WiFi 弧形波纹；
   * 在屏幕正上方实现居中弹出、5 秒自动淡出的收包 Toast。
-* [ ] **Phase 3：统一风格 RF Console 终端与 SD 卡持久化**
+* [x] **Phase 3：统一风格 RF Console 终端与紧凑排版重构**
   * 实现按 `Ctrl` 键切换的全屏 RF Console，沿用统一经典调色板；
-  * 实现过境原始数据与遥测流水在 MicroSD / Flash 上的自动落盘。
-* [ ] **Phase 4：协议解析器（AX.25 + 专有立方星解构）**
+  * 新增 48px **信号瀑布能量图 (Mini Waterfall)** 与硬件 CRC 收包质量统计；
+  * 支持按 `Tab` 键在“实时过境与瀑布图”与“报文列表与 HEX 详情”之间一键无缝切换；
+  * 实现过境原始数据与遥测流水在 LittleFS / MicroSD 上的自动落盘。
+* [x] **Phase 4：协议解析器与规则驱动通用数据字典**
   * 实现 AX.25 UI-frame 校验与解包；
-  * 实现 NORBI、FOSSASAT-2E、Vladivostok-1 的星务数据物理量映射。
-
----
-
-*说明：本更新版本已根据您的评审意见全面调整完毕。当前依然处于方案审阅状态，未修改工程源码。请审阅此版本方案！*
+  * 实现基于规则的通用星务数据字典（Telemetry Dictionary Engine），内建 NORBI、Vladivostok-1、FOSSASAT-2E、Edelveis 等立方星规则映射。
+* [ ] **Phase 5 (未来展望)：全球地面站协同上传 (Global Station Feed)**
+  * 支持在连接 WiFi 时，将抓取到的真实空间遥测 Hex 报文与信标异步上报至 TinyGS / SatNOGS DB 社区，加入全球分布式接收网络。

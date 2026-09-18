@@ -112,7 +112,8 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
     // 3. 轮询接收数据包
     if (_isListening) {
         RadioPacket pkt;
-        if (HalRadio::getInstance().pollPacket(pkt)) {
+        RadioPollResult res = HalRadio::getInstance().pollPacket(pkt);
+        if (res == RADIO_POLL_PACKET_OK) {
             ReceivedLogItem item;
             item.raw = pkt;
             item.decoded = TelemetryDecoder::decode(pkt, _activeSatNorad);
@@ -126,6 +127,7 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
                 _recentPackets.pop_back();
             }
             _totalPacketsReceived++;
+            _validPackets++;
 
             // 触发居中顶部 Toast 弹窗
             _toastText = "[RX] " + item.decoded.satName + " (" + String(pkt.length) + "B) RSSI:" + String(pkt.rssi, 0);
@@ -136,6 +138,9 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
 
             Serial.printf("[RadioManager] Received packet: %s, RSSI: %.1f dBm\n",
                           _toastText.c_str(), pkt.rssi);
+        } else if (res == RADIO_POLL_CRC_ERROR) {
+            _crcErrorPackets++;
+            Serial.println("[RadioManager] CRC Error detected on incoming packet!");
         }
     }
 }
@@ -176,12 +181,20 @@ void RadioManager::injectTestPacket() {
         _recentPackets.pop_back();
     }
     _totalPacketsReceived++;
+    _validPackets++;
 
     _toastText = "[RX TEST] " + item.decoded.satName + " (" + String(pkt.length) + "B) RSSI:" + String((int)pkt.rssi);
     _toastStartTime = millis();
 
     logPacketToFile(item);
     Serial.printf("[RadioManager] Injected test packet for %s\n", item.decoded.satName.c_str());
+}
+
+void RadioManager::injectTestCrcError() {
+    _crcErrorPackets++;
+    _toastText = "[RX CRC ERR] Checksum Failed";
+    _toastStartTime = millis();
+    Serial.println("[RadioManager] Injected simulated CRC error.");
 }
 
 void RadioManager::logPacketToFile(const ReceivedLogItem& item) {

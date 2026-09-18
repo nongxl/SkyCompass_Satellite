@@ -19,6 +19,12 @@ enum RadioModulationMode {
     RADIO_MODE_FSK  = 2
 };
 
+enum RadioPollResult {
+    RADIO_POLL_NONE = 0,
+    RADIO_POLL_PACKET_OK = 1,
+    RADIO_POLL_CRC_ERROR = 2
+};
+
 struct RadioPacket {
     uint32_t timestamp = 0;
     float rssi = 0.0f;
@@ -56,8 +62,11 @@ public:
     // 射频芯片进入低功耗休眠
     bool sleep();
 
-    // 轮询检查是否有新数据包接收完成
-    bool pollPacket(RadioPacket& outPacket);
+    // 轮询检查是否有新数据包接收完成，并捕获 CRC 校验错误
+    RadioPollResult pollPacket(RadioPacket& outPacket);
+
+    // 获取当前实时瞬时 RSSI (用于瀑布能量图)
+    float getInstantRSSI();
 
     // 获取当前配置信息
     RadioModulationMode getCurrentMode() const { return _currentMode; }

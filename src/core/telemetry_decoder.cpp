@@ -1,5 +1,7 @@
 #include "telemetry_decoder.h"
 
+static std::vector<SatelliteTlmProfile> s_customProfiles;
+
 static String toHex(const uint8_t* data, size_t len) {
     String res = "";
     char buf[4];
@@ -38,16 +40,131 @@ static String parseCallsign(const uint8_t* raw) {
     return call;
 }
 
+const std::vector<SatelliteTlmProfile>& TelemetryDecoder::getBuiltinProfiles() {
+    static std::vector<SatelliteTlmProfile> s_builtinProfiles;
+    static bool s_initialized = false;
+    if (!s_initialized) {
+        // 1. NORBI (NORAD 46494) 436.700 MHz LoRa 立方星数据字典
+        SatelliteTlmProfile norbi;
+        norbi.noradId = 46494;
+        norbi.satName = "NORBI";
+        norbi.frameType = "NORBI LoRa TLM";
+        norbi.rules.push_back({"Frame#", 0, FMT_UINT16_LE, 1.0f, 0.0f, "", 0});
+        norbi.rules.push_back({"Vbat", 2, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        norbi.rules.push_back({"Temp", 4, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        norbi.rules.push_back({"I_bus", 5, FMT_UINT16_LE, 0.1f, 0.0f, "mA", 1});
+        s_builtinProfiles.push_back(norbi);
+
+        // 2. Vladivostok-1 / Geoscan 系列 (NORAD 61751)
+        SatelliteTlmProfile geoscan;
+        geoscan.noradId = 61751;
+        geoscan.satName = "Vladivostok-1";
+        geoscan.frameType = "Geoscan LoRa";
+        geoscan.rules.push_back({"Vbat", 1, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        geoscan.rules.push_back({"Temp", 3, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        s_builtinProfiles.push_back(geoscan);
+
+        // 3. FOSSASAT-2E (NORAD 50463)
+        SatelliteTlmProfile fossa;
+        fossa.noradId = 50463;
+        fossa.satName = "FOSSASAT-2E";
+        fossa.frameType = "FOSSA LoRa TLM";
+        fossa.rules.push_back({"Vbat", 1, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        fossa.rules.push_back({"Temp", 3, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        s_builtinProfiles.push_back(fossa);
+
+        // 4. Geoscan-Edelveis (NORAD 53385)
+        SatelliteTlmProfile edelveis;
+        edelveis.noradId = 53385;
+        edelveis.satName = "Edelveis";
+        edelveis.frameType = "Geoscan LoRa";
+        edelveis.rules.push_back({"Vbat", 1, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        edelveis.rules.push_back({"Temp", 3, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        s_builtinProfiles.push_back(edelveis);
+
+        s_initialized = true;
+    }
+    return s_builtinProfiles;
+}
+
+void TelemetryDecoder::registerProfile(const SatelliteTlmProfile& profile) {
+    s_customProfiles.push_back(profile);
+}
+
+bool TelemetryDecoder::decodeByProfile(const SatelliteTlmProfile& profile, const uint8_t* data, size_t len, DecodedTelemetry& out) {
+    if (len < 6) return false;
+
+    out.satName = profile.satName;
+    out.noradId = profile.noradId;
+    out.frameType = profile.frameType;
+
+    for (const auto& rule : profile.rules) {
+        size_t reqLen = 0;
+        switch (rule.format) {
+            case FMT_UINT8:
+            case FMT_INT8:
+                reqLen = 1;
+                break;
+            case FMT_UINT16_LE:
+            case FMT_UINT16_BE:
+            case FMT_INT16_LE:
+            case FMT_INT16_BE:
+                reqLen = 2;
+                break;
+            case FMT_UINT32_LE:
+            case FMT_UINT32_BE:
+                reqLen = 4;
+                break;
+        }
+
+        if (rule.byteOffset + reqLen <= len) {
+            double rawVal = 0.0;
+            const uint8_t* p = data + rule.byteOffset;
+            switch (rule.format) {
+                case FMT_UINT8:
+                    rawVal = *p;
+                    break;
+                case FMT_INT8:
+                    rawVal = (int8_t)*p;
+                    break;
+                case FMT_UINT16_LE:
+                    rawVal = (uint16_t)(p[0] | (p[1] << 8));
+                    break;
+                case FMT_UINT16_BE:
+                    rawVal = (uint16_t)((p[0] << 8) | p[1]);
+                    break;
+                case FMT_INT16_LE:
+                    rawVal = (int16_t)(p[0] | (p[1] << 8));
+                    break;
+                case FMT_INT16_BE:
+                    rawVal = (int16_t)((p[0] << 8) | p[1]);
+                    break;
+                case FMT_UINT32_LE:
+                    rawVal = (uint32_t)(p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24));
+                    break;
+                case FMT_UINT32_BE:
+                    rawVal = (uint32_t)((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]);
+                    break;
+            }
+
+            double physicalVal = rawVal * (double)rule.multiplier + (double)rule.offset;
+            String valStr = (rule.decimals == 0) ? String((long)round(physicalVal)) : String((float)physicalVal, (unsigned int)rule.decimals);
+            out.fields.push_back({rule.label, valStr, rule.unit});
+        }
+    }
+
+    out.isValid = true;
+    return true;
+}
+
 bool TelemetryDecoder::decodeAX25(const uint8_t* data, size_t len, DecodedTelemetry& out) {
     if (len < 16) return false;
 
     // 检查是否有 AX.25 帧特征 (Dest 7B, Src 7B, Control 1B, PID 1B)
-    // 最后一字节的最低位判断是否有后续地址扩展
     bool hasRepeaters = (data[13] & 0x01) == 0;
     size_t headerLen = 14;
 
     if (hasRepeaters) {
-        // 最多跳过 2 个中继站 (各 7 字节)
         while (headerLen + 7 <= len) {
             bool last = (data[headerLen + 6] & 0x01) != 0;
             headerLen += 7;
@@ -60,7 +177,6 @@ bool TelemetryDecoder::decodeAX25(const uint8_t* data, size_t len, DecodedTeleme
     uint8_t control = data[headerLen];
     uint8_t pid = data[headerLen + 1];
 
-    // UI-frame: control 通常为 0x03 (UI-frame unnumbered information)
     if (control == 0x03 && pid == 0xF0) {
         out.destCall = parseCallsign(data);
         out.sourceCall = parseCallsign(data + 7);
@@ -73,7 +189,6 @@ bool TelemetryDecoder::decodeAX25(const uint8_t* data, size_t len, DecodedTeleme
         out.fields.push_back({"Source", out.sourceCall, ""});
         out.fields.push_back({"PayloadLen", String((int)payloadLen), "bytes"});
 
-        // 尝试检查是否有可读文本
         String asciiPayload = toAscii(payload, payloadLen);
         out.fields.push_back({"Text", asciiPayload, ""});
 
@@ -82,58 +197,6 @@ bool TelemetryDecoder::decodeAX25(const uint8_t* data, size_t len, DecodedTeleme
     }
 
     return false;
-}
-
-bool TelemetryDecoder::decodeNORBI(const uint8_t* data, size_t len, DecodedTelemetry& out) {
-    // NORBI (46494) 常用 436.700 MHz LoRa
-    // 典型信标包长度为 48~64 字节
-    if (len < 16) return false;
-
-    out.satName = "NORBI";
-    out.noradId = 46494;
-    out.frameType = "NORBI LoRa TLM";
-
-    // 简单解析常见字段 (帧序号, 供电电压, 温度)
-    uint16_t packetNum = (data[1] << 8) | data[0];
-    uint16_t vbatMv = (data[3] << 8) | data[2];
-    int16_t tempC = (int8_t)data[4];
-
-    out.fields.push_back({"Frame#", String(packetNum), ""});
-    if (vbatMv > 2000 && vbatMv < 10000) {
-        out.fields.push_back({"Vbat", String(vbatMv / 1000.0f, 2), "V"});
-    }
-    out.fields.push_back({"Temp", String((int)tempC), "C"});
-
-    out.isValid = true;
-    return true;
-}
-
-bool TelemetryDecoder::decodeGeoscan(const uint8_t* data, size_t len, DecodedTelemetry& out) {
-    // Geoscan / Vladivostok-1 (61751)
-    out.satName = "Vladivostok-1";
-    out.noradId = 61751;
-    out.frameType = "Geoscan LoRa";
-
-    // 提取可能包含的信标
-    if (len >= 8) {
-        uint16_t vbat = (data[2] << 8) | data[1];
-        if (vbat > 3000 && vbat < 9000) {
-            out.fields.push_back({"Vbat", String(vbat / 1000.0f, 2), "V"});
-        }
-    }
-    out.fields.push_back({"Len", String((int)len), "B"});
-    out.isValid = true;
-    return true;
-}
-
-bool TelemetryDecoder::decodeFossaSat(const uint8_t* data, size_t len, DecodedTelemetry& out) {
-    // FOSSASAT-2E (50463)
-    out.satName = "FOSSASAT-2E";
-    out.noradId = 50463;
-    out.frameType = "FOSSA FSK/LoRa";
-    out.fields.push_back({"Len", String((int)len), "B"});
-    out.isValid = true;
-    return true;
 }
 
 DecodedTelemetry TelemetryDecoder::decode(const RadioPacket& packet, uint32_t expectedNorad) {
@@ -146,21 +209,27 @@ DecodedTelemetry TelemetryDecoder::decode(const RadioPacket& packet, uint32_t ex
     result.fields.push_back({"RSSI", String(packet.rssi, 1), "dBm"});
     result.fields.push_back({"SNR", String(packet.snr, 1), "dB"});
 
-    // 1. 优先尝试 AX.25 UI-frame
+    // 1. 优先匹配 AX.25 UI-frame
     if (decodeAX25(packet.payload, packet.length, result)) {
         return result;
     }
 
-    // 2. 根据 expectedNorad 定向解析
-    if (expectedNorad == 46494) {
-        if (decodeNORBI(packet.payload, packet.length, result)) return result;
-    } else if (expectedNorad == 61751 || expectedNorad == 57172 || expectedNorad == 57179) {
-        if (decodeGeoscan(packet.payload, packet.length, result)) return result;
-    } else if (expectedNorad == 50463) {
-        if (decodeFossaSat(packet.payload, packet.length, result)) return result;
+    // 2. 自定义注册规则匹配
+    for (const auto& prof : s_customProfiles) {
+        if (expectedNorad > 0 && prof.noradId == expectedNorad) {
+            if (decodeByProfile(prof, packet.payload, packet.length, result)) return result;
+        }
     }
 
-    // 3. 通用兜底解析
+    // 3. 内置数据字典规则匹配
+    const auto& builtin = getBuiltinProfiles();
+    for (const auto& prof : builtin) {
+        if (expectedNorad > 0 && prof.noradId == expectedNorad) {
+            if (decodeByProfile(prof, packet.payload, packet.length, result)) return result;
+        }
+    }
+
+    // 4. 通用兜底解析
     result.satName = (expectedNorad > 0) ? ("NORAD " + String(expectedNorad)) : "Unknown Sat";
     result.noradId = expectedNorad;
     result.frameType = "Raw Packet";

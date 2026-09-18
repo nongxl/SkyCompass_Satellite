@@ -1462,7 +1462,7 @@ void downloadCustomSatTask(void* parameter) {
                         break;
                     }
                 }
-                downloadErrorMsg = hasFreq ? "Download Success!" : ((I18N::getLanguage() == LANG_ZH) ? "下载成功! 可按[F]配置频段" : "Success! Press [F] for Radio");
+                downloadErrorMsg = hasFreq ? "Download Success!" : ((I18N::getLanguage() == LANG_ZH) ? "下载成功! 可按[P]配置频段" : "Success! Press [P] for Radio");
                 noradInput = "";
                 updateEncyclopediaFilteredList();
                 
@@ -2638,6 +2638,7 @@ void loop() {
         static bool lastM = false;
         static bool lastCtrl = false;
         static bool lastT = false;
+        static bool lastP = false;
 
         bool currSemi = M5Cardputer.Keyboard.isKeyPressed(';');
         bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
@@ -2669,6 +2670,7 @@ void loop() {
         bool currM = M5Cardputer.Keyboard.isKeyPressed('m') || M5Cardputer.Keyboard.isKeyPressed('M');
         bool currCtrl = M5Cardputer.Keyboard.isKeyPressed(KEY_LEFT_CTRL) || M5Cardputer.Keyboard.keysState().ctrl;
         bool currT = M5Cardputer.Keyboard.isKeyPressed('t') || M5Cardputer.Keyboard.isKeyPressed('T');
+        bool currP = M5Cardputer.Keyboard.isKeyPressed('p') || M5Cardputer.Keyboard.isKeyPressed('P');
 
         static bool s_bootKeyFlushed = false;
         if (!s_bootKeyFlushed) {
@@ -2678,12 +2680,12 @@ void loop() {
             lastC = currC; lastR = currR; lastW = currW; lastS = currS;
             lastH = currH; lastG = currG; lastY = currY; lastN = currN;
             lastD = currD; lastF = currF; lastA = currA; lastTab = currTab; lastShift = currShift; lastL = currL;
-            lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl;
+            lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl; lastP = currP;
             s_bootKeyFlushed = true;
             currSemi = currDot = currComma = currSlash = currO = currV = false;
             currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = false;
             currC = currR = currW = currS = currH = currG = currY = currN = currD = currF = currA = false;
-            currTab = currShift = currL = currSpace = currM = currCtrl = false;
+            currTab = currShift = currL = currSpace = currM = currCtrl = currP = false;
         }
 
         bool justSemi = currSemi && !lastSemi;
@@ -2716,7 +2718,8 @@ void loop() {
         bool justM = currM && !lastM;
         bool justCtrl = currCtrl && !lastCtrl;
         bool justT = currT && !lastT;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl || justT;
+        bool justP = currP && !lastP;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl || justT || justP;
 
         // RF Console 全屏终端模式 (仅在主界面下按 Ctrl 开启，退出统一按 Esc 键)
         if (justCtrl && appState == STATE_MAIN && !RfConsoleView::getInstance().isActive()) {
@@ -2725,7 +2728,7 @@ void loop() {
 
         if (RfConsoleView::getInstance().isActive()) {
             bool justZero = (M5Cardputer.Keyboard.keysState().word.size() > 0 && M5Cardputer.Keyboard.keysState().word[0] == '0');
-            RfConsoleView::getInstance().handleKeys(justSemi, justDot, justEnter, justD, (justEsc || justTick), justT, justComma, justSlash, (justZero || justR), justY, justN, timeMachineOffset);
+            RfConsoleView::getInstance().handleKeys(justSemi, justDot, justEnter, justD, (justEsc || justTick), justT, justComma, justSlash, (justZero || justR), justY, justN, justTab, timeMachineOffset);
             if (!RfConsoleView::getInstance().isActive()) {
                 // 用户按 Esc 退出了 RF 控制台，立即复位 Canvas 全局状态，防止污染主界面文字排版
                 auto c = earth_renderer->getCanvas();
@@ -3803,20 +3806,20 @@ void loop() {
                             }
                         } else if (justD && realIdx >= NUM_BUILTIN_SATELLITES && realIdx < NUM_SATELLITES) {
                             deleteConfirmIndex = realIdx;
-                        } else if (justF && realIdx >= 0 && realIdx < NUM_SATELLITES) {
+                        } else if (justP && realIdx >= 0 && realIdx < NUM_SATELLITES) {
                             if (g_satellites[realIdx].downlinkFreq.length() == 0) {
                                 g_satellites[realIdx].downlinkFreq = "436.700";
-                                g_satellites[realIdx].radioMode = "LoRa";
+                                g_satellites[realIdx].radioMode = "LoRa SF9";
                                 g_satellites[realIdx].type = SAT_TYPE_HAM;
-                                downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已设: 436.700 LoRa" : "Set: 436.700 LoRa";
+                                downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已设: 436.700 LoRa SF9" : "Set: 436.700 LoRa SF9";
                             } else if (g_satellites[realIdx].downlinkFreq == "436.700") {
                                 g_satellites[realIdx].downlinkFreq = "436.200";
-                                g_satellites[realIdx].radioMode = "LoRa";
-                                downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已设: 436.200 LoRa" : "Set: 436.200 LoRa";
+                                g_satellites[realIdx].radioMode = "LoRa SF10";
+                                downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已设: 436.200 LoRa SF10" : "Set: 436.200 LoRa SF10";
                             } else if (g_satellites[realIdx].downlinkFreq == "436.200") {
                                 g_satellites[realIdx].downlinkFreq = "437.500";
-                                g_satellites[realIdx].radioMode = "GFSK";
-                                downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已设: 437.500 GFSK" : "Set: 437.500 GFSK";
+                                g_satellites[realIdx].radioMode = "GFSK 4.8k";
+                                downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已设: 437.500 GFSK 4.8k" : "Set: 437.500 GFSK 4.8k";
                             } else {
                                 g_satellites[realIdx].downlinkFreq = "";
                                 g_satellites[realIdx].radioMode = "";

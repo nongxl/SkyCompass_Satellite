@@ -43,18 +43,18 @@
 | Key | Action | Description |
 | :--- | :--- | :--- |
 | **`Enter`** | Toggle Recommended Passes Panel | Press `Enter` on an item to inspect details or jump directly to AOS time |
-| **`S`** | Satellite Selection & Encyclopedia | Multi-category filter; `d` to delete custom satellite, `O` for mission objects |
+| **`S`** | Satellite Selection & Encyclopedia | `f` for filter, `p` to set/clear radio downlink, `d` to del custom, `O` for mission objects |
 | **`W`** | WiFi Setup & Sync | Scan hotspots, perform NTP time sync, and fetch latest TLEs |
 | **`H`** | Keyboard Help Modal | Pops up floating shortcut keybindings with multi-language support |
 | **`L`** | Language Selection (i18n) | Real-time switching between English, Chinese, Japanese, and Spanish (NVS saved) |
 | **`M`** | Hardware Setup Wizard | Test and toggle WiFi, GNSS, Magnetometer, and Gimbal peripherals |
 | **`V`** | Satellite Follow Mode (Sat View) | Center camera on target; `;` / `.` to switch targets; renders 3D sight line & elevation |
-| **`Ctrl`** | RF Telemetry Console | Real-time Doppler monitoring, space packet capture log & raw HEX inspector |
+| **`Ctrl`** | RF Telemetry Console | Real-time Doppler tracking, waterfall energy plot & packets; `Tab` toggles view, `T` injects test |
 | **`Aa` (Shift)** | Gimbal Servo Test Mode | `0/1/2` to select axis, `,`/`/` for stepping, with built-in 30°~180° anti-jamming limit |
 | **`C`** | Crosshair Manual Location | `;`/`.` for Latitude, `,`/`/` for Longitude, `[`/`]` for Altitude |
 | **`,` / `/`** | Time Machine Backward / Forward | Short press steps 60s; hold for fast travel (HUD clock turns yellow when offset) |
 | **`R`** | Reset Time Machine & Location | Instantly reverts to real system time and default observer coordinates |
-| **`Tab`** | Cycle Display Modes | Normal Mode ➔ Aurora/Airglow Mode ➔ Red Night Vision Mode |
+| **`Tab`** | Cycle Display Modes | Main screen toggles visual modes; in RF Console toggles Waterfall/Packets |
 | **`Space`** | Lock IMU Perspective | Locks / releases motion-sensor camera orientation |
 | **`Del`** | Toggle HUD Overlay | Shows / hides corner telemetry badges |
 | **`[` / `]`** | Adjust Backlight Brightness | Hardware backlight dimming (16 ~ 255) |
