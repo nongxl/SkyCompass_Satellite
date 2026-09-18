@@ -5404,19 +5404,28 @@ void loop() {
 
         if (RfConsoleView::getInstance().isActive()) {
             RfConsoleView::getInstance().handleKeys(justSemi, justDot, justEnter, justD, (justEsc || justTick), justT);
-            auto c = earth_renderer->getCanvas();
-            if (c) {
-                RfConsoleView::getInstance().draw(c, 240, 135);
-                pushCanvasWithFilter();
+            if (!RfConsoleView::getInstance().isActive()) {
+                // 用户按 Esc 退出了 RF 控制台，立即复位 Canvas 全局状态，防止污染主界面文字排版
+                auto c = earth_renderer->getCanvas();
+                if (c) {
+                    c->setTextDatum(top_left);
+                    c->clearClipRect();
+                }
+            } else {
+                auto c = earth_renderer->getCanvas();
+                if (c) {
+                    RfConsoleView::getInstance().draw(c, 240, 135);
+                    pushCanvasWithFilter();
+                }
+                lastSemi = currSemi; lastDot = currDot; lastComma = currComma; lastSlash = currSlash;
+                lastO = currO; lastV = currV; lastEnter = currEnter; lastBack = currBack;
+                lastEsc = currEsc; lastTick = currTick; lastBracketL = currBracketL; lastBracketR = currBracketR;
+                lastC = currC; lastR = currR; lastW = currW; lastS = currS;
+                lastH = currH; lastG = currG; lastY = currY; lastN = currN;
+                lastD = currD; lastF = currF; lastA = currA; lastTab = currTab; lastShift = currShift;
+                lastL = currL; lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl; lastT = currT;
+                return;
             }
-            lastSemi = currSemi; lastDot = currDot; lastComma = currComma; lastSlash = currSlash;
-            lastO = currO; lastV = currV; lastEnter = currEnter; lastBack = currBack;
-            lastEsc = currEsc; lastTick = currTick; lastBracketL = currBracketL; lastBracketR = currBracketR;
-            lastC = currC; lastR = currR; lastW = currW; lastS = currS;
-            lastH = currH; lastG = currG; lastY = currY; lastN = currN;
-            lastD = currD; lastF = currF; lastA = currA; lastTab = currTab; lastShift = currShift;
-            lastL = currL; lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl; lastT = currT;
-            return;
         }
 
         if (showHelp) {
@@ -7733,8 +7742,10 @@ void loop() {
         earth_renderer->setUnixTime(current_unix + timeMachineOffset);
         earth_renderer->render(viewLat, viewLon, renderUserLat, baseUserLon, sats);
         
-        // Ensure canvas font matches current language for HUD rendering
+        // Ensure canvas font and datum matches default state for HUD rendering
         earth_renderer->getCanvas()->setFont(I18N::getFont());
+        earth_renderer->getCanvas()->setTextDatum(top_left);
+        earth_renderer->getCanvas()->clearClipRect();
         
         // Draw coordinate overlay
         if (!showRecommendations && !showHelp && (appState == STATE_MAIN || appState == STATE_LANG_SELECT) && showHud) {
@@ -8546,6 +8557,7 @@ void loop() {
                     c->setTextDatum(MC_DATUM);
                     c->setTextColor(textCol, boxBg);
                     c->drawString(toast.c_str(), tx + tw / 2, ty + th / 2);
+                    c->setTextDatum(top_left);
                 }
             }
         }

@@ -241,4 +241,8 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
             canvas->drawString(hexLine2.c_str(), modalX + 6, curY);
         }
     }
+
+    // 退出绘制时无条件复位全局状态，彻底防止污染主程序排版
+    canvas->setTextDatum(TL_DATUM);
+    canvas->clearClipRect();
 }
