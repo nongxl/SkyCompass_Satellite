@@ -188,8 +188,12 @@ bool HalWifi::loadCredentials(String& outSsid, String& outPassword) {
 }
 
 void HalWifi::disconnect() {
-    WiFi.disconnect(true, true);
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(true, false);
     delay(50);
     WiFi.mode(WIFI_OFF);
-    LOG_I("APP", "WiFi disconnected, turned OFF to return memory to heap.");
+    esp_wifi_stop();
+    delay(50);
+    LOG_I("APP", "WiFi disconnected, turned OFF and stopped to return memory to heap.");
 }
+

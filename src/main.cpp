@@ -202,18 +202,29 @@ struct FilterCategoryItem {
     uint8_t g;
     uint8_t b;
     uint16_t textColor;
+    uint8_t specialType; // 0=常规, 1=已选择, 2=自定义, 3=重置全部
 };
 
-static const FilterCategoryItem g_filterCategories[9] = {
-    {"肉眼可见", "Visible", "裸眼可視", "Visible", Category::UNKNOWN, FLAG_VISIBLE, 90, 80, 20, TFT_YELLOW},
-    {"载人航天", "Crewed", "有人宇宙", "Tripulado", Category::HUMAN_SPACEFLIGHT, FLAG_CREWED, 20, 90, 50, TFT_GREEN},
-    {"无线电", "Radio", "アマチュア無線", "Radio", Category::UNKNOWN, FLAG_RADIO, 80, 30, 80, TFT_MAGENTA},
-    {"地球观测", "Earth Obs", "地球観測", "Obs Terr", Category::EARTH_OBSERVATION, FLAG_EARTH_OBS, 30, 80, 80, TFT_GREEN},
-    {"科学天文", "Science", "科学", "Ciencia", Category::ASTRONOMY, FLAG_SCIENCE, 50, 30, 90, TFT_GOLD},
-    {"气象", "Weather", "気象", "Meteorol", Category::WEATHER, FLAG_WEATHER, 20, 60, 90, TFT_CYAN},
-    {"导航", "Navigation", "航法", "Navegacion", Category::NAVIGATION, FLAG_NAVIGATION, 80, 20, 20, TFT_RED},
-    {"通信", "Comms", "通信", "Comun", Category::COMMUNICATIONS, 0, 60, 80, 110, TFT_WHITE},
-    {"历史残骸", "Debris/Hist", "歴史・残骸", "Historico", Category::HISTORIC_EVENT, FLAG_HISTORIC | FLAG_ROCKET_BODY | FLAG_DEBRIS, 90, 50, 20, TFT_ORANGE}
+static const FilterCategoryItem g_filterCategories[12] = {
+    // Row 0: 特殊高频分类与可见星
+    {"已选择", "Selected", "選択済", "Elegidos", Category::UNKNOWN, 0, 20, 90, 45, 0x07E0, 1},
+    {"自定义", "Custom", "カスタム", "Personal", Category::UNKNOWN, 0, 30, 80, 110, 0x07FF, 2},
+    {"肉眼可见", "Visible", "裸眼可視", "Visible", Category::UNKNOWN, FLAG_VISIBLE, 90, 80, 20, TFT_YELLOW, 0},
+
+    // Row 1: 航天应用与科学
+    {"载人航天", "Crewed", "有人宇宙", "Tripulado", Category::HUMAN_SPACEFLIGHT, FLAG_CREWED, 20, 90, 50, TFT_GREEN, 0},
+    {"无线电", "Radio", "無線", "Radio", Category::UNKNOWN, FLAG_RADIO, 80, 30, 80, TFT_MAGENTA, 0},
+    {"气象", "Weather", "気象", "Meteorol", Category::WEATHER, FLAG_WEATHER, 20, 60, 90, TFT_CYAN, 0},
+
+    // Row 2: 卫星网络
+    {"导航", "Navigation", "航法", "Navegac", Category::NAVIGATION, FLAG_NAVIGATION, 80, 20, 20, TFT_RED, 0},
+    {"通信", "Comms", "通信", "Comun", Category::COMMUNICATIONS, 0, 60, 80, 110, TFT_WHITE, 0},
+    {"地球观测", "Earth Obs", "地球観測", "Obs Terr", Category::EARTH_OBSERVATION, FLAG_EARTH_OBS, 30, 80, 80, TFT_GREEN, 0},
+
+    // Row 3: 深空探索与操作
+    {"科学天文", "Science", "科学", "Ciencia", Category::ASTRONOMY, FLAG_SCIENCE, 50, 30, 90, TFT_GOLD, 0},
+    {"历史残骸", "Debris/Hist", "歴史・残骸", "Historico", Category::HISTORIC_EVENT, FLAG_HISTORIC | FLAG_ROCKET_BODY | FLAG_DEBRIS, 90, 50, 20, TFT_ORANGE, 0},
+    {"重置全部", "Reset All", "全解除", "Restablec", Category::UNKNOWN, 0, 40, 50, 65, 0xCE79, 3}
 };
 
 bool g_showCategoryFilterDialog = false;
@@ -1450,14 +1461,14 @@ void predictorTask(void* parameter) {
             
             // === PHASE 1: Fast 24-Hour (Tonight) Pass Calculation (< 300ms) ===
             std::vector<PassEvent> phase1Passes;
-            phase1Passes.reserve(16);
+            phase1Passes.reserve(24);
             
             // Phase 1 - 候选高亮度目视与业余无线电卫星
             for (int satIdx : candidateSatIndices) {
                 vTaskDelay(1);
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (phase1Passes.size() >= 16 || ESP.getFreeHeap() < 24000 || ESP.getMaxAllocHeap() < 3500) {
+                if (phase1Passes.size() >= 24 || ESP.getFreeHeap() < 24000 || ESP.getMaxAllocHeap() < 3500) {
                     LOG_I("APP", "Predictor task Phase 1 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
                           (unsigned int)ESP.getFreeHeap(), (int)phase1Passes.size());
                     break;
@@ -1502,7 +1513,7 @@ void predictorTask(void* parameter) {
                 vTaskDelay(1);
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (phase1Passes.size() >= 16 || ESP.getFreeHeap() < 24000 || ESP.getMaxAllocHeap() < 3500) {
+                if (phase1Passes.size() >= 24 || ESP.getFreeHeap() < 24000 || ESP.getMaxAllocHeap() < 3500) {
                     break;
                 }
                 
@@ -1549,11 +1560,10 @@ void predictorTask(void* parameter) {
                 }
             }
             std::sort(upcomingPhase1.begin(), upcomingPhase1.end(), [](const PassEvent& a, const PassEvent& b) {
-                if (a.score != b.score) return a.score > b.score;
                 return a.aosTime < b.aosTime;
             });
-            if (upcomingPhase1.size() > 16) {
-                upcomingPhase1.resize(16);
+            if (upcomingPhase1.size() > 24) {
+                upcomingPhase1.resize(24);
             }
             
             std::vector<TreeItem> tempDisplayTree1;
@@ -1561,34 +1571,39 @@ void predictorTask(void* parameter) {
             
             // 立即以 swap 零拷贝安全发布至 UI，绝不执行 operator= 避免 bad_alloc 崩溃
             lockPassMutex();
-            recommendedPasses.swap(upcomingPhase1);
+            recommendedPasses = upcomingPhase1;
             displayTree.swap(tempDisplayTree1);
             predictionsReady = true;
             lastPredictionBaseTime = startTime;
             unlockPassMutex();
             
-            // 立即彻底释放 Phase 1 临时堆内存，绝不带入 Phase 2
-            phase1Passes.clear();
-            phase1Passes.shrink_to_fit();
-            upcomingPhase1.clear();
-            upcomingPhase1.shrink_to_fit();
+            // 释放临时树，但完整保留 phase1Passes 作为 Phase 2 坚实基础
             tempDisplayTree1.clear();
             tempDisplayTree1.shrink_to_fit();
+            upcomingPhase1.clear();
+            upcomingPhase1.shrink_to_fit();
             
             // === PHASE 2: Background 7-Day Full Pass Calculation ===
             completedCount = 0;
-            std::vector<PassEvent> allPasses;
-            size_t maxAllocP2 = ESP.getMaxAllocHeap();
-            size_t p2Cap = (maxAllocP2 > 3500) ? (maxAllocP2 - 2500) / sizeof(PassEvent) : 8;
-            if (p2Cap > 24) p2Cap = 24;
-            allPasses.reserve(p2Cap);
+            std::vector<PassEvent> allPasses = phase1Passes; // 继承今晚所有有效事件，杜绝今晚事件被未来挤掉！
+            phase1Passes.clear();
+            phase1Passes.shrink_to_fit();
             
+            auto isAlreadyInAllPasses = [&](const PassEvent& p) -> bool {
+                for (const auto& exist : allPasses) {
+                    if (exist.satName == p.satName && abs((long)(exist.aosTime - p.aosTime)) < 120) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+
             // Phase 2 - 候选高亮度目视收录卫星
             for (int satIdx : candidateSatIndices) {
                 vTaskDelay(1);
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (ESP.getFreeHeap() < 24000 || allPasses.size() >= 24) {
+                if (ESP.getFreeHeap() < 24000 || allPasses.size() >= 48) {
                     LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
                           ESP.getFreeHeap(), (int)allPasses.size());
                     break;
@@ -1613,17 +1628,21 @@ void predictorTask(void* parameter) {
                 }
                 
                 auto passes = predictor->predictPasses(tle, stdMag, startTime, 7, isRadioTarget);
-                if (passes.size() > 4) {
-                    std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
-                        return a.score > b.score;
-                    });
-                    passes.resize(4);
-                }
+                // 质量优先排序
+                std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
+                    if (a.score != b.score) return a.score > b.score;
+                    return a.aosTime < b.aosTime;
+                });
+                int added = 0;
                 for (auto& p : passes) {
-                    p.satSelected = true;
-                    p.satIndex = satIdx;
+                    if (added >= 4) break;
+                    if (!isAlreadyInAllPasses(p)) {
+                        p.satSelected = true;
+                        p.satIndex = satIdx;
+                        allPasses.push_back(p);
+                        added++;
+                    }
                 }
-                allPasses.insert(allPasses.end(), passes.begin(), passes.end());
                 completedCount++;
                 predictionProgress = 50 + (completedCount * 50) / (totalCandidates > 0 ? totalCandidates : 1);
             }
@@ -1633,7 +1652,7 @@ void predictorTask(void* parameter) {
                 vTaskDelay(1);
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (ESP.getFreeHeap() < 24000 || allPasses.size() >= 24) {
+                if (ESP.getFreeHeap() < 24000 || allPasses.size() >= 48) {
                     LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
                           ESP.getFreeHeap(), (int)allPasses.size());
                     break;
@@ -1648,17 +1667,20 @@ void predictorTask(void* parameter) {
                 
                 if (rlTle.line1.length() >= 14 && rlTle.line2.length() >= 14) {
                     auto passes = predictor->predictPasses(rlTle, 3.0, startTime, 7);
-                    if (passes.size() > 4) {
-                        std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
-                            return a.score > b.score;
-                        });
-                        passes.resize(4);
-                    }
+                    std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
+                        if (a.score != b.score) return a.score > b.score;
+                        return a.aosTime < b.aosTime;
+                    });
+                    int added = 0;
                     for (auto& p : passes) {
-                        p.satSelected = true;
-                        p.satIndex = -100;
+                        if (added >= 4) break;
+                        if (!isAlreadyInAllPasses(p)) {
+                            p.satSelected = true;
+                            p.satIndex = -100;
+                            allPasses.push_back(p);
+                            added++;
+                        }
                     }
-                    allPasses.insert(allPasses.end(), passes.begin(), passes.end());
                 }
                 completedCount++;
                 predictionProgress = 50 + (completedCount * 50) / (totalCandidates > 0 ? totalCandidates : 1);
@@ -1685,15 +1707,42 @@ void predictorTask(void* parameter) {
             }
         }
         
-        // Sort by score descending, then by start time ascending
-        std::sort(upcomingPasses.begin(), upcomingPasses.end(), [](const PassEvent& a, const PassEvent& b) {
+        // 核心保护机制：确保“今晚（24小时内）”的所有有效事件完整保留，绝不被未来事件挤掉
+        uint32_t tonightLimit = current_unix + timeMachineOffset + 24 * 3600;
+        std::vector<PassEvent> tonightList;
+        std::vector<PassEvent> futureList;
+        tonightList.reserve(upcomingPasses.size());
+        futureList.reserve(upcomingPasses.size());
+
+        for (const auto& p : upcomingPasses) {
+            if (p.aosTime < tonightLimit) {
+                tonightList.push_back(p);
+            } else {
+                futureList.push_back(p);
+            }
+        }
+
+        // 未来事件按分数优先（高质量优先），其次按时间先后排列
+        std::sort(futureList.begin(), futureList.end(), [](const PassEvent& a, const PassEvent& b) {
             if (a.score != b.score) return a.score > b.score;
             return a.aosTime < b.aosTime;
         });
 
-        if (upcomingPasses.size() > 20) {
-            upcomingPasses.resize(20);
+        // 总常驻事件容量放宽至 36 个（满足用户对丰富过境事件的需求）
+        const size_t TOTAL_MAX_PASSES = 36;
+        size_t allowedFuture = (TOTAL_MAX_PASSES > tonightList.size()) ? (TOTAL_MAX_PASSES - tonightList.size()) : 0;
+        if (futureList.size() > allowedFuture) {
+            futureList.resize(allowedFuture);
         }
+
+        // 合并今晚与未来事件
+        upcomingPasses = std::move(tonightList);
+        upcomingPasses.insert(upcomingPasses.end(), futureList.begin(), futureList.end());
+
+        // 最终列表统一按时间先后升序排列，使 UI 各分类展开均呈现清晰的时间流
+        std::sort(upcomingPasses.begin(), upcomingPasses.end(), [](const PassEvent& a, const PassEvent& b) {
+            return a.aosTime < b.aosTime;
+        });
 
         // Compute local temporary variables outside the critical section to prevent malloc/OOM within spinlocks
         std::vector<TreeItem> tempDisplayTree;
@@ -1818,6 +1867,7 @@ void fetchFrequencies() {
     if (httpCode == HTTP_CODE_OK) {
         String payload = http->getString();
         http->end();
+        client->stop();
         
         payload.trim();
         if (payload.length() > 0 && payload.length() < 10240 && payload.startsWith("{")) {
@@ -1855,6 +1905,7 @@ void fetchFrequencies() {
         }
     } else {
         http->end();
+        client->stop();
     }
 }
 
@@ -2088,7 +2139,7 @@ void drawScrollingText(LGFX_Sprite* canvas, const char* text, int x, int y, int 
 
 struct WiFiDisconnectGuard {
     ~WiFiDisconnectGuard() {
-        LOG_I("RECENT_LAUNCH", "Recent Launch task complete. Turning off WiFi to save power.");
+        LOG_I("APP", "Network task complete. Turning off WiFi to reclaim memory.");
         HalWifi::disconnect();
     }
 };
@@ -2114,7 +2165,7 @@ void recentLaunchNetworkTaskImpl() {
         
         // If auto-connect with saved credentials failed or no credentials saved -> pop up WiFi setup screen
         if (!HalWifi::isConnected()) {
-            recentLaunchErrorMsg = "WiFi Connect Failed!";
+            recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "未找到已知WiFi，请配置" : "WiFi not found, please configure";
             recentLaunchDownloading = false;
             recentLaunchDownloadFinishedMs = millis();
             g_wifiSetupReturnState = STATE_SAT_SELECT;
@@ -2433,6 +2484,7 @@ void downloadCustomSatTask(void* parameter) {
 void networkTaskImpl(void* parameter) {
     NetworkActiveGuard guard;
     PredictorTaskSuspendGuard predGuard;
+    WiFiDisconnectGuard wifiGuard;
     g_wifiConnecting = true;
     g_dataUpdating = false;
     
@@ -2471,20 +2523,20 @@ void networkTaskImpl(void* parameter) {
     if (!HalWifi::isConnected()) {
         LOG_I("APP", "WiFi connection failed. Entering setup or offline mode.");
         if (appState == STATE_SAT_SELECT) {
-            downloadErrorMsg = "WiFi Connection Failed!";
+            downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "未找到已知WiFi，请配置" : "WiFi not found, please configure";
             downloadFinishedMs = millis();
         }
-        // 当旧凭据在新网络环境中无法连接时，若用户手动按 W 键联网，或在主界面/卫星选择页，自动弹出 WiFi 扫描配置
-        if (manualWifiToggle || appState == STATE_MAIN || appState == STATE_SAT_SELECT) {
-            g_wifiSetupReturnState = appState;
-            appState = STATE_WIFI_SETUP;
-            wifiIsScanning = true;
-            wifiIsInputtingPassword = false;
-        }
+        // 当旧凭据在新网络环境中无法连接时，自动弹出 WiFi 扫描配置供用户选择当前网络
+        g_wifiSetupReturnState = appState;
+        appState = STATE_WIFI_SETUP;
+        wifiIsScanning = true;
+        wifiIsInputtingPassword = false;
+        
         g_wifiConnecting = false;
         g_dataUpdating = false;
         g_timeSynced = true;
         triggerPrediction = true;
+        HalWifi::disconnect(); // 失败后关闭驱动，让后续扫描重新初始化
         return;
     }
     
@@ -2605,7 +2657,8 @@ void networkTaskImpl(void* parameter) {
         // Phase B: fetch stale/missing satellites via plain HTTP with 300ms throttle interval
         if (!staleIdx.empty()) {
             int totalStale = (int)staleIdx.size();
-            LOG_I("APP", "Fetching %d stale satellites via HTTP (300ms throttled)...", totalStale);
+            LOG_I("APP", "Fetching %d stale satellites via HTTP (300ms throttled, shared socket)...", totalStale);
+            WiFiClient sharedClient;
             
             for (int k = 0; k < totalStale; k++) {
                 int i = staleIdx[k];
@@ -2619,7 +2672,7 @@ void networkTaskImpl(void* parameter) {
                 
                 OrbitRecord rec;
                 int httpCode = 0;
-                if (OrbitDataProvider::loadByCatalogNumber(noradId, rec, true, nullptr, &httpCode)) {
+                if (OrbitDataProvider::loadByCatalogNumber(noradId, rec, true, &sharedClient, &httpCode)) {
                     TLEData newTle;
                     newTle.name = rec.name;
                     newTle.baseScore = g_satellites[i].baseScore;
@@ -2664,6 +2717,7 @@ void networkTaskImpl(void* parameter) {
                 }
                 vTaskDelay(pdMS_TO_TICKS(300)); // 300ms delay to prevent CelesTrak WAF/rate-limiting
             }
+            sharedClient.stop();
         }
 
         // 3.5 仅在有卫星数据更新且未发生拒连时，才同步频率数据；若原本新鲜则跳过网络请求
@@ -2700,15 +2754,12 @@ void networkTaskImpl(void* parameter) {
                 }
             }
         }
-        if (!manualWifiToggle) {
-            LOG_I("APP", "Network tasks complete. Turning off WiFi to save power.");
-            HalWifi::disconnect();
-        } else {
-            LOG_I("APP", "Network tasks complete. WiFi remains connected.");
-        }
+        // 无论何种模式，数据同步任务执行完毕后均关闭 WiFi，彻底释放硬件驱动与内存给系统堆
+        LOG_I("APP", "Network tasks complete. Turning off WiFi to save power and free memory.");
+        HalWifi::disconnect();
     }
     
-    vTaskDelay(pdMS_TO_TICKS(150)); // Allow LwIP sockets and TCP buffers to be fully reclaimed by ESP32 heap
+    vTaskDelay(pdMS_TO_TICKS(250)); // Allow LwIP sockets and TCP buffers to be fully reclaimed by ESP32 heap
     g_wifiConnecting = false;
     g_timeSynced = true; // Fallback to allow offline mock calculations if WiFi failed/finished
     triggerPrediction = true; // Wake up the prediction loop immediately
@@ -3406,7 +3457,7 @@ void setup() {
             xTaskCreatePinnedToCore(
                 predictorTask,
                 "PredictorTask",
-                8192,
+                6144,
                 NULL,
                 1,
                 &predictorTaskHandle,
@@ -3415,7 +3466,7 @@ void setup() {
             
             // Start network task on Core 0 to handle WiFi and TLE fetching in background
             manualWifiToggle = false; // 开机默认自动模式：数据新鲜则跳过更新，完成同步后自动关闭 WiFi
-            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 6144, NULL, 1, NULL, 0);
+            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 5120, NULL, 1, NULL, 0);
 
             g_loadingStatusText = (currL_boot == LANG_ZH) ? "加载完成，准备就绪！" : ((currL_boot == LANG_JA) ? "ロード完了、準備完了！" : ((currL_boot == LANG_ES) ? "¡Listo!" : "Ready!"));
             g_loadingProgress = 100;
@@ -3424,7 +3475,7 @@ void setup() {
             vTaskDelete(NULL);
         },
         "SetupLoader",
-        12288,
+        7168,
         NULL,
         2, // Slightly lower than IMU but higher than predictor
         NULL,
@@ -3693,23 +3744,36 @@ void updateEncyclopediaFilteredList() {
         uint32_t noradId = g_satellites[i].noradId;
         const EncyclopediaEntry* entry = (i < NUM_BUILTIN_SATELLITES) ? Encyclopedia::getEntryByNorad(noradId) : nullptr;
         
-        for (int bit = 0; bit < 9; bit++) {
+        for (int bit = 0; bit < 11; bit++) {
             if (g_selectedCategoryMask & (1 << bit)) {
-                if (g_filterCategories[bit].flag != 0) {
-                    if ((g_filterCategories[bit].flag & FLAG_RADIO) && g_satellites[i].type == SAT_TYPE_HAM) {
+                uint8_t spec = g_filterCategories[bit].specialType;
+                if (spec == 1) { // “已选择”：筛选出所有已勾选的卫星
+                    if (g_satellites[i].selected) {
                         matched = true;
                         break;
                     }
-                    if (entry && (entry->flags & g_filterCategories[bit].flag)) {
+                } else if (spec == 2) { // “自定义”：筛选出用户自定添加的卫星
+                    if (i >= NUM_BUILTIN_SATELLITES) {
                         matched = true;
                         break;
                     }
-                }
-                if (g_filterCategories[bit].cat != Category::UNKNOWN) {
-                    if (entry && (entry->category == g_filterCategories[bit].cat ||
-                                 (g_filterCategories[bit].cat == Category::HISTORIC_EVENT && entry->category == Category::ROCKET_BODY))) {
-                        matched = true;
-                        break;
+                } else {
+                    if (g_filterCategories[bit].flag != 0) {
+                        if ((g_filterCategories[bit].flag & FLAG_RADIO) && g_satellites[i].type == SAT_TYPE_HAM) {
+                            matched = true;
+                            break;
+                        }
+                        if (entry && (entry->flags & g_filterCategories[bit].flag)) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (g_filterCategories[bit].cat != Category::UNKNOWN) {
+                        if (entry && (entry->category == g_filterCategories[bit].cat ||
+                                     (g_filterCategories[bit].cat == Category::HISTORIC_EVENT && entry->category == Category::ROCKET_BODY))) {
+                            matched = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -3730,7 +3794,7 @@ void drawCategoryFilterDialog(LGFX_Sprite* canvas) {
     if (!g_showCategoryFilterDialog) return;
     
     int w = 224;
-    int h = 68;
+    int h = 86;
     int x = (canvas->width() - w) / 2;
     int y = (canvas->height() - h) / 2;
     
@@ -3740,32 +3804,41 @@ void drawCategoryFilterDialog(LGFX_Sprite* canvas) {
     
     Language currL = I18N::getLanguage();
     
-    // 3 行 × 3 列 胶囊徽章标签（去除标题，紧凑精致）
-    int startY = y + 6;
+    // 4 行 × 3 列 胶囊徽章标签 (每行 3 个，共 12 个项)
+    int startY = y + 5;
     int rowH = 19;
     int colW = 66;
-    int startX = x + 7;
+    int startX = x + 8;
     int colGap = 5;
     
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < 12; i++) {
         int r = i / 3;
         int c = i % 3;
         int bx = startX + c * (colW + colGap);
         int by = startY + r * rowH;
         
-        bool isChecked = (g_tempCategoryMask & (1 << i)) != 0;
+        bool isChecked = (i == 11) ? (g_tempCategoryMask == 0) : ((g_tempCategoryMask & (1 << i)) != 0);
         bool isFocused = (i == g_categoryFocusIndex);
         
         const char* label = (currL == LANG_ZH) ? g_filterCategories[i].name_zh :
                             ((currL == LANG_JA) ? g_filterCategories[i].name_ja :
                             ((currL == LANG_ES) ? g_filterCategories[i].name_es : g_filterCategories[i].name_en));
         
-        // 样式：完全对应百科详情中的徽章背景色与文字颜色体系
         uint16_t bgColor;
         uint16_t textColor;
         uint16_t borderColor;
         
-        if (isChecked) {
+        if (i == 11) { // “重置全部”特殊按钮
+            if (g_tempCategoryMask == 0) {
+                bgColor = canvas->color565(30, 50, 70);
+                textColor = 0x07FF;
+                borderColor = 0x07FF;
+            } else {
+                bgColor = canvas->color565(25, 30, 40);
+                textColor = canvas->color565(140, 155, 175);
+                borderColor = canvas->color565(45, 52, 65);
+            }
+        } else if (isChecked) {
             bgColor = canvas->color565(g_filterCategories[i].r, g_filterCategories[i].g, g_filterCategories[i].b);
             textColor = g_filterCategories[i].textColor;
             borderColor = textColor; // 边框呼应徽章专属高亮色
@@ -3886,10 +3959,10 @@ void drawSatSelectPage() {
         if (fillWidth < 0) fillWidth = 0;
 
         uint16_t memColor;
-        if (memRatio < 0.65f) {
-            memColor = canvas->color565(0, 220, 255); // 青色 (正常 <65%)
+        if (memRatio < 0.70f) {
+            memColor = canvas->color565(0, 220, 255); // 青色/天蓝色 (正常健康 <70%, FreeHeap > 85KB)
         } else if (memRatio < 0.82f) {
-            memColor = TFT_YELLOW;                   // 黄色 (预警 65%-82%)
+            memColor = TFT_YELLOW;                   // 黄色 (预警 70%-82%)
         } else {
             memColor = TFT_RED;                      // 红色 (高占用 >82%)
         }
@@ -5110,6 +5183,178 @@ void drawSatSelectPage() {
     }
 }
 
+void updateRadioTrackingPipeline(uint32_t currentSimTime, int32_t tmOffset) {
+    if (appState != STATE_MAIN && !RfConsoleView::getInstance().isActive()) {
+        return;
+    }
+
+    GeodeticCoord obsRadio = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
+
+    int chosenRadioSat = -1;
+    // 1. 优先选择：如果在 Sat View 视角，且选中的卫星有无线电下行频率
+    if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+        if (g_satellites[focusSatIndex].downlinkFreq.length() > 0) {
+            chosenRadioSat = focusSatIndex;
+        }
+    }
+    
+    // 2. 否则全局巡天：在所有已勾选的卫星中，寻找当前仰角 > -3° 且仰角最高的无线电卫星
+    if (chosenRadioSat < 0) {
+        float maxRadioEl = -90.0f;
+        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(currentSimTime));
+        for (int i = 0; i < NUM_SATELLITES; i++) {
+            if (!g_satellites[i].selected) continue;
+            if (g_satellites[i].downlinkFreq.length() == 0) continue;
+            
+            float el = -90.0f;
+            if (tmOffset == 0 && g_satCaches[i].lastGeoValid) {
+                ECEFCoord ec = CoordTransform::geodeticToECEF(g_satCaches[i].lastGeo);
+                TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
+                el = tp.el;
+            } else {
+                double x = 0, y = 0, z = 0;
+                if (g_satellites[i].calc.getTEME(currentSimTime, x, y, z)) {
+                    ECEFCoord ec = CoordTransform::temeToECEF(x, y, z, gmst);
+                    TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
+                    el = tp.el;
+                }
+            }
+
+            if (el > -3.0f && el > maxRadioEl) {
+                maxRadioEl = el;
+                chosenRadioSat = i;
+            }
+        }
+    }
+
+    uint32_t rNorad = 0;
+    String rName = "";
+    float rEl = -90.0f;
+    bool rHasRadio = false;
+    float rFreq = 0.0f;
+    String rMode = "";
+
+    RadioTrackingInfo trackInfo;
+    trackInfo.timeOffsetSec = tmOffset;
+
+    if (chosenRadioSat >= 0 && chosenRadioSat < NUM_SATELLITES) {
+        rNorad = g_satellites[chosenRadioSat].noradId;
+        rName = g_satellites[chosenRadioSat].name;
+        float rAz = 0.0f;
+        if (tmOffset == 0 && g_satCaches[chosenRadioSat].lastGeoValid) {
+            ECEFCoord ec = CoordTransform::geodeticToECEF(g_satCaches[chosenRadioSat].lastGeo);
+            TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
+            rEl = tp.el;
+            rAz = tp.az;
+        } else {
+            double curX = 0, curY = 0, curZ = 0;
+            if (g_satellites[chosenRadioSat].calc.getTEME(currentSimTime, curX, curY, curZ)) {
+                double curGmst = CoordTransform::getGMST(CoordTransform::unixToJulian(currentSimTime));
+                ECEFCoord curEc = CoordTransform::temeToECEF(curX, curY, curZ, curGmst);
+                TopocentricCoord curTp = CoordTransform::ecefToTopocentric(obsRadio, curEc);
+                rEl = curTp.el;
+                rAz = curTp.az;
+            }
+        }
+        if (g_satellites[chosenRadioSat].downlinkFreq.length() > 0) {
+            rHasRadio = true;
+            rFreq = g_satellites[chosenRadioSat].downlinkFreq.toFloat();
+            rMode = g_satellites[chosenRadioSat].radioMode;
+        }
+
+        trackInfo.hasPass = true;
+        trackInfo.satNorad = rNorad;
+        trackInfo.satName = rName;
+        trackInfo.currentEl = rEl;
+        trackInfo.currentAz = rAz;
+        trackInfo.baseFreqMHz = rFreq;
+
+        // 1. 多普勒频移计算 (基于 1 秒微分离散差分)
+        if (rFreq > 0.0f) {
+            double x0 = 0, y0 = 0, z0 = 0;
+            double x1 = 0, y1 = 0, z1 = 0;
+            if (g_satellites[chosenRadioSat].calc.getTEME(currentSimTime, x0, y0, z0) &&
+                g_satellites[chosenRadioSat].calc.getTEME(currentSimTime + 1, x1, y1, z1)) {
+                double g0 = CoordTransform::getGMST(CoordTransform::unixToJulian(currentSimTime));
+                double g1 = CoordTransform::getGMST(CoordTransform::unixToJulian(currentSimTime + 1));
+                ECEFCoord satEcef0 = CoordTransform::temeToECEF(x0, y0, z0, g0);
+                ECEFCoord satEcef1 = CoordTransform::temeToECEF(x1, y1, z1, g1);
+                ECEFCoord obsEcef = CoordTransform::geodeticToECEF(obsRadio);
+
+                double d0 = sqrt(sq(satEcef0.x - obsEcef.x) + sq(satEcef0.y - obsEcef.y) + sq(satEcef0.z - obsEcef.z));
+                double d1 = sqrt(sq(satEcef1.x - obsEcef.x) + sq(satEcef1.y - obsEcef.y) + sq(satEcef1.z - obsEcef.z));
+                double vr = d1 - d0; // km/s (负为接近/蓝移, 正为远离/红移)
+                double c_kms = 299792.458;
+                trackInfo.dopplerHz = -(float)(rFreq * 1e6 * (vr / c_kms));
+            }
+        }
+
+        // 2. 匹配或快速估算本次过境的 AOS, TCA, LOS, MaxEl
+        bool passFound = false;
+        lockPassMutex();
+        for (const auto& p : recommendedPasses) {
+            if ((p.satIndex == chosenRadioSat || p.satName == rName) && 
+                (int64_t)currentSimTime >= (int64_t)p.aosTime - 300 && 
+                (int64_t)currentSimTime <= (int64_t)p.losTime + 60) {
+                trackInfo.aosTime = p.aosTime;
+                trackInfo.tcaTime = p.maxElevTime;
+                trackInfo.losTime = p.losTime;
+                trackInfo.maxEl = p.maxElevation;
+                passFound = true;
+                break;
+            }
+        }
+        unlockPassMutex();
+
+        if (!passFound) {
+            // 若无缓存，在 currentSimTime 前后快速步进探测过境区间
+            uint32_t stepAos = currentSimTime;
+            for (int s = 0; s < 12; s++) {
+                uint32_t tTest = currentSimTime - (s + 1) * 60;
+                double xt, yt, zt;
+                if (g_satellites[chosenRadioSat].calc.getTEME(tTest, xt, yt, zt)) {
+                    double gt = CoordTransform::getGMST(CoordTransform::unixToJulian(tTest));
+                    ECEFCoord sect = CoordTransform::temeToECEF(xt, yt, zt, gt);
+                    TopocentricCoord tpt = CoordTransform::ecefToTopocentric(obsRadio, sect);
+                    if (tpt.el <= 0.0f) {
+                        stepAos = tTest;
+                        break;
+                    }
+                }
+            }
+            uint32_t stepLos = currentSimTime + 600;
+            float peakEl = rEl;
+            uint32_t peakTime = currentSimTime;
+            for (int s = 0; s < 12; s++) {
+                uint32_t tTest = currentSimTime + (s + 1) * 60;
+                double xt, yt, zt;
+                if (g_satellites[chosenRadioSat].calc.getTEME(tTest, xt, yt, zt)) {
+                    double gt = CoordTransform::getGMST(CoordTransform::unixToJulian(tTest));
+                    ECEFCoord sect = CoordTransform::temeToECEF(xt, yt, zt, gt);
+                    TopocentricCoord tpt = CoordTransform::ecefToTopocentric(obsRadio, sect);
+                    if (tpt.el > peakEl) {
+                        peakEl = tpt.el;
+                        peakTime = tTest;
+                    }
+                    if (tpt.el <= 0.0f) {
+                        stepLos = tTest;
+                        break;
+                    }
+                }
+            }
+            trackInfo.aosTime = stepAos;
+            trackInfo.losTime = stepLos;
+            trackInfo.tcaTime = peakTime;
+            trackInfo.maxEl = peakEl > rEl ? peakEl : rEl;
+        }
+
+        trackInfo.isRising = (currentSimTime < trackInfo.tcaTime);
+    }
+
+    RadioManager::getInstance().updateTracking(trackInfo);
+    RadioManager::getInstance().update(rNorad, rName, rEl, rHasRadio, rFreq, rMode);
+}
+
 void loop() {
     gimbal.tick();
     // Resume suspended predictorTask after 500ms debounce of time machine adjustments
@@ -5403,7 +5648,8 @@ void loop() {
         }
 
         if (RfConsoleView::getInstance().isActive()) {
-            RfConsoleView::getInstance().handleKeys(justSemi, justDot, justEnter, justD, (justEsc || justTick), justT);
+            bool justZero = (M5Cardputer.Keyboard.keysState().word.size() > 0 && M5Cardputer.Keyboard.keysState().word[0] == '0');
+            RfConsoleView::getInstance().handleKeys(justSemi, justDot, justEnter, justD, (justEsc || justTick), justT, justComma, justSlash, (justZero || justR), justY, justN, timeMachineOffset);
             if (!RfConsoleView::getInstance().isActive()) {
                 // 用户按 Esc 退出了 RF 控制台，立即复位 Canvas 全局状态，防止污染主界面文字排版
                 auto c = earth_renderer->getCanvas();
@@ -5412,6 +5658,8 @@ void loop() {
                     c->clearClipRect();
                 }
             } else {
+                // 实时解算当前无线电跟踪状态与多普勒频移，支持时光机快进/倒退
+                updateRadioTrackingPipeline(current_unix + timeMachineOffset, timeMachineOffset);
                 auto c = earth_renderer->getCanvas();
                 if (c) {
                     RfConsoleView::getInstance().draw(c, 240, 135);
@@ -5462,10 +5710,10 @@ void loop() {
             if (M5Cardputer.Keyboard.isKeyPressed(KEY_TAB)) {
                 // Tab key: do nothing here, handled as discrete key justTab
             }
-            else if (M5Cardputer.Keyboard.isKeyPressed(',')) currentKey = ',';
-            else if (M5Cardputer.Keyboard.isKeyPressed('/')) currentKey = '/';
-            else if (M5Cardputer.Keyboard.isKeyPressed(';')) currentKey = ';';
-            else if (M5Cardputer.Keyboard.isKeyPressed('.')) currentKey = '.';
+            else if (M5Cardputer.Keyboard.isKeyPressed(',') && !showRecommendations) currentKey = ',';
+            else if (M5Cardputer.Keyboard.isKeyPressed('/') && !showRecommendations) currentKey = '/';
+            else if (M5Cardputer.Keyboard.isKeyPressed(';') && !showRecommendations) currentKey = ';';
+            else if (M5Cardputer.Keyboard.isKeyPressed('.') && !showRecommendations) currentKey = '.';
             else if (M5Cardputer.Keyboard.isKeyPressed('-') || M5Cardputer.Keyboard.isKeyPressed('_')) currentKey = '-';
             else if (M5Cardputer.Keyboard.isKeyPressed('=') || M5Cardputer.Keyboard.isKeyPressed('+')) currentKey = '=';
             else if (M5Cardputer.Keyboard.isKeyPressed(' ')) currentKey = ' ';
@@ -5473,12 +5721,7 @@ void loop() {
             else if (M5Cardputer.Keyboard.isKeyPressed(']')) currentKey = ']';
             
             auto handleContinuousKey = [&](char key) {
-                if (showRecommendations) {
-                    if (selectedPassIndex == -1) {
-                        if (key == ';') { if (passScrollIndex > 0) passScrollIndex--; }
-                        else if (key == '.') { if (passScrollIndex < (int)displayTree.size() - 1) passScrollIndex++; }
-                    }
-                } else if ((isSatViewMode || (!isManualLocationMode)) && !showRecommendations) {
+                if ((isSatViewMode || (!isManualLocationMode)) && !showRecommendations) {
                     if (key == ',' || key == '/') {
                         lastTimeAdjustMillis = millis();
                         if (predictorTaskHandle != NULL) {
@@ -5617,6 +5860,40 @@ void loop() {
             }
         }
 
+        // 推荐过境事件列表专属平滑导航控制 (防止点按误触发长按，舒适匀速平滑滚动)
+        if (appState == STATE_MAIN && showRecommendations && selectedPassIndex == -1) {
+            static unsigned long s_passHoldStart = 0;
+            static unsigned long s_passLastRepeat = 0;
+            static char s_passActiveKey = 0;
+
+            bool isSemiDown = M5Cardputer.Keyboard.isKeyPressed(';');
+            bool isDotDown = M5Cardputer.Keyboard.isKeyPressed('.');
+
+            if (justSemi) {
+                if (passScrollIndex > 0) passScrollIndex--;
+                s_passActiveKey = ';';
+                s_passHoldStart = millis();
+                s_passLastRepeat = millis();
+            } else if (justDot) {
+                if (passScrollIndex < (int)displayTree.size() - 1) passScrollIndex++;
+                s_passActiveKey = '.';
+                s_passHoldStart = millis();
+                s_passLastRepeat = millis();
+            } else if (s_passActiveKey == ';' && isSemiDown) {
+                // 长按判定：按住 450ms 以上才触发连发，连发间隔 160ms (每秒约 6 行，清晰匀速，绝无飞窜)
+                if (millis() - s_passHoldStart > 450 && millis() - s_passLastRepeat >= 160) {
+                    s_passLastRepeat = millis();
+                    if (passScrollIndex > 0) passScrollIndex--;
+                }
+            } else if (s_passActiveKey == '.' && isDotDown) {
+                if (millis() - s_passHoldStart > 450 && millis() - s_passLastRepeat >= 160) {
+                    s_passLastRepeat = millis();
+                    if (passScrollIndex < (int)displayTree.size() - 1) passScrollIndex++;
+                }
+            } else if (!isSemiDown && !isDotDown) {
+                s_passActiveKey = 0;
+            }
+        }
         
         // Handle discrete keyboard input
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
@@ -6130,18 +6407,23 @@ void loop() {
                     int r = g_categoryFocusIndex / 3;
                     int c = g_categoryFocusIndex % 3;
                     if (justEnter || justSpace) {
-                        // 使用enter选中/取消
-                        g_tempCategoryMask ^= (1 << g_categoryFocusIndex);
+                        if (g_categoryFocusIndex == 11) {
+                            // 第 11 项为“重置全部”，清空所有筛选（恢复显示全部）
+                            g_tempCategoryMask = 0;
+                        } else {
+                            // 使用enter选中/取消对应分类
+                            g_tempCategoryMask ^= (1 << g_categoryFocusIndex);
+                        }
                     } else if (justEsc || justTick || justBack || justF) {
                         // 使用esc生效并关闭（Cardputer物理Esc键产生tick/27）
                         g_selectedCategoryMask = g_tempCategoryMask;
                         g_showCategoryFilterDialog = false;
                         updateEncyclopediaFilteredList();
                     } else if (justSemi || justW) { // 上 (UP)
-                        r = (r - 1 + 3) % 3;
+                        r = (r - 1 + 4) % 4;
                         g_categoryFocusIndex = r * 3 + c;
                     } else if (justDot || justS) { // 下 (DOWN)
-                        r = (r + 1) % 3;
+                        r = (r + 1) % 4;
                         g_categoryFocusIndex = r * 3 + c;
                     } else if (justComma || justA) { // 左 (LEFT)
                         c = (c - 1 + 3) % 3;
@@ -6273,37 +6555,29 @@ void loop() {
                                     pushCanvasWithFilter();
                                 }
                             }
-                        } else if (!justC) { // Prevent C from triggering WiFi toggle in other tabs
+                        } else if (!justC) { // W key: Refresh GP & Frequencies in Encyclopedia
                             if (g_networkActive) {
                                 downloadErrorMsg = I18N::get(TXT_SYS_BUSY);
                                 downloadFinishedMs = millis();
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
-                            } else if (!HalWifi::isConnected()) {
-                                if (!isSystemMemorySafeForNetwork()) {
-                                    downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
-                                    downloadFinishedMs = millis();
-                                    drawSatSelectPage();
-                                    pushCanvasWithFilter();
-                                } else {
-                                    manualWifiToggle = true;
-                                    downloadErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
-                                    drawSatSelectPage();
-                                    pushCanvasWithFilter();
-                                    BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 6144, NULL, 1, NULL, 0);
-                                    if (res != pdPASS) {
-                                        downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
-                                        downloadFinishedMs = millis();
-                                        drawSatSelectPage();
-                                        pushCanvasWithFilter();
-                                    }
-                                }
-                            } else {
-                                HalWifi::disconnect();
-                                downloadErrorMsg = I18N::get(TXT_WIFI_DISCONNECTED);
+                            } else if (!isSystemMemorySafeForNetwork()) {
+                                downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
                                 downloadFinishedMs = millis();
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
+                            } else {
+                                manualWifiToggle = true;
+                                downloadErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
+                                drawSatSelectPage();
+                                pushCanvasWithFilter();
+                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 5120, NULL, 1, NULL, 0);
+                                if (res != pdPASS) {
+                                    downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
+                                    downloadFinishedMs = millis();
+                                    drawSatSelectPage();
+                                    pushCanvasWithFilter();
+                                }
                             }
                         }
                     }
@@ -7449,55 +7723,7 @@ void loop() {
         // 自动过境无线电监听与调度 (RadioManager Autonomous Satellite Radio Patrol)
         // 无论是否接入舵机云台，系统均持续监测过境卫星并驱动 Cap LoRa-1262 射频监听
         // =======================================================================
-        if (appState == STATE_MAIN || RfConsoleView::getInstance().isActive()) {
-            GeodeticCoord obsRadio = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-
-            int chosenRadioSat = -1;
-            // 1. 优先选择：如果在 Sat View 视角，且选中的卫星有无线电下行频率
-            if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
-                if (g_satellites[focusSatIndex].downlinkFreq.length() > 0) {
-                    chosenRadioSat = focusSatIndex;
-                }
-            }
-            
-            // 2. 否则全局巡天：在所有已勾选的卫星中，寻找当前仰角 > -3° 且仰角最高的无线电卫星
-            if (chosenRadioSat < 0) {
-                float maxRadioEl = -90.0f;
-                for (int i = 0; i < NUM_SATELLITES; i++) {
-                    if (!g_satellites[i].selected || !g_satCaches[i].lastGeoValid) continue;
-                    if (g_satellites[i].downlinkFreq.length() == 0) continue;
-                    ECEFCoord ec = CoordTransform::geodeticToECEF(g_satCaches[i].lastGeo);
-                    TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
-                    if (tp.el > -3.0f && tp.el > maxRadioEl) {
-                        maxRadioEl = tp.el;
-                        chosenRadioSat = i;
-                    }
-                }
-            }
-
-            uint32_t rNorad = 0;
-            String rName = "";
-            float rEl = -90.0f;
-            bool rHasRadio = false;
-            float rFreq = 0.0f;
-            String rMode = "";
-
-            if (chosenRadioSat >= 0 && chosenRadioSat < NUM_SATELLITES) {
-                rNorad = g_satellites[chosenRadioSat].noradId;
-                rName = g_satellites[chosenRadioSat].name;
-                if (g_satCaches[chosenRadioSat].lastGeoValid) {
-                    ECEFCoord ec = CoordTransform::geodeticToECEF(g_satCaches[chosenRadioSat].lastGeo);
-                    TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
-                    rEl = tp.el;
-                }
-                if (g_satellites[chosenRadioSat].downlinkFreq.length() > 0) {
-                    rHasRadio = true;
-                    rFreq = g_satellites[chosenRadioSat].downlinkFreq.toFloat();
-                    rMode = g_satellites[chosenRadioSat].radioMode;
-                }
-            }
-            RadioManager::getInstance().update(rNorad, rName, rEl, rHasRadio, rFreq, rMode);
-        }
+        updateRadioTrackingPipeline(current_unix + timeMachineOffset, timeMachineOffset);
 
         // Update 3-axis Gimbal Targets based on active sat tracking (地表全天自主巡天跟踪站 Autonomous Sky Patrol)
         if (gimbal.isOnline() && appState != STATE_SERVO_TEST) {
@@ -7895,16 +8121,28 @@ void loop() {
             bool localPredictionsReady = false;
             int localPredictionProgress = 0;
             bool localTimeSynced = false;
-            std::vector<PassEvent> localRecommendedPasses;
-            std::vector<TreeItem> localDisplayTree;
+            static std::vector<PassEvent> localRecommendedPasses;
+            static std::vector<TreeItem> localDisplayTree;
+            static uint32_t lastCopiedTime = 0;
+            static int lastCopiedCount = -1;
 
             lockPassMutex();
             localPredictionsReady = predictionsReady;
             localPredictionProgress = predictionProgress;
             localTimeSynced = g_timeSynced;
             if (localPredictionsReady) {
-                localRecommendedPasses = recommendedPasses;
-                localDisplayTree = displayTree;
+                if (lastCopiedCount != (int)recommendedPasses.size() || (millis() - lastCopiedTime > 1000)) {
+                    localRecommendedPasses = recommendedPasses;
+                    localDisplayTree = displayTree;
+                    lastCopiedCount = (int)recommendedPasses.size();
+                    lastCopiedTime = millis();
+                }
+            } else {
+                if (!localRecommendedPasses.empty()) {
+                    localRecommendedPasses.clear();
+                    localDisplayTree.clear();
+                }
+                lastCopiedCount = -1;
             }
             unlockPassMutex();
 

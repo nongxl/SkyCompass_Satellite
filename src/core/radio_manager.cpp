@@ -217,3 +217,14 @@ float RadioManager::getWavePhase() const {
     // 1 秒循环一次
     return (float)(millis() % 1000) / 1000.0f;
 }
+
+bool RadioManager::deletePacket(size_t index) {
+    if (index < _recentPackets.size()) {
+        _recentPackets.erase(_recentPackets.begin() + index);
+        if (_totalPacketsReceived > 0) {
+            _totalPacketsReceived--;
+        }
+        return true;
+    }
+    return false;
+}

@@ -195,7 +195,15 @@ static const char* const t_en[TXT_MAX] = {
     "No satellite pass in current window",
     "Auto-receives when sat elevation > -3 deg",
     "PACKET DECODE & HEX DUMP",
-    "Raw Hex:"
+    "Raw Hex:",
+    "Azimuth",
+    "Elevation",
+    "Max El",
+    "Doppler",
+    "Antenna Dir",
+    "Calib",
+    "Rem",
+    "Passed"
 };
 
 // 中文文本资源表
@@ -387,7 +395,15 @@ static const char* const t_zh[TXT_MAX] = {
     "当前时段无目标无线电卫星过境",
     "卫星仰角 > -3° 时将自动启动接收",
     "数据包解码与 HEX 报文",
-    "原始十六进制:"
+    "原始十六进制:",
+    "方位",
+    "仰角",
+    "峰值",
+    "频移",
+    "天线指引",
+    "时间校准",
+    "剩余",
+    "已过"
 };
 
 // 日文文本资源表
@@ -579,7 +595,15 @@ static const char* const t_ja[TXT_MAX] = {
     "現在通過中の無線衛星はありません",
     "衛星仰角 > -3° で自動受信を開始",
     "パケット復号 ＆ HEX ダンプ",
-    "生HEXデータ:"
+    "生HEXデータ:",
+    "方位",
+    "仰角",
+    "最大仰角",
+    "ドップラー",
+    "アンテナ向き",
+    "時間校正",
+    "残り",
+    "通過済"
 };
 
 // 西班牙文文本资源表 (Standard ASCII rendering)
@@ -767,7 +791,15 @@ static const char* const t_es[TXT_MAX] = {
     "No hay satelite pasando en la ventana actual",
     "Recepcion automatica con elevacion > -3 deg",
     "DECODIFICACION Y VOLCADO HEX",
-    "Hex sin procesar:"
+    "Hex sin procesar:",
+    "Acimut",
+    "Elevacion",
+    "El Max",
+    "Doppler",
+    "Dir Antena",
+    "Calib",
+    "Rest",
+    "Pasado"
 };
 
 const lgfx::IFont* I18N::getFont() {

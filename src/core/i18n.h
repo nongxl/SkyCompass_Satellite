@@ -199,6 +199,14 @@ enum TextId {
     TXT_RF_AUTO_TRIGGER_TIP,
     TXT_RF_MODAL_TITLE,
     TXT_RF_RAW_HEX,
+    TXT_RF_AZ,
+    TXT_RF_EL,
+    TXT_RF_MAX_EL,
+    TXT_RF_DOPPLER,
+    TXT_RF_ANTENNA_DIR,
+    TXT_RF_TIME_CALIB,
+    TXT_RF_REMAIN,
+    TXT_RF_PASSED,
 
     // Max index marker
     TXT_MAX

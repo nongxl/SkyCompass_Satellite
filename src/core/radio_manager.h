@@ -9,6 +9,22 @@ struct ReceivedLogItem {
     DecodedTelemetry decoded;
 };
 
+struct RadioTrackingInfo {
+    bool hasPass = false;
+    uint32_t satNorad = 0;
+    String satName = "";
+    float currentEl = -90.0f;
+    float currentAz = 0.0f;
+    float maxEl = 0.0f;
+    uint32_t aosTime = 0;
+    uint32_t tcaTime = 0;
+    uint32_t losTime = 0;
+    float dopplerHz = 0.0f;       // 多普勒频移 (Hz)
+    float baseFreqMHz = 0.0f;     // 发射中心频率 (MHz)
+    int32_t timeOffsetSec = 0;    // 当前时间校准偏移量 (秒)
+    bool isRising = false;        // 是否处于上升期 (AOS -> TCA)
+};
+
 class RadioManager {
 public:
     static RadioManager& getInstance() {
@@ -28,6 +44,10 @@ public:
     void update(uint32_t focalNoradId, const String& focalName, float focalElevation,
                 bool hasFocalRadio, float focalFreqMHz, const String& focalMode);
 
+    // 更新过境追踪遥测与多普勒信息
+    void updateTracking(const RadioTrackingInfo& info) { _trackingInfo = info; }
+    const RadioTrackingInfo& getTrackingInfo() const { return _trackingInfo; }
+
     // 查询当前工作状态
     bool isHardwareReady() const;
     bool isListening() const { return _isListening; }
@@ -35,9 +55,10 @@ public:
     String getActiveSatName() const { return _activeSatName; }
     float getActiveFreq() const { return _activeFreq; }
 
-    // 历史接收数据包列表访问
+    // 历史接收数据包列表访问与管理
     const std::vector<ReceivedLogItem>& getRecentPackets() const { return _recentPackets; }
     size_t getTotalPacketsCount() const { return _totalPacketsReceived; }
+    bool deletePacket(size_t index);
 
     // 测试数据包注入 (用于在无卫星过境或室内无信号时调试确认界面与解码器)
     void injectTestPacket();
@@ -63,6 +84,8 @@ private:
     String _activeSatName = "";
     float _activeFreq = 0.0f;
     uint32_t _passEndedTime = 0;
+
+    RadioTrackingInfo _trackingInfo;
 
     std::vector<ReceivedLogItem> _recentPackets;
     size_t _totalPacketsReceived = 0;
