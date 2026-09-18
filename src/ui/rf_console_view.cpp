@@ -136,7 +136,9 @@ void RfConsoleView::handleKeys(bool justSemi, bool justDot, bool justEnter, bool
 
     if (justT) {
         RadioManager::getInstance().injectTestPacket();
-        addRssiSample(-75.0f);
+        addRssiSample(-92.0f);
+        addRssiSample(-68.0f);
+        addRssiSample(-88.0f);
         return;
     }
 
@@ -177,12 +179,50 @@ void RfConsoleView::handleKeys(bool justSemi, bool justDot, bool justEnter, bool
     }
 }
 
+// 热力图色彩映射：基准为鲜明橙色，信号越强越向纯红与炽红偏移
+static uint16_t getWaterfallHeatColor(float norm, bool isGlowLine) {
+    uint8_t r, g, b;
+    if (norm < 0.20f) {
+        // 微弱底噪：暗琥珀橙
+        float t = norm / 0.20f;
+        r = (uint8_t)(80 + 100 * t);  // 80 -> 180
+        g = (uint8_t)(35 + 45 * t);   // 35 -> 80
+        b = 0;
+    } else if (norm < 0.55f) {
+        // 中低信号：标准热力图鲜明橙色
+        float t = (norm - 0.20f) / 0.35f;
+        r = (uint8_t)(180 + 75 * t);  // 180 -> 255
+        g = (uint8_t)(80 + 40 * t);   // 80 -> 120
+        b = 0;
+    } else if (norm < 0.80f) {
+        // 中高信号：鲜橙向橙红与炽红过渡
+        float t = (norm - 0.55f) / 0.25f;
+        r = 255;
+        g = (uint8_t)(120 * (1.0f - t) + 20 * t); // 120 -> 20 (绿光衰减，快速转红)
+        b = (uint8_t)(5 * t);
+    } else {
+        // 极强信号：峰值纯红与炽烈高光
+        float t = (norm - 0.80f) / 0.20f;
+        r = 255;
+        g = (uint8_t)(20 * (1.0f - t)); // 20 -> 0 (完全纯红)
+        b = (uint8_t)(10 + 35 * t);     // 10 -> 45
+    }
+
+    if (!isGlowLine) {
+        // 背景柱体调低亮度（约 35% 浓度），呈半透明深邃热力图光晕，保证前景数据完全清晰可辨
+        r = (uint8_t)(r * 0.35f);
+        g = (uint8_t)(g * 0.35f);
+        b = (uint8_t)(b * 0.35f);
+    }
+
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+
 void RfConsoleView::drawBackgroundWaterfall(LGFX_Sprite* canvas, int width, int height) {
     int bgY = 22;
     int bgH = height - bgY; // 113px
-    int bgW = width;
 
-    // 将采样数据渲染为深邃的背景频谱波形
+    // 将采样数据渲染为热力图色彩的深邃背景频谱波形
     int prevX = -1;
     int prevY = -1;
 
@@ -190,23 +230,26 @@ void RfConsoleView::drawBackgroundWaterfall(LGFX_Sprite* canvas, int width, int 
         int readIdx = (_historyHead + i) % WATERFALL_POINTS;
         float rVal = _rssiHistory[readIdx];
 
-        // 归一化到背景高度 ( -130dBm 为底, -50dBm 为顶 )
-        float norm = (rVal - (-130.0f)) / 80.0f;
+        // 归一化到背景高度 ( -125dBm 底噪为底, -55dBm 强信号为顶 )
+        float norm = (rVal - (-125.0f)) / 70.0f;
         if (norm < 0.0f) norm = 0.0f;
         if (norm > 1.0f) norm = 1.0f;
 
         int px = i * 2;
         int py = height - 1 - (int)(norm * (bgH - 6));
 
-        // 背景幽深能量柱 (不抢前景视野)
-        if (rVal > -116.0f) {
-            uint16_t col = (rVal > -85.0f) ? canvas->color565(0, 45, 60) : canvas->color565(8, 22, 34);
-            canvas->drawFastVLine(px, py, height - 1 - py, col);
-            canvas->drawFastVLine(px + 1, py, height - 1 - py, col);
+        // 1. 背景能量柱 (热力图：橙色至红色半透明光晕柱)
+        if (norm > 0.04f) {
+            uint16_t col = getWaterfallHeatColor(norm, false);
+            int colH = height - 1 - py;
+            if (colH > 0) {
+                canvas->drawFastVLine(px, py, colH, col);
+                canvas->drawFastVLine(px + 1, py, colH, col);
+            }
         }
 
-        // 背景轮廓辉光线
-        uint16_t lineCol = (rVal > -85.0f) ? canvas->color565(0, 150, 180) : canvas->color565(18, 48, 65);
+        // 2. 轮廓辉光线 (热力图：鲜亮橙色，信号越高向红色偏移)
+        uint16_t lineCol = getWaterfallHeatColor(norm, true);
         if (prevX >= 0) {
             canvas->drawLine(prevX, prevY, px, py, lineCol);
         }
@@ -223,14 +266,14 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
     if (now - _lastSampleTime >= 100) {
         _lastSampleTime = now;
         RadioManager& rm = RadioManager::getInstance();
-        float currentRssi = -120.0f;
+        float currentRssi = -122.0f;
         if (rm.isHardwareReady() && rm.isListening()) {
             currentRssi = HalRadio::getInstance().getInstantRSSI();
-            if (currentRssi < -130.0f || currentRssi > 0.0f) {
-                currentRssi = -118.0f + (float)(rand() % 8 - 4);
+            if (currentRssi >= -10.0f || currentRssi < -135.0f) {
+                currentRssi = -122.0f + (float)(rand() % 6 - 3);
             }
         } else {
-            currentRssi = -122.0f + (float)(rand() % 4 - 2);
+            currentRssi = -124.0f + (float)(rand() % 4 - 2);
         }
         addRssiSample(currentRssi);
     }

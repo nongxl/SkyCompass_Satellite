@@ -210,7 +210,12 @@ RadioPollResult HalRadio::pollPacket(RadioPacket& outPacket) {
 
 float HalRadio::getInstantRSSI() {
     if (!_isDetected || !_radio || !_isReceiving) {
-        return -120.0f;
+        return -122.0f;
     }
-    return _radio->getRSSI();
+    // 传入 false 以读取芯片瞬时环境 RSSI，默认 true 会读取上一数据包状态并在空闲时返回 0.0dBm
+    float inst = _radio->getRSSI(false);
+    if (inst >= -10.0f || inst < -140.0f) {
+        return -122.0f;
+    }
+    return inst;
 }
