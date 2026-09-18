@@ -140,6 +140,50 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
     }
 }
 
+void RadioManager::injectTestPacket() {
+    RadioPacket pkt;
+    pkt.timestamp = millis();
+    pkt.freqMHz = _activeFreq > 100.0f ? _activeFreq : 436.700f;
+    pkt.rssi = -82.0f;
+    pkt.snr = 8.5f;
+
+    // 构造模拟 NORBI 遥测包 (48 字节)
+    uint8_t demoPayload[48] = {
+        0x55, 0xAA, 0x01, 0x20, // Sync & Header
+        0x0F, 0x3C,             // Voltage: 3900 mV
+        0x15,                   // Temperature: 21 C
+        0x02, 0x4B,             // Current: 587 mA
+        0x01, 0x00,             // Reboot counter: 1
+        0xAA, 0xBB, 0xCC, 0xDD
+    };
+    for (int i = 11; i < 48; i++) {
+        demoPayload[i] = (uint8_t)(0x10 + i);
+    }
+
+    pkt.length = 48;
+    memcpy(pkt.payload, demoPayload, 48);
+
+    ReceivedLogItem item;
+    item.raw = pkt;
+    item.decoded = TelemetryDecoder::decode(pkt, _activeSatNorad > 0 ? _activeSatNorad : 46494);
+    if (item.decoded.satName.length() == 0 || item.decoded.satName == "Unknown Sat") {
+        item.decoded.satName = _activeSatName.length() > 0 ? _activeSatName : "NORBI";
+        item.decoded.noradId = _activeSatNorad > 0 ? _activeSatNorad : 46494;
+    }
+
+    _recentPackets.insert(_recentPackets.begin(), item);
+    if (_recentPackets.size() > MAX_LOG_PACKETS) {
+        _recentPackets.pop_back();
+    }
+    _totalPacketsReceived++;
+
+    _toastText = "[RX TEST] " + item.decoded.satName + " (" + String(pkt.length) + "B) RSSI:" + String((int)pkt.rssi);
+    _toastStartTime = millis();
+
+    logPacketToFile(item);
+    Serial.printf("[RadioManager] Injected test packet for %s\n", item.decoded.satName.c_str());
+}
+
 void RadioManager::logPacketToFile(const ReceivedLogItem& item) {
     File f = LittleFS.open("/lora_logs/rx.log", "a");
     if (f) {

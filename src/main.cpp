@@ -1060,25 +1060,32 @@ bool catExpanded[4] = {false, false, false, false};
 std::vector<TreeItem> displayTree;
 int selectedPassIndex = -1; // For detail view
 
-void rebuildTree(uint32_t current_unix) {
-    displayTree.clear();
+void rebuildTreeLocal(std::vector<TreeItem>& tree, const std::vector<PassEvent>& passes, uint32_t current_unix) {
+    tree.clear();
     for (int c = 0; c < 4; c++) {
-        displayTree.push_back({true, c, -1});
+        tree.push_back({true, c, -1});
         if (catExpanded[c]) {
-            for (int i = 0; i < recommendedPasses.size(); i++) {
-                const auto& p = recommendedPasses[i];
+            for (int i = 0; i < passes.size(); i++) {
+                const auto& p = passes[i];
+                bool isPassValid = (p.isVisible || p.isRadioPass);
                 bool match = false;
-                if (c == 0 && p.isVisible && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
-                else if (c == 1 && p.isVisible && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
-                else if (c == 2 && p.isVisible && p.score >= 4 && p.losTime >= current_unix) match = true;
+                if (c == 0 && isPassValid && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
+                else if (c == 1 && isPassValid && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
+                else if (c == 2 && isPassValid && p.score >= 4 && p.losTime >= current_unix) match = true;
                 else if (c == 3 && p.losTime >= current_unix) match = true;
                 
                 if (match) {
-                    displayTree.push_back({false, c, i});
+                    tree.push_back({false, c, i});
                 }
             }
         }
     }
+}
+
+void rebuildTree(uint32_t current_unix) {
+    lockPassMutex();
+    rebuildTreeLocal(displayTree, recommendedPasses, current_unix);
+    unlockPassMutex();
 }
 
 void updateChainMonoDisplay() {
@@ -1250,28 +1257,6 @@ void updateChainMonoDisplay() {
             uint8_t temp[8];
             drawCortanaCircle(temp);
             M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
-        }
-    }
-}
-
-void rebuildTreeLocal(std::vector<TreeItem>& tree, const std::vector<PassEvent>& passes, uint32_t current_unix) {
-    tree.clear();
-    for (int c = 0; c < 4; c++) {
-        tree.push_back({true, c, -1});
-        if (catExpanded[c]) {
-            for (int i = 0; i < passes.size(); i++) {
-                const auto& p = passes[i];
-                bool isPassValid = (p.isVisible || p.isRadioPass);
-                bool match = false;
-                if (c == 0 && isPassValid && p.losTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
-                else if (c == 1 && isPassValid && p.losTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
-                else if (c == 2 && isPassValid && p.score >= 4 && p.losTime >= current_unix) match = true;
-                else if (c == 3 && p.losTime >= current_unix) match = true;
-                
-                if (match) {
-                    tree.push_back({false, c, i});
-                }
-            }
         }
     }
 }
@@ -2132,12 +2117,10 @@ void recentLaunchNetworkTaskImpl() {
             recentLaunchErrorMsg = "WiFi Connect Failed!";
             recentLaunchDownloading = false;
             recentLaunchDownloadFinishedMs = millis();
-            if (ssid.length() == 0) {
-                g_wifiSetupReturnState = STATE_SAT_SELECT;
-                appState = STATE_WIFI_SETUP;
-                wifiIsScanning = true;
-                wifiIsInputtingPassword = false;
-            }
+            g_wifiSetupReturnState = STATE_SAT_SELECT;
+            appState = STATE_WIFI_SETUP;
+            wifiIsScanning = true;
+            wifiIsInputtingPassword = false;
             return;
         }
     }
@@ -2469,7 +2452,8 @@ void networkTaskImpl(void* parameter) {
     
     if (ssid.length() == 0) {
         LOG_I("APP", "No WiFi credentials available. Offline mode active.");
-        if (manualWifiToggle) {
+        if (manualWifiToggle || appState == STATE_MAIN || appState == STATE_SAT_SELECT) {
+            g_wifiSetupReturnState = appState;
             appState = STATE_WIFI_SETUP;
             wifiIsScanning = true;
             wifiIsInputtingPassword = false;
@@ -2485,12 +2469,13 @@ void networkTaskImpl(void* parameter) {
     HalWifi::begin(ssid.c_str(), pass.c_str());
     
     if (!HalWifi::isConnected()) {
-        LOG_I("APP", "WiFi connection failed. Entering offline mode.");
+        LOG_I("APP", "WiFi connection failed. Entering setup or offline mode.");
         if (appState == STATE_SAT_SELECT) {
             downloadErrorMsg = "WiFi Connection Failed!";
             downloadFinishedMs = millis();
         }
-        if (ssid.length() == 0) {
+        // 当旧凭据在新网络环境中无法连接时，若用户手动按 W 键联网，或在主界面/卫星选择页，自动弹出 WiFi 扫描配置
+        if (manualWifiToggle || appState == STATE_MAIN || appState == STATE_SAT_SELECT) {
             g_wifiSetupReturnState = appState;
             appState = STATE_WIFI_SETUP;
             wifiIsScanning = true;
@@ -5331,6 +5316,7 @@ void loop() {
         static bool lastSpace = false;
         static bool lastM = false;
         static bool lastCtrl = false;
+        static bool lastT = false;
 
         bool currSemi = M5Cardputer.Keyboard.isKeyPressed(';');
         bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
@@ -5361,6 +5347,7 @@ void loop() {
         bool currSpace = M5Cardputer.Keyboard.isKeyPressed(' ');
         bool currM = M5Cardputer.Keyboard.isKeyPressed('m') || M5Cardputer.Keyboard.isKeyPressed('M');
         bool currCtrl = M5Cardputer.Keyboard.isKeyPressed(KEY_LEFT_CTRL) || M5Cardputer.Keyboard.keysState().ctrl;
+        bool currT = M5Cardputer.Keyboard.isKeyPressed('t') || M5Cardputer.Keyboard.isKeyPressed('T');
 
         static bool s_bootKeyFlushed = false;
         if (!s_bootKeyFlushed) {
@@ -5407,7 +5394,8 @@ void loop() {
         bool justSpace = currSpace && !lastSpace;
         bool justM = currM && !lastM;
         bool justCtrl = currCtrl && !lastCtrl;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl;
+        bool justT = currT && !lastT;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl || justT;
 
         // RF Console 全屏终端模式 (仅在主界面下按 Ctrl 开启，退出统一按 Esc 键)
         if (justCtrl && appState == STATE_MAIN && !RfConsoleView::getInstance().isActive()) {
@@ -5415,7 +5403,7 @@ void loop() {
         }
 
         if (RfConsoleView::getInstance().isActive()) {
-            RfConsoleView::getInstance().handleKeys(justSemi, justDot, justEnter, justD, justEsc);
+            RfConsoleView::getInstance().handleKeys(justSemi, justDot, justEnter, justD, (justEsc || justTick), justT);
             auto c = earth_renderer->getCanvas();
             if (c) {
                 RfConsoleView::getInstance().draw(c, 240, 135);
@@ -5427,7 +5415,7 @@ void loop() {
             lastC = currC; lastR = currR; lastW = currW; lastS = currS;
             lastH = currH; lastG = currG; lastY = currY; lastN = currN;
             lastD = currD; lastF = currF; lastA = currA; lastTab = currTab; lastShift = currShift;
-            lastL = currL; lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl;
+            lastL = currL; lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl; lastT = currT;
             return;
         }
 
@@ -6651,6 +6639,7 @@ void loop() {
         lastSpace = currSpace;
         lastM = currM;
         lastCtrl = currCtrl;
+        lastT = currT;
         
         if (appState == STATE_WIFI_SETUP) {
             drawWiFiSetupPage();

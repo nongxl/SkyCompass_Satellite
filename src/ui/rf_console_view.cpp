@@ -5,13 +5,18 @@
 RfConsoleView::RfConsoleView() {
 }
 
-void RfConsoleView::handleKeys(bool justSemi, bool justDot, bool justEnter, bool justD, bool justEsc) {
+void RfConsoleView::handleKeys(bool justSemi, bool justDot, bool justEnter, bool justD, bool justEsc, bool justT) {
     if (justEsc) {
         if (_showDetailModal) {
             _showDetailModal = false;
         } else {
             _isActive = false; // 退出终端
         }
+        return;
+    }
+
+    if (justT) {
+        RadioManager::getInstance().injectTestPacket();
         return;
     }
 

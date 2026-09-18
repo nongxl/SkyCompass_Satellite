@@ -71,7 +71,11 @@ void HalWifi::begin(const char* ssid, const char* password) {
         delay(200);
     }
     
-    while (WiFi.status() != WL_CONNECTED && retries < 30) {
+    while (WiFi.status() != WL_CONNECTED && retries < 14) {
+        if (WiFi.status() == WL_NO_SSID_AVAIL) {
+            LOG_I("APP", "Target SSID not found in current area.");
+            break;
+        }
         delay(500);
         log_i(".");
         retries++;

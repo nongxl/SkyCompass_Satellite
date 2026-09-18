@@ -12,8 +12,8 @@ public:
     // 绘制全屏 RF Console 视图
     void draw(LGFX_Sprite* canvas, int width, int height);
 
-    // 键盘交互处理
-    void handleKeys(bool justSemi, bool justDot, bool justEnter, bool justD, bool justEsc);
+    // 键盘交互处理 (支持 T 键模拟注入测试包)
+    void handleKeys(bool justSemi, bool justDot, bool justEnter, bool justD, bool justEsc, bool justT = false);
 
     // 查询当前控制台是否处于激活显示状态
     bool isActive() const { return _isActive; }

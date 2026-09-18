@@ -39,6 +39,9 @@ public:
     const std::vector<ReceivedLogItem>& getRecentPackets() const { return _recentPackets; }
     size_t getTotalPacketsCount() const { return _totalPacketsReceived; }
 
+    // 测试数据包注入 (用于在无卫星过境或室内无信号时调试确认界面与解码器)
+    void injectTestPacket();
+
     // Toast 提示状态
     bool hasActiveToast() const;
     String getToastText() const;
