@@ -60,6 +60,8 @@ HardwareWizardView hardware_wizard;
 
 #include "gimbal/gimbal_controller.h"
 GimbalController gimbal;
+#include "ui/servo_test_view.h"
+ServoTestView servo_test_view(gimbal);
 
 #include "core/mono_icons.h"
 
@@ -124,8 +126,6 @@ enum AppState {
 };
 AppState appState = STATE_MAIN;
 int langSelectedIndex = 0;
-int activeServoTestChannel = 0; // 0: CH0(基座长梁), 1: CH1(拱门倾角), 2: CH2(星位滑块)
-void drawServoTestPage();
 void saveCustomSatellites();
 
 std::vector<WiFiNetwork> wifiNetworks;
@@ -3616,121 +3616,6 @@ void drawWiFiSetupPage() {
     }
 }
 
-void drawServoTestPage() {
-    auto canvas = earth_renderer->getCanvas();
-    uint16_t width = canvas->width();
-    uint16_t height = canvas->height();
-    
-    // 全局重置对齐基准与裁剪区域，杜绝状态污染
-    canvas->setTextDatum(top_left);
-    canvas->clearClipRect();
-    
-    // 背景深空灰蓝（卫星百科与硬件向导同款）
-    canvas->fillRect(0, 0, width, height, canvas->color565(20, 30, 40));
-    
-    bool isZh = (I18N::getLanguage() == LANG_ZH);
-    canvas->setFont(I18N::getFont());
-    canvas->setTextSize(1);
-    
-    // 顶部标题栏（百科同款深蓝灰底色与边框）
-    canvas->fillRect(0, 0, width, 20, canvas->color565(30, 40, 50));
-    canvas->drawFastHLine(0, 20, width, canvas->color565(50, 65, 80));
-    
-    // 标题：科技青
-    canvas->setTextColor(canvas->color565(0, 220, 255));
-    canvas->drawString(isZh ? "浑仪舵机校准标定" : "Gimbal Servo Calibration", 6, 4);
-    
-    // 右侧状态与按键提示：在线电流 + [Aa/Esc]退出
-    int rightX = width - 4;
-    canvas->setTextDatum(top_right);
-    canvas->setTextColor(canvas->color565(170, 190, 210)); // 浅灰银色
-    canvas->drawString(isZh ? "[Aa/Esc]退出" : "[Aa/Esc]Exit", rightX, 4);
-    rightX -= (canvas->textWidth(isZh ? "[Aa/Esc]退出" : "[Aa/Esc]Exit") + 8);
-    
-    if (gimbal.isOnline()) {
-        char statBuf[32];
-        snprintf(statBuf, sizeof(statBuf), "ON %.0fmA", gimbal.getCurrentmA());
-        canvas->setTextColor(TFT_GREEN);
-        canvas->drawString(statBuf, rightX, 4);
-    } else {
-        canvas->setTextColor(TFT_YELLOW);
-        canvas->drawString("OFFLINE", rightX, 4);
-    }
-    canvas->setTextDatum(top_left);
-    
-    // 三个通道名称定义
-    const char* chNamesZh[3] = {"CH0 走向", "CH1 倾角", "CH2 星位"};
-    const char* chNamesEn[3] = {"CH0 Base", "CH1 Inc ", "CH2 Prog"};
-    
-    // 绘制三个通道卡片 (y = 23, 49, 75，每个高度 24)
-    int cardY[3] = {23, 49, 75};
-    int cardH = 24;
-    
-    for (int i = 0; i < 3; i++) {
-        int y = cardY[i];
-        bool isSelected = (activeServoTestChannel == i);
-        
-        // 背景与边框
-        if (isSelected) {
-            canvas->fillRect(4, y, width - 8, cardH, canvas->color565(25, 55, 90));
-            canvas->drawRect(4, y, width - 8, cardH, canvas->color565(0, 220, 255));
-            canvas->setTextColor(canvas->color565(0, 255, 200));
-            canvas->drawString(">", 8, y + 4);
-            canvas->setTextColor(TFT_WHITE);
-        } else {
-            canvas->fillRect(4, y, width - 8, cardH, canvas->color565(26, 38, 52));
-            canvas->drawRect(4, y, width - 8, cardH, canvas->color565(42, 58, 76));
-            canvas->setTextColor(canvas->color565(140, 180, 210));
-        }
-        
-        // 列 1: 通道名称 (x = 18 ~ 70)
-        canvas->drawString(isZh ? chNamesZh[i] : chNamesEn[i], 18, y + 4);
-        
-        float curAngle = gimbal.getChannelAngle(i);
-        uint16_t curPulse = gimbal.getChannelPulse(i);
-        
-        // 列 2: 角度数值 (x = 75 ~ 118)
-        char angleBuf[16];
-        snprintf(angleBuf, sizeof(angleBuf), "%5.1f\xC2\xB0", curAngle);
-        canvas->setTextColor(isSelected ? TFT_YELLOW : canvas->color565(0, 200, 230));
-        canvas->drawString(angleBuf, 75, y + 4);
-        
-        // 列 3: 微秒脉宽 (x = 124 ~ 168)
-        char pulseBuf[16];
-        snprintf(pulseBuf, sizeof(pulseBuf), "%4dus", curPulse);
-        canvas->setTextColor(isSelected ? canvas->color565(220, 230, 240) : canvas->color565(140, 155, 170));
-        canvas->drawString(pulseBuf, 124, y + 4);
-        
-        // 列 4: 进度条 (x = 172 ~ 230, 宽 58, 高 6)
-        int barX = 172;
-        int barY = y + 9;
-        int barW = 58;
-        int barH = 6;
-        canvas->fillRect(barX, barY, barW, barH, canvas->color565(35, 48, 62));
-        int fillW = constrain((int)((curAngle / 180.0f) * barW), 0, barW);
-        if (fillW > 0) {
-            canvas->fillRect(barX, barY, fillW, barH, isSelected ? canvas->color565(0, 220, 255) : canvas->color565(60, 100, 150));
-        }
-        // 标尺中点 90° 刻度小竖线
-        canvas->drawFastVLine(barX + barW / 2, barY - 1, barH + 2, canvas->color565(180, 200, 220));
-    }
-    
-    // 底部按键提示栏 (y = 101 ~ 135)
-    canvas->drawFastHLine(0, 101, width, canvas->color565(50, 65, 80));
-    canvas->fillRect(0, 102, width, 33, canvas->color565(16, 24, 34));
-    
-    canvas->setTextColor(canvas->color565(170, 190, 210));
-    if (isZh) {
-        canvas->drawString("[; .]选通道   [, /]微调-+5\xC2\xB0", 6, 104);
-        canvas->drawString("预设: [Z]0\xC2\xB0  [A]45\xC2\xB0  [X]90\xC2\xB0  [S]135\xC2\xB0  [C]180\xC2\xB0", 6, 118);
-    } else {
-        canvas->drawString("[; .]Channel   [, /]Step -/+5\xC2\xB0", 6, 104);
-        canvas->drawString("Preset: [Z]0\xC2\xB0  [A]45\xC2\xB0  [X]90\xC2\xB0  [S]135\xC2\xB0  [C]180\xC2\xB0", 6, 118);
-    }
-    
-    canvas->setTextDatum(top_left);
-    canvas->clearClipRect();
-}
 
 void updateEncyclopediaFilteredList() {
     g_encyclopediaFilteredIndices.clear();
@@ -5827,37 +5712,7 @@ void loop() {
                 }
             }
         } else if (appState == STATE_SERVO_TEST) {
-            char currentKey = 0;
-            if (M5Cardputer.Keyboard.isKeyPressed(',')) currentKey = ',';
-            else if (M5Cardputer.Keyboard.isKeyPressed('/')) currentKey = '/';
-
-            if (currentKey != 0) {
-                if (lastKey != currentKey) {
-                    lastKey = currentKey;
-                    keyHoldStartTime = millis();
-                    lastKeyRepeat = millis();
-                    float cur = gimbal.getChannelAngle(activeServoTestChannel);
-                    if (currentKey == ',') cur -= 5.0f;
-                    else if (currentKey == '/') cur += 5.0f;
-                    gimbal.setManualTestAngle(activeServoTestChannel, cur, true);
-                    log_i("[ServoTest] CH%d -> %.1f deg (%d us)", activeServoTestChannel, 
-                          gimbal.getChannelAngle(activeServoTestChannel), 
-                          gimbal.getChannelPulse(activeServoTestChannel));
-                } else {
-                    unsigned long heldTime = millis() - keyHoldStartTime;
-                    if (heldTime > 250) {
-                        if (millis() - lastKeyRepeat >= 50) {
-                            lastKeyRepeat = millis();
-                            float cur = gimbal.getChannelAngle(activeServoTestChannel);
-                            if (currentKey == ',') cur -= 2.0f;
-                            else if (currentKey == '/') cur += 2.0f;
-                            gimbal.setManualTestAngle(activeServoTestChannel, cur, true);
-                        }
-                    }
-                }
-            } else {
-                lastKey = 0;
-            }
+            servo_test_view.handleContinuousInput();
         }
 
         // 推荐过境事件列表专属平滑导航控制 (防止点按误触发长按，舒适匀速平滑滚动)
@@ -5900,6 +5755,7 @@ void loop() {
             if (appState == STATE_MAIN) {
                 if (justShift) {
                     appState = STATE_SERVO_TEST;
+                    servo_test_view.reset();
                     g_imuSamplingEnabled = false;
                     delay(15);
                     gimbal.enterManualTest();
@@ -6843,35 +6699,10 @@ void loop() {
                     langSelectedIndex = (langSelectedIndex + 1) % 4;
                 }
             } else if (appState == STATE_SERVO_TEST) {
-                if (justShift || justEsc || justTick || justBack) {
-                    gimbal.exitManualTest();
+                if (servo_test_view.handleDiscreteInput(justShift, justEsc, justTick, justBack,
+                                                       justSemi, justDot, justC, justS)) {
                     g_imuSamplingEnabled = true;
                     appState = STATE_MAIN;
-                } else if (M5Cardputer.Keyboard.isKeyPressed('0')) {
-                    activeServoTestChannel = 0;
-                } else if (M5Cardputer.Keyboard.isKeyPressed('1')) {
-                    activeServoTestChannel = 1;
-                } else if (M5Cardputer.Keyboard.isKeyPressed('2')) {
-                    activeServoTestChannel = 2;
-                } else if (justSemi) { // 轮换上一个通道
-                    activeServoTestChannel = (activeServoTestChannel - 1 + 3) % 3;
-                } else if (justDot) { // 轮换下一个通道
-                    activeServoTestChannel = (activeServoTestChannel + 1) % 3;
-                } else if (justC) { // 快捷置 180°
-                    gimbal.setManualTestAngle(activeServoTestChannel, 180.0f, true);
-                    log_i("[ServoTest] CH%d -> 180.0 deg (2500 us)", activeServoTestChannel);
-                } else if (M5Cardputer.Keyboard.isKeyPressed('x') || M5Cardputer.Keyboard.isKeyPressed('X')) { // 快捷置 90° (中点)
-                    gimbal.setManualTestAngle(activeServoTestChannel, 90.0f, true);
-                    log_i("[ServoTest] CH%d -> 90.0 deg (1500 us)", activeServoTestChannel);
-                } else if (M5Cardputer.Keyboard.isKeyPressed('z') || M5Cardputer.Keyboard.isKeyPressed('Z')) { // 快捷置 0°
-                    gimbal.setManualTestAngle(activeServoTestChannel, 0.0f, true);
-                    log_i("[ServoTest] CH%d -> 0.0 deg (500 us)", activeServoTestChannel);
-                } else if (M5Cardputer.Keyboard.isKeyPressed('a') || M5Cardputer.Keyboard.isKeyPressed('A')) { // 快捷置 45°
-                    gimbal.setManualTestAngle(activeServoTestChannel, 45.0f, true);
-                    log_i("[ServoTest] CH%d -> 45.0 deg (1000 us)", activeServoTestChannel);
-                } else if (justS) { // 快捷置 135°
-                    gimbal.setManualTestAngle(activeServoTestChannel, 135.0f, true);
-                    log_i("[ServoTest] CH%d -> 135.0 deg (2000 us)", activeServoTestChannel);
                 }
             } else if (appState == STATE_HW_WIZARD) {
                 char keyChar = 0;
@@ -6941,7 +6772,7 @@ void loop() {
             updateChainMonoDisplay();
             return;
         } else if (appState == STATE_SERVO_TEST) {
-            drawServoTestPage();
+            servo_test_view.draw(earth_renderer->getCanvas());
             pushCanvasWithFilter();
             updateChainMonoDisplay();
             return;
