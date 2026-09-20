@@ -4307,6 +4307,7 @@ void loop() {
                         
                         if (g_repSatCache.lastGeoValid) {
                             bool isVisible = false;
+                            bool isRadioPassing = false;
                             if (sun_calc) {
                                 GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
                                 ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_repSatCache.lastGeo);
@@ -4334,6 +4335,7 @@ void loop() {
                                 }
                             }
                             g_repSatCache.isVisible = isVisible;
+                            g_repSatCache.isRadioPassing = isRadioPassing;
                             
                             SatRenderData data;
                             data.name = g_repSatName.c_str();
@@ -4341,6 +4343,7 @@ void loop() {
                             data.currentPos = g_repSatCache.lastGeo;
                             data.color = TFT_CYAN;
                             data.isVisible = g_repSatCache.isVisible;
+                            data.isRadioTransmitting = g_repSatCache.isRadioPassing;
                             data.isRecentLaunchBatch = true;
                             data.totalSatellitesInBatch = item.satelliteCount;
                             data.launchEpoch = item.epoch;
@@ -4408,6 +4411,7 @@ void loop() {
                         
                         if (item.cache.lastGeoValid) {
                             bool isVisible = false;
+                            bool isRadioPassing = false;
                             if (sun_calc) {
                                 GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
                                 ECEFCoord satEcef = CoordTransform::geodeticToECEF(item.cache.lastGeo);
@@ -4435,6 +4439,7 @@ void loop() {
                                 }
                             }
                             item.cache.isVisible = isVisible;
+                            item.cache.isRadioPassing = isRadioPassing;
                             
                             SatRenderData data;
                             data.name = item.repSatName.c_str();
@@ -4442,6 +4447,7 @@ void loop() {
                             data.currentPos = item.cache.lastGeo;
                             data.color = TFT_CYAN;
                             data.isVisible = item.cache.isVisible;
+                            data.isRadioTransmitting = item.cache.isRadioPassing;
                             data.isRecentLaunchBatch = true;
                             data.totalSatellitesInBatch = item.satelliteCount;
                             data.launchEpoch = item.epoch;
@@ -4610,6 +4616,7 @@ void loop() {
                 
                 if (g_satCaches[i].lastGeoValid) {
                     bool isVisible = false;
+                    bool isRadioPassing = false;
                     if (sun_calc) {
                         GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
                         ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_satCaches[i].lastGeo);
@@ -4619,6 +4626,13 @@ void loop() {
                         if (el > -5.0f && el < 15.0f) {
                             float r = 1.02f / tanf((el + 10.3f / (el + 5.11f)) * DEG_TO_RAD);
                             el += r / 60.0f;
+                        }
+
+                        // 无线电卫星过境状态判定：具备有效下行频率或无线电/空间站类型，且当前仰角高于地平线
+                        bool hasRadio = (g_satellites[i].downlinkFreq.length() > 0 && g_satellites[i].downlinkFreq.toFloat() > 0.0f) ||
+                                        (typeCopy == SAT_TYPE_HAM) || (typeCopy == SAT_TYPE_WEATHER) || (noradIdCopy == 25544);
+                        if (hasRadio && el >= 0.0f) {
+                            isRadioPassing = true;
                         }
                         
                         SunPositionData& sPos = observer_sun_pos;
@@ -4639,15 +4653,17 @@ void loop() {
                         }
                     }
                     g_satCaches[i].isVisible = isVisible;
+                    g_satCaches[i].isRadioPassing = isRadioPassing;
                     
                     if (shouldLogNow && appState == STATE_MAIN) {
-                        log_i("[%s] Lat: %.2f, Lon: %.2f, Alt: %.1f km, Shadow: %s, Visible: %s", 
+                        log_i("[%s] Lat: %.2f, Lon: %.2f, Alt: %.1f km, Shadow: %s, Visible: %s, Radio: %s", 
                               s_encSatNameCache[i].c_str(), 
                               g_satCaches[i].lastGeo.lat, 
                               g_satCaches[i].lastGeo.lon, 
                               g_satCaches[i].lastGeo.alt, 
                               g_satCaches[i].lastInShadow ? "YES" : "NO",
-                              g_satCaches[i].isVisible ? "YES" : "NO");
+                              g_satCaches[i].isVisible ? "YES" : "NO",
+                              g_satCaches[i].isRadioPassing ? "ACTIVE" : "OFF");
                     }
                     
                     SatRenderData data;
@@ -4656,6 +4672,7 @@ void loop() {
                     data.currentPos = g_satCaches[i].lastGeo;
                     data.color = colorCopy;
                     data.isVisible = g_satCaches[i].isVisible;
+                    data.isRadioTransmitting = g_satCaches[i].isRadioPassing;
                     
                     // Visual effects fields
                     data.isSelected = (isSatViewMode && (focusSatIndex == i));
@@ -4683,6 +4700,7 @@ void loop() {
                     sats.push_back(data);
                 } else {
                     g_satCaches[i].isVisible = false;
+                    g_satCaches[i].isRadioPassing = false;
                 }
             }
         

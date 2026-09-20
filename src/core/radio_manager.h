@@ -3,6 +3,7 @@
 #include <vector>
 #include "../hal/hal_radio.h"
 #include "telemetry_decoder.h"
+#include "earth_renderer.h"
 
 struct ReceivedLogItem {
     RadioPacket raw;
@@ -11,6 +12,7 @@ struct ReceivedLogItem {
 
 struct RadioTrackingInfo {
     bool hasPass = false;
+    bool isUpcoming = false;
     uint32_t satNorad = 0;
     String satName = "";
     float currentEl = -90.0f;
@@ -22,7 +24,10 @@ struct RadioTrackingInfo {
     float dopplerHz = 0.0f;       // 多普勒频移 (Hz)
     float baseFreqMHz = 0.0f;     // 发射中心频率 (MHz)
     int32_t timeOffsetSec = 0;    // 当前时间校准偏移量 (秒)
+    uint32_t currentSimTime = 0;  // 当前仿真时刻（含时间补偿）
     bool isRising = false;        // 是否处于上升期 (AOS -> TCA)
+    SatIconType satIconType = ICON_SATELLITE; // 卫星图标类型
+    uint16_t satColor = 0x07FF;   // 卫星代表色
 };
 
 class RadioManager {

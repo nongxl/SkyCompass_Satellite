@@ -689,6 +689,41 @@ static uint16_t scaleColor(uint16_t color, float factor) {
     return (r << 11) | (g << 5) | b;
 }
 
+static void drawRadioTransmissionWave(LGFX_Sprite* canvas, int sx, int sy, uint16_t satColor) {
+    if (!canvas) return;
+
+    // 发射源微天线基准点：位于卫星本体正上方 (sx, sy - 6)
+    int tx = sx;
+    int ty = sy - 6;
+
+    // 动态射频发射脉冲 (每 200ms 一帧，三级循环辐射扩散)
+    int phase = ((millis() / 200) % 3);
+
+    // 1. 发射源核心信标天线点
+    uint16_t centerCol = (phase == 0) ? TFT_WHITE : 0x07E0;
+    canvas->drawPixel(tx, ty, centerCol);
+
+    // 2. 第一层发射微弧波 (半径 2~3px)
+    uint16_t c1 = (phase == 0) ? 0x07E0 : ((phase == 1) ? TFT_WHITE : 0x04A0);
+    canvas->drawPixel(tx - 2, ty - 1, c1);
+    canvas->drawPixel(tx - 1, ty - 2, c1);
+    canvas->drawPixel(tx,     ty - 2, c1);
+    canvas->drawPixel(tx + 1, ty - 2, c1);
+    canvas->drawPixel(tx + 2, ty - 1, c1);
+
+    // 3. 第二层扩散发射大弧波 (半径 4~5px)
+    if (phase >= 1) {
+        uint16_t c2 = (phase == 1) ? 0x07FF : 0x03E0;
+        canvas->drawPixel(tx - 4, ty - 1, c2);
+        canvas->drawPixel(tx - 3, ty - 3, c2);
+        canvas->drawPixel(tx - 1, ty - 4, c2);
+        canvas->drawPixel(tx,     ty - 4, c2);
+        canvas->drawPixel(tx + 1, ty - 4, c2);
+        canvas->drawPixel(tx + 3, ty - 3, c2);
+        canvas->drawPixel(tx + 4, ty - 1, c2);
+    }
+}
+
 void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon) {
     // Check observer visibility (reused from pre-calculated state)
     bool isVisibleToObserver = sat.isVisible;
@@ -966,6 +1001,11 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
         }
         
         drawSatelliteIcon(sx, sy, sat.iconType, drawColor, renderDark, intensity);
+
+        // 若无线电正在过境发射，叠加动态射频数据发射图标（即使未光学可见亦可发射）
+        if (sat.isRadioTransmitting) {
+            drawRadioTransmissionWave(_canvas, sx, sy, sat.color);
+        }
         
         _canvas->setTextColor(drawColor);
         _canvas->setTextSize(1);
@@ -1237,139 +1277,145 @@ void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
 }
 
 void EarthRenderer::drawSatelliteIcon(int x, int y, SatIconType iconType, uint16_t color, bool renderDark, float intensity) {
+    renderSatelliteIcon(_canvas, x, y, iconType, color, renderDark, intensity);
+}
+
+void EarthRenderer::renderSatelliteIcon(LGFX_Sprite* canvas, int x, int y, SatIconType iconType, uint16_t color, bool renderDark, float intensity) {
+    if (!canvas) return;
+
     auto getScaled = [&](uint16_t baseCol) -> uint16_t {
         if (intensity >= 0.99f) return baseCol;
         return scaleColor(baseCol, intensity);
     };
 
-    uint16_t darkGrayCol = getScaled(renderDark ? _display->color565(80,80,80) : TFT_WHITE);
-    uint16_t lightGrayCol = getScaled(renderDark ? _display->color565(50,50,50) : TFT_LIGHTGRAY);
+    uint16_t darkGrayCol = getScaled(renderDark ? canvas->color565(80,80,80) : TFT_WHITE);
+    uint16_t lightGrayCol = getScaled(renderDark ? canvas->color565(50,50,50) : TFT_LIGHTGRAY);
     uint16_t orangeCol = getScaled(TFT_ORANGE);
     uint16_t hamLightGray = getScaled(TFT_LIGHTGRAY);
 
     if (iconType == ICON_STATION) {
         // Space Station (Core module + big solar panels)
-        _canvas->fillRect(x - 2, y - 1, 5, 3, darkGrayCol);
-        _canvas->fillRect(x - 7, y - 3, 4, 7, color);
-        _canvas->fillRect(x + 4, y - 3, 4, 7, color);
+        canvas->fillRect(x - 2, y - 1, 5, 3, darkGrayCol);
+        canvas->fillRect(x - 7, y - 3, 4, 7, color);
+        canvas->fillRect(x + 4, y - 3, 4, 7, color);
     } else if (iconType == ICON_ROCKET) {
         // Rocket Debris (Cylinder + nozzle + engine flame)
-        _canvas->fillRect(x - 2, y - 4, 5, 8, darkGrayCol);
-        _canvas->fillTriangle(x - 2, y - 4, x + 2, y - 4, x, y - 7, color);
-        _canvas->fillRect(x - 2, y + 4, 2, 2, orangeCol); // Engine 1
-        _canvas->fillRect(x + 1, y + 4, 2, 2, orangeCol); // Engine 2
+        canvas->fillRect(x - 2, y - 4, 5, 8, darkGrayCol);
+        canvas->fillTriangle(x - 2, y - 4, x + 2, y - 4, x, y - 7, color);
+        canvas->fillRect(x - 2, y + 4, 2, 2, orangeCol); // Engine 1
+        canvas->fillRect(x + 1, y + 4, 2, 2, orangeCol); // Engine 2
     } else if (iconType == ICON_TELESCOPE) {
         // Space Telescope (Tube + lens cover + solar panel)
-        _canvas->fillRect(x - 2, y - 3, 5, 7, darkGrayCol);
-        _canvas->fillRect(x - 3, y - 4, 7, 2, lightGrayCol);
-        _canvas->fillRect(x - 6, y, 3, 2, color);
-        _canvas->fillRect(x + 4, y, 3, 2, color);
+        canvas->fillRect(x - 2, y - 3, 5, 7, darkGrayCol);
+        canvas->fillRect(x - 3, y - 4, 7, 2, lightGrayCol);
+        canvas->fillRect(x - 6, y, 3, 2, color);
+        canvas->fillRect(x + 4, y, 3, 2, color);
     } else if (iconType == ICON_DEEPSPACE) {
         // Deep Space (Star flare)
-        _canvas->drawLine(x, y - 5, x, y + 5, color);
-        _canvas->drawLine(x - 5, y, x + 5, y, color);
-        _canvas->drawLine(x - 2, y - 2, x + 2, y + 2, darkGrayCol);
-        _canvas->drawLine(x - 2, y + 2, x + 2, y - 2, darkGrayCol);
+        canvas->drawLine(x, y - 5, x, y + 5, color);
+        canvas->drawLine(x - 5, y, x + 5, y, color);
+        canvas->drawLine(x - 2, y - 2, x + 2, y + 2, darkGrayCol);
+        canvas->drawLine(x - 2, y + 2, x + 2, y - 2, darkGrayCol);
     } else if (iconType == ICON_DEBRIS) {
         // Space Debris (Half regular solar grid panel on left, jagged outline and floating dots on right)
-        _canvas->fillRect(x - 6, y - 2, 6, 5, color);
-        _canvas->drawLine(x - 6, y - 2, x - 1, y - 2, lightGrayCol);
-        _canvas->drawLine(x - 6, y + 2, x - 1, y + 2, lightGrayCol);
-        _canvas->drawLine(x - 1, y - 2, x - 1, y + 2, lightGrayCol);
+        canvas->fillRect(x - 6, y - 2, 6, 5, color);
+        canvas->drawLine(x - 6, y - 2, x - 1, y - 2, lightGrayCol);
+        canvas->drawLine(x - 6, y + 2, x - 1, y + 2, lightGrayCol);
+        canvas->drawLine(x - 1, y - 2, x - 1, y + 2, lightGrayCol);
         
         // Jagged right half
-        _canvas->drawLine(x, y - 2, x + 3, y - 1, color);
-        _canvas->drawLine(x + 3, y - 1, x + 1, y + 1, color);
-        _canvas->drawLine(x + 1, y + 1, x, y + 2, color);
+        canvas->drawLine(x, y - 2, x + 3, y - 1, color);
+        canvas->drawLine(x + 3, y - 1, x + 1, y + 1, color);
+        canvas->drawLine(x + 1, y + 1, x, y + 2, color);
         
         // Detached drifting debris fragments
-        _canvas->drawPixel(x + 5, y - 3, color);
-        _canvas->drawPixel(x + 5, y + 2, color);
+        canvas->drawPixel(x + 5, y - 3, color);
+        canvas->drawPixel(x + 5, y + 2, color);
     } else if (iconType == ICON_DFH1) {
         // DongFangHong-1 (Spherical body + 4 antennas)
-        _canvas->fillCircle(x, y, 3, darkGrayCol);
-        _canvas->drawLine(x - 2, y - 2, x - 6, y - 6, color);
-        _canvas->drawLine(x + 2, y - 2, x + 6, y - 6, color);
-        _canvas->drawLine(x - 2, y + 2, x - 6, y + 6, color);
-        _canvas->drawLine(x + 2, y + 2, x + 6, y + 6, color);
+        canvas->fillCircle(x, y, 3, darkGrayCol);
+        canvas->drawLine(x - 2, y - 2, x - 6, y - 6, color);
+        canvas->drawLine(x + 2, y - 2, x + 6, y - 6, color);
+        canvas->drawLine(x - 2, y + 2, x - 6, y + 6, color);
+        canvas->drawLine(x + 2, y + 2, x + 6, y + 6, color);
     } else if (iconType == ICON_BLUEWALKER3) {
         // BlueWalker 3 (Center array + left/right huge flat solar arrays)
-        _canvas->fillRect(x - 1, y - 1, 3, 3, darkGrayCol);
-        _canvas->fillRect(x - 7, y - 3, 5, 7, color);
-        _canvas->fillRect(x + 3, y - 3, 5, 7, color);
-        _canvas->drawFastVLine(x - 5, y - 3, 7, TFT_BLACK);
-        _canvas->drawFastVLine(x + 5, y - 3, 7, TFT_BLACK);
-        _canvas->drawFastHLine(x - 7, y, 5, TFT_BLACK);
-        _canvas->drawFastHLine(x + 3, y, 5, TFT_BLACK);
+        canvas->fillRect(x - 1, y - 1, 3, 3, darkGrayCol);
+        canvas->fillRect(x - 7, y - 3, 5, 7, color);
+        canvas->fillRect(x + 3, y - 3, 5, 7, color);
+        canvas->drawFastVLine(x - 5, y - 3, 7, TFT_BLACK);
+        canvas->drawFastVLine(x + 5, y - 3, 7, TFT_BLACK);
+        canvas->drawFastHLine(x - 7, y, 5, TFT_BLACK);
+        canvas->drawFastHLine(x + 3, y, 5, TFT_BLACK);
     } else if (iconType == ICON_WEATHER) {
         // Weather Sat (Body + left panel + right instrument mount)
-        _canvas->fillRect(x - 1, y - 2, 3, 5, darkGrayCol);
-        _canvas->drawLine(x - 2, y, x - 6, y - 2, color);
-        _canvas->fillRect(x - 8, y - 4, 3, 3, color);
-        _canvas->drawFastHLine(x + 2, y, 2, color);
-        _canvas->drawPixel(x + 3, y - 1, color);
+        canvas->fillRect(x - 1, y - 2, 3, 5, darkGrayCol);
+        canvas->drawLine(x - 2, y, x - 6, y - 2, color);
+        canvas->fillRect(x - 8, y - 4, 3, 3, color);
+        canvas->drawFastHLine(x + 2, y, 2, color);
+        canvas->drawPixel(x + 3, y - 1, color);
     } else if (iconType == ICON_NAVIGATION) {
         // Navigation Sat (Body + symmetric flat solar wings + lower helical antenna)
-        _canvas->fillRect(x - 1, y - 2, 3, 5, darkGrayCol);
-        _canvas->drawFastHLine(x - 6, y, 5, hamLightGray);
-        _canvas->drawFastHLine(x + 2, y, 5, hamLightGray);
-        _canvas->fillRect(x - 8, y - 1, 3, 3, color);
-        _canvas->fillRect(x + 6, y - 1, 3, 3, color);
-        _canvas->drawFastVLine(x, y + 3, 2, color);
-        _canvas->drawPixel(x, y + 5, color);
+        canvas->fillRect(x - 1, y - 2, 3, 5, darkGrayCol);
+        canvas->drawFastHLine(x - 6, y, 5, hamLightGray);
+        canvas->drawFastHLine(x + 2, y, 5, hamLightGray);
+        canvas->fillRect(x - 8, y - 1, 3, 3, color);
+        canvas->fillRect(x + 6, y - 1, 3, 3, color);
+        canvas->drawFastVLine(x, y + 3, 2, color);
+        canvas->drawPixel(x, y + 5, color);
     } else if (iconType == ICON_COMMUNICATION) {
         // Comm Sat (Spherical core + top V-shape antenna + bottom dish antenna)
-        _canvas->fillCircle(x, y, 2, darkGrayCol);
-        _canvas->drawLine(x, y - 2, x - 3, y - 6, color);
-        _canvas->drawLine(x, y - 2, x + 3, y - 6, color);
-        _canvas->drawFastVLine(x, y + 2, 2, color);
-        _canvas->drawFastHLine(x - 2, y + 4, 5, color);
+        canvas->fillCircle(x, y, 2, darkGrayCol);
+        canvas->drawLine(x, y - 2, x - 3, y - 6, color);
+        canvas->drawLine(x, y - 2, x + 3, y - 6, color);
+        canvas->drawFastVLine(x, y + 2, 2, color);
+        canvas->drawFastHLine(x - 2, y + 4, 5, color);
     } else if (iconType == ICON_SPACEPLANE) {
         // Spaceplane (X-37B) — top-down view: blunt nose, delta wings, vertical stabiliser
         // Nose
-        _canvas->fillRect(x - 1, y - 4, 3, 2, darkGrayCol);
+        canvas->fillRect(x - 1, y - 4, 3, 2, darkGrayCol);
         // Fuselage
-        _canvas->fillRect(x - 2, y - 2, 5, 5, darkGrayCol);
+        canvas->fillRect(x - 2, y - 2, 5, 5, darkGrayCol);
         // Delta wings (widest at centre)
-        _canvas->fillTriangle(x - 4, y + 1, x - 1, y - 1, x - 1, y + 3, color);
-        _canvas->fillTriangle(x + 5, y + 1, x + 2, y - 1, x + 2, y + 3, color);
+        canvas->fillTriangle(x - 4, y + 1, x - 1, y - 1, x - 1, y + 3, color);
+        canvas->fillTriangle(x + 5, y + 1, x + 2, y - 1, x + 2, y + 3, color);
         // Vertical tail fin (offset slightly right)
-        _canvas->drawFastVLine(x + 1, y + 3, 3, color);
+        canvas->drawFastVLine(x + 1, y + 3, 3, color);
     } else if (iconType == ICON_SOLAR_PROBE) {
         // Solar Probe (Parker) — heat shield (wide disc) + instrument boom + two tiny wings
         // Heat shield
-        _canvas->fillEllipse(x, y - 1, 4, 3, lightGrayCol);
-        _canvas->drawEllipse(x, y - 1, 4, 3, color);
+        canvas->fillEllipse(x, y - 1, 4, 3, lightGrayCol);
+        canvas->drawEllipse(x, y - 1, 4, 3, color);
         // Instrument boom below shield
-        _canvas->drawFastVLine(x, y + 2, 3, darkGrayCol);
+        canvas->drawFastVLine(x, y + 2, 3, darkGrayCol);
         // Tiny solar panels flanking boom
-        _canvas->fillRect(x - 3, y + 3, 2, 1, color);
-        _canvas->fillRect(x + 2, y + 3, 2, 1, color);
+        canvas->fillRect(x - 3, y + 3, 2, 1, color);
+        canvas->fillRect(x + 2, y + 3, 2, 1, color);
     } else if (iconType == ICON_CHAIN_MONO) {
         // Chain Mono module — rectangular body with screen and Grove connector nub
-        _canvas->fillRect(x - 4, y - 3, 9, 7, darkGrayCol);   // Module body
-        _canvas->fillRect(x - 3, y - 2, 7, 5, color);          // Screen area (lighter)
-        _canvas->fillRect(x - 2, y - 1, 5, 3, darkGrayCol);    // Screen content (dark pixels)
-        _canvas->fillRect(x - 5, y + 1, 1, 2, lightGrayCol);   // Left Grove nub
+        canvas->fillRect(x - 4, y - 3, 9, 7, darkGrayCol);   // Module body
+        canvas->fillRect(x - 3, y - 2, 7, 5, color);          // Screen area (lighter)
+        canvas->fillRect(x - 2, y - 1, 5, 3, darkGrayCol);    // Screen content (dark pixels)
+        canvas->fillRect(x - 5, y + 1, 1, 2, lightGrayCol);   // Left Grove nub
     } else if (iconType == ICON_LANDER) {
         // Lander — hexagonal body + top antenna + three landing legs
         // Antenna
-        _canvas->drawFastVLine(x, y - 4, 2, color);
+        canvas->drawFastVLine(x, y - 4, 2, color);
         // Main body (flat hexagon)
-        _canvas->fillRect(x - 2, y - 2, 5, 4, darkGrayCol);
+        canvas->fillRect(x - 2, y - 2, 5, 4, darkGrayCol);
         // Three landing legs (left, centre-right, right)
-        _canvas->drawLine(x - 2, y + 2, x - 4, y + 4, color);
-        _canvas->drawLine(x,     y + 2, x,     y + 4, color);
-        _canvas->drawLine(x + 2, y + 2, x + 4, y + 4, color);
+        canvas->drawLine(x - 2, y + 2, x - 4, y + 4, color);
+        canvas->drawLine(x,     y + 2, x,     y + 4, color);
+        canvas->drawLine(x + 2, y + 2, x + 4, y + 4, color);
         // Foot pads
-        _canvas->drawFastHLine(x - 5, y + 4, 2, color);
-        _canvas->drawPixel(x, y + 5, color);
-        _canvas->drawFastHLine(x + 4, y + 4, 2, color);
+        canvas->drawFastHLine(x - 5, y + 4, 2, color);
+        canvas->drawPixel(x, y + 5, color);
+        canvas->drawFastHLine(x + 4, y + 4, 2, color);
     } else {
         // Generic Sat (Tiny cube + single solar wing)
-        _canvas->fillRect(x - 1, y - 1, 3, 3, darkGrayCol);
-        _canvas->fillRect(x - 5, y - 1, 3, 3, color);
-        _canvas->drawLine(x - 2, y, x - 1, y, hamLightGray);
+        canvas->fillRect(x - 1, y - 1, 3, 3, darkGrayCol);
+        canvas->fillRect(x - 5, y - 1, 3, 3, color);
+        canvas->drawLine(x - 2, y, x - 1, y, hamLightGray);
     }
 }
 

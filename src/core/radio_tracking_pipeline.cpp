@@ -61,6 +61,39 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
         }
     }
 
+    bool isUpcomingPass = false;
+    PassEvent upcomingEvent;
+
+    // 3. 待命预位：若当前无正在过境卫星，从 recommendedPasses 中寻找下一次最早过境的已勾选无线电卫星
+    if (chosenRadioSat < 0) {
+        uint32_t earliestAos = 0xFFFFFFFF;
+        lockPassMutex();
+        for (const auto& p : recommendedPasses) {
+            if (p.aosTime > currentSimTime) {
+                int satIdx = -1;
+                if (p.satIndex >= 0 && p.satIndex < NUM_SATELLITES) {
+                    satIdx = p.satIndex;
+                } else {
+                    for (int i = 0; i < NUM_SATELLITES; i++) {
+                        if (g_satellites[i].name == p.satName) {
+                            satIdx = i;
+                            break;
+                        }
+                    }
+                }
+                if (satIdx >= 0 && g_satellites[satIdx].selected && g_satellites[satIdx].downlinkFreq.length() > 0) {
+                    if (p.aosTime < earliestAos) {
+                        earliestAos = p.aosTime;
+                        upcomingEvent = p;
+                        chosenRadioSat = satIdx;
+                        isUpcomingPass = true;
+                    }
+                }
+            }
+        }
+        unlockPassMutex();
+    }
+
     uint32_t rNorad = 0;
     String rName = "";
     float rEl = -90.0f;
@@ -96,12 +129,16 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
             rMode = g_satellites[chosenRadioSat].radioMode;
         }
 
-        trackInfo.hasPass = true;
+        trackInfo.hasPass = !isUpcomingPass;
+        trackInfo.isUpcoming = isUpcomingPass;
         trackInfo.satNorad = rNorad;
         trackInfo.satName = rName;
         trackInfo.currentEl = rEl;
         trackInfo.currentAz = rAz;
         trackInfo.baseFreqMHz = rFreq;
+        trackInfo.currentSimTime = currentSimTime;
+        trackInfo.satIconType = g_satellites[chosenRadioSat].iconType;
+        trackInfo.satColor = g_satellites[chosenRadioSat].color;
 
         // 1. 多普勒频移计算 (基于 1 秒微分离散差分)
         if (rFreq > 0.0f) {
@@ -125,66 +162,138 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
 
         // 2. 匹配或快速估算本次过境的 AOS, TCA, LOS, MaxEl
         bool passFound = false;
-        lockPassMutex();
-        for (const auto& p : recommendedPasses) {
-            if ((p.satIndex == chosenRadioSat || p.satName == rName) && 
-                (int64_t)currentSimTime >= (int64_t)p.aosTime - 300 && 
-                (int64_t)currentSimTime <= (int64_t)p.losTime + 60) {
-                trackInfo.aosTime = p.aosTime;
-                trackInfo.tcaTime = p.maxElevTime;
-                trackInfo.losTime = p.losTime;
-                trackInfo.maxEl = p.maxElevation;
-                passFound = true;
-                break;
+        if (isUpcomingPass) {
+            trackInfo.aosTime = upcomingEvent.aosTime;
+            trackInfo.tcaTime = upcomingEvent.maxElevTime;
+            trackInfo.losTime = upcomingEvent.losTime;
+            trackInfo.maxEl = upcomingEvent.maxElevation;
+            passFound = true;
+        } else {
+            lockPassMutex();
+            for (const auto& p : recommendedPasses) {
+                if ((p.satIndex == chosenRadioSat || p.satName == rName) && 
+                    (int64_t)currentSimTime >= (int64_t)p.aosTime - 300 && 
+                    (int64_t)currentSimTime <= (int64_t)p.losTime + 60) {
+                    trackInfo.aosTime = p.aosTime;
+                    trackInfo.tcaTime = p.maxElevTime;
+                    trackInfo.losTime = p.losTime;
+                    trackInfo.maxEl = p.maxElevation;
+                    passFound = true;
+                    break;
+                }
             }
+            unlockPassMutex();
         }
-        unlockPassMutex();
+
+        // 静态缓存：在同一颗卫星同一次过境事件的生命周期内，锁定 AOS/TCA/LOS，彻底杜绝时间补偿时的漂移
+        static uint32_t s_cachedSatNorad = 0;
+        static uint32_t s_cachedAos = 0;
+        static uint32_t s_cachedLos = 0;
+        static uint32_t s_cachedTca = 0;
+        static float s_cachedMaxEl = 0.0f;
 
         if (!passFound) {
-            // 若无缓存，在 currentSimTime 前后快速步进探测过境区间
+            if (s_cachedSatNorad == rNorad && s_cachedAos > 0 && s_cachedLos > s_cachedAos &&
+                currentSimTime >= s_cachedAos - 120 && currentSimTime <= s_cachedLos + 60) {
+                trackInfo.aosTime = s_cachedAos;
+                trackInfo.tcaTime = s_cachedTca;
+                trackInfo.losTime = s_cachedLos;
+                trackInfo.maxEl = s_cachedMaxEl;
+                passFound = true;
+            }
+        }
+
+        if (!passFound) {
+            auto getEl = [&](uint32_t t) -> float {
+                double x, y, z;
+                if (g_satellites[chosenRadioSat].calc.getTEME(t, x, y, z)) {
+                    double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
+                    ECEFCoord ec = CoordTransform::temeToECEF(x, y, z, gmst);
+                    TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
+                    return tp.el;
+                }
+                return -90.0f;
+            };
+
             uint32_t stepAos = currentSimTime;
-            for (int s = 0; s < 12; s++) {
-                uint32_t tTest = currentSimTime - (s + 1) * 60;
-                double xt, yt, zt;
-                if (g_satellites[chosenRadioSat].calc.getTEME(tTest, xt, yt, zt)) {
-                    double gt = CoordTransform::getGMST(CoordTransform::unixToJulian(tTest));
-                    ECEFCoord sect = CoordTransform::temeToECEF(xt, yt, zt, gt);
-                    TopocentricCoord tpt = CoordTransform::ecefToTopocentric(obsRadio, sect);
-                    if (tpt.el <= 0.0f) {
-                        stepAos = tTest;
-                        break;
-                    }
-                }
-            }
             uint32_t stepLos = currentSimTime + 600;
-            float peakEl = rEl;
-            uint32_t peakTime = currentSimTime;
-            for (int s = 0; s < 12; s++) {
-                uint32_t tTest = currentSimTime + (s + 1) * 60;
-                double xt, yt, zt;
-                if (g_satellites[chosenRadioSat].calc.getTEME(tTest, xt, yt, zt)) {
-                    double gt = CoordTransform::getGMST(CoordTransform::unixToJulian(tTest));
-                    ECEFCoord sect = CoordTransform::temeToECEF(xt, yt, zt, gt);
-                    TopocentricCoord tpt = CoordTransform::ecefToTopocentric(obsRadio, sect);
-                    if (tpt.el > peakEl) {
-                        peakEl = tpt.el;
-                        peakTime = tTest;
-                    }
-                    if (tpt.el <= 0.0f) {
-                        stepLos = tTest;
+
+            if (rEl > 0.0f) {
+                // 当前正在过境：向前搜索升交时刻 AOS
+                for (int s = 0; s < 30; s++) {
+                    uint32_t t = currentSimTime - (s + 1) * 30;
+                    if (getEl(t) <= 0.0f) {
+                        stepAos = t;
                         break;
                     }
                 }
+                // 向后搜索降交时刻 LOS
+                for (int s = 0; s < 30; s++) {
+                    uint32_t t = currentSimTime + (s + 1) * 30;
+                    if (getEl(t) <= 0.0f) {
+                        stepLos = t;
+                        break;
+                    }
+                }
+            } else {
+                // 当前在地平线以下：向未来探测下一次升交时刻 AOS
+                bool nextAosFound = false;
+                for (int s = 0; s < 120; s++) {
+                    uint32_t t = currentSimTime + s * 60;
+                    if (getEl(t) > 0.0f) {
+                        stepAos = (s > 0) ? (currentSimTime + (s - 1) * 60) : t;
+                        nextAosFound = true;
+                        break;
+                    }
+                }
+                if (nextAosFound) {
+                    stepLos = stepAos + 600;
+                    for (int s = 0; s < 30; s++) {
+                        uint32_t t = stepAos + (s + 1) * 30;
+                        if (getEl(t) <= 0.0f) {
+                            stepLos = t;
+                            break;
+                        }
+                    }
+                }
             }
+
+            // 在 [stepAos, stepLos] 整个过境区间内全面全局搜索最高仰角点 TCA
+            float peakEl = -90.0f;
+            uint32_t peakTime = (stepAos + stepLos) / 2;
+            uint32_t searchSpan = (stepLos > stepAos) ? (stepLos - stepAos) : 600;
+            int numSteps = 15;
+            uint32_t stepSec = searchSpan / numSteps;
+            if (stepSec < 5) stepSec = 5;
+
+            for (uint32_t t = stepAos; t <= stepLos; t += stepSec) {
+                float el = getEl(t);
+                if (el > peakEl) {
+                    peakEl = el;
+                    peakTime = t;
+                }
+            }
+
             trackInfo.aosTime = stepAos;
             trackInfo.losTime = stepLos;
             trackInfo.tcaTime = peakTime;
-            trackInfo.maxEl = peakEl > rEl ? peakEl : rEl;
+            trackInfo.maxEl = (peakEl > 0.0f) ? peakEl : 0.0f;
+
+            // 写入静态缓存锁定状态
+            s_cachedSatNorad = rNorad;
+            s_cachedAos = stepAos;
+            s_cachedLos = stepLos;
+            s_cachedTca = peakTime;
+            s_cachedMaxEl = trackInfo.maxEl;
         }
 
         trackInfo.isRising = (currentSimTime < trackInfo.tcaTime);
     }
 
     RadioManager::getInstance().updateTracking(trackInfo);
-    RadioManager::getInstance().update(rNorad, rName, rEl, rHasRadio, rFreq, rMode);
+    if (!isUpcomingPass) {
+        RadioManager::getInstance().update(rNorad, rName, rEl, rHasRadio, rFreq, rMode);
+    } else {
+        RadioManager::getInstance().update(0, "", rEl, false, 0.0f, "");
+    }
 }

@@ -2,6 +2,12 @@
 #include "../core/radio_manager.h"
 #include "../core/i18n.h"
 #include "../core/encyclopedia.h"
+#include "../core/position_manager.h"
+#include "../core/earth_renderer.h"
+
+extern PositionManager* pos_manager;
+extern double baseUserLat;
+extern double baseUserLon;
 
 RfConsoleView::RfConsoleView() {
     for (int i = 0; i < WATERFALL_POINTS; i++) {
@@ -16,10 +22,10 @@ void RfConsoleView::addRssiSample(float rssi) {
     _historyHead = (_historyHead + 1) % WATERFALL_POINTS;
 }
 
-static void drawTimelineSatellite(LGFX_Sprite* canvas, int cx, int cy, SatIconType icon, bool isListening, bool isRising) {
+static void drawTimelineSatellite(LGFX_Sprite* canvas, int cx, int cy, SatIconType icon, uint16_t satColor, bool isListening, bool isRising) {
     if (!canvas) return;
 
-    // 1. 垂直对准微刻度线（上下两条指引刻度）
+    // 1. 垂直对准微刻度线（上下两条指引微刻度针）
     uint16_t pointerCol = isListening ? 0x07E0 : 0x07FF;
     canvas->drawFastVLine(cx, cy - 8, 3, pointerCol);
     canvas->drawFastVLine(cx, cy + 6, 3, pointerCol);
@@ -28,61 +34,25 @@ static void drawTimelineSatellite(LGFX_Sprite* canvas, int cx, int cy, SatIconTy
     bool pulse = ((millis() / 400) % 2 == 0);
     uint16_t beaconCol = isListening ? (pulse ? 0x07E0 : 0x04A0) : 0x07FF;
 
-    // 3. 直接在 canvas 上以 (cx, cy) 为中心像素级绘制卫星实体，100% 可见且锐利
-    int scx = cx;
-    int scy = cy;
+    // 3. 卫星图标旋转 45° 呈现生动空间飞行姿态
+    uint16_t drawColor = (satColor != 0) ? satColor : 0x07FF;
 
-    if (icon == ICON_STATION) {
-        // 空间站：核心舱 + 左右两翼大太阳能帆板
-        canvas->fillRect(scx - 3, scy - 1, 7, 3, 0xD6BA);
-        canvas->fillRect(scx - 1, scy - 2, 3, 5, 0xE71C);
-        canvas->drawFastHLine(scx - 9, scy, 19, 0x7BEF);
-        canvas->fillRect(scx - 9, scy - 4, 4, 9, 0x1B3F);
-        canvas->drawRect(scx - 9, scy - 4, 4, 9, 0xFDA0);
-        canvas->drawFastHLine(scx - 9, scy, 4, TFT_BLACK);
-        canvas->fillRect(scx + 6, scy - 4, 4, 9, 0x1B3F);
-        canvas->drawRect(scx + 6, scy - 4, 4, 9, 0xFDA0);
-        canvas->drawFastHLine(scx + 6, scy, 4, TFT_BLACK);
-        canvas->drawPixel(scx, scy, beaconCol);
-    } else if (icon == ICON_DFH1) {
-        // 东方红一号：圆形球体 + 四根斜天线
-        canvas->fillCircle(scx, scy, 3, 0xD6BA);
-        canvas->drawCircle(scx, scy, 3, 0x7BEF);
-        canvas->drawPixel(scx - 1, scy - 1, 0xFFFF);
-        canvas->drawLine(scx - 2, scy - 2, scx - 6, scy - 5, TFT_WHITE);
-        canvas->drawLine(scx + 2, scy - 2, scx + 6, scy - 5, TFT_WHITE);
-        canvas->drawLine(scx - 2, scy + 2, scx - 6, scy + 5, TFT_WHITE);
-        canvas->drawLine(scx + 2, scy + 2, scx + 6, scy + 5, TFT_WHITE);
-        canvas->drawPixel(scx, scy, beaconCol);
-    } else if (icon == ICON_WEATHER) {
-        // 气象卫星：单侧大太阳翼 + 传感器舱
-        canvas->fillRect(scx - 2, scy - 2, 4, 5, 0xCE79);
-        canvas->fillRect(scx - 8, scy - 4, 5, 9, 0x0AD5);
-        canvas->drawRect(scx - 8, scy - 4, 5, 9, 0x345F);
-        canvas->drawFastHLine(scx - 8, scy, 5, TFT_BLACK);
-        canvas->fillRect(scx + 2, scy - 1, 3, 3, 0x4208);
-        canvas->drawPixel(scx + 5, scy, beaconCol);
-    } else if (icon == ICON_NAVIGATION) {
-        // 导航卫星：对称一字型大翼板 + 天线阵
-        canvas->fillRect(scx - 2, scy - 3, 5, 7, 0xD6BA);
-        canvas->fillRect(scx - 8, scy - 2, 5, 5, 0x1B3F);
-        canvas->drawRect(scx - 8, scy - 2, 5, 5, 0xFDA0);
-        canvas->fillRect(scx + 4, scy - 2, 5, 5, 0x1B3F);
-        canvas->drawRect(scx + 4, scy - 2, 5, 5, 0xFDA0);
-        canvas->drawFastHLine(scx - 2, scy + 4, 5, TFT_WHITE);
-        canvas->drawPixel(scx, scy, beaconCol);
-    } else {
-        // 通用卫星：立方体舱体 + 左右太阳翼 + 信标
-        canvas->fillRect(scx - 2, scy - 2, 5, 5, 0xD6BA);
-        canvas->drawRect(scx - 2, scy - 2, 5, 5, 0x07FF);
-        canvas->drawFastHLine(scx - 7, scy, 5, 0x1B3F);
-        canvas->drawFastHLine(scx + 3, scy, 4, 0x01EF);
-        canvas->drawFastHLine(scx - 3, scy, 7, 0xBDF7);
-        canvas->fillRect(scx - 2, scy - 2, 5, 5, 0xFEA0);
-        canvas->fillRect(scx - 1, scy - 1, 3, 3, 0xFFFF);
-        canvas->drawFastVLine(scx, scy + 3, 2, TFT_WHITE);
-        canvas->drawPixel(scx, scy + 4, beaconCol);
+    static LGFX_Sprite s_satRotSprite;
+    static bool s_rotInit = false;
+    if (!s_rotInit) {
+        s_satRotSprite.setColorDepth(16);
+        s_satRotSprite.createSprite(24, 24);
+        s_satRotSprite.setPivot(12, 12);
+        s_rotInit = true;
     }
+
+    const uint16_t TRANSP_KEY = 0x0001; // 透明键值
+    s_satRotSprite.fillScreen(TRANSP_KEY);
+    EarthRenderer::renderSatelliteIcon(&s_satRotSprite, 12, 12, icon, drawColor, false, 1.0f);
+    s_satRotSprite.pushRotateZoom(canvas, cx, cy, 45.0f, 1.0f, 1.0f, TRANSP_KEY);
+
+    // 4. 在卫星核心打上动态信标光点
+    canvas->drawPixel(cx, cy, beaconCol);
 }
 
 static const char* getCompass8Dir(float az) {
@@ -295,15 +265,28 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
         }
     }
 
-    canvas->setTextDatum(TL_DATUM);
-    canvas->setTextColor(0x07FF, 0x10A2);
-    String titleStr = I18N::get(TXT_RF_TITLE);
-    canvas->drawString(titleStr.c_str(), 4, 3);
-    int titleW = canvas->textWidth(titleStr.c_str());
-    int statX = 4 + titleW + 8;
-
     RadioManager& rm = RadioManager::getInstance();
     const auto& track = rm.getTrackingInfo();
+
+    bool hasPassNow = track.hasPass && (track.satName.length() > 0);
+    bool isUpcoming = track.isUpcoming && (track.satName.length() > 0);
+    bool hasTarget = hasPassNow || isUpcoming;
+    String activeName = hasTarget ? track.satName : "";
+
+    // 1. 左上角标题呈现：有卫星目标（正在过境或下一次过境预位）时显示卫星名字；无过境时回退为“射频遥测终端”
+    canvas->setTextDatum(TL_DATUM);
+    canvas->setTextColor(0x07FF, 0x10A2);
+
+    String leftTitleStr;
+    if (hasTarget) {
+        leftTitleStr = activeName;
+    } else {
+        leftTitleStr = I18N::get(TXT_RF_TITLE); // "射频遥测终端"
+    }
+
+    canvas->drawString(leftTitleStr.c_str(), 4, 3);
+    int titleW = canvas->textWidth(leftTitleStr.c_str());
+    int statX = 4 + titleW + 6;
 
     int maxStatW = width - statX - 90;
     if (maxStatW > 0) {
@@ -313,13 +296,24 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
     if (!rm.isHardwareReady()) {
         canvas->setTextColor(0xF800, 0x10A2);
         canvas->drawString(I18N::get(TXT_RF_HW_NOT_DETECTED), statX, 3);
-    } else if (rm.isListening() || track.hasPass) {
+    } else if (hasPassNow && (rm.isListening() || track.hasPass)) {
         canvas->setTextColor(0x07E0, 0x10A2);
-        String stat = String(I18N::get(TXT_RF_RX_ACTIVE)) + " " + (track.satName.length() > 0 ? track.satName : rm.getActiveSatName());
-        if (track.baseFreqMHz > 0.0f) {
-            stat += " " + String(track.baseFreqMHz, 3) + "M";
+        canvas->drawString(I18N::get(TXT_RF_RX_ACTIVE), statX, 3);
+    } else if (isUpcoming) {
+        // 下一次过境预位状态：仅显示精简倒计时，不再重复频率，彻底释放顶栏空间
+        canvas->setTextColor(0xFFE0, 0x10A2);
+        int secToAos = (track.aosTime > track.currentSimTime) ? (int)(track.aosTime - track.currentSimTime) : 0;
+        char waitBuf[32];
+        int mm = secToAos / 60;
+        int ss = secToAos % 60;
+        if (mm >= 60) {
+            int hh = mm / 60;
+            mm = mm % 60;
+            snprintf(waitBuf, sizeof(waitBuf), "[-%02d:%02d:%02d]", hh, mm, ss);
+        } else {
+            snprintf(waitBuf, sizeof(waitBuf), "[-%02d:%02d]", mm, ss);
         }
-        canvas->drawString(stat.c_str(), statX, 3);
+        canvas->drawString(waitBuf, statX, 3);
     } else {
         canvas->setTextColor(0xFFE0, 0x10A2);
         canvas->drawString(I18N::get(TXT_RF_IDLE_STANDBY), statX, 3);
@@ -358,21 +352,30 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
         canvas->setTextDatum(TL_DATUM);
         canvas->setTextColor(0xCE79);
         char azBuf[28];
-        // 方位角：只用短方向码（英文字母），节省宽度
-        snprintf(azBuf, sizeof(azBuf), "AZ:%03.0f°", track.currentAz);
+        if (hasTarget) {
+            snprintf(azBuf, sizeof(azBuf), "AZ:%03.0f°", track.currentAz);
+        } else {
+            snprintf(azBuf, sizeof(azBuf), "AZ:---°");
+        }
         canvas->drawString(azBuf, 6, 20);
 
         // 仰角 + 最大仰角合并右对齐，避免三列重叠
         bool isRising = track.isRising;
         uint16_t elCol = 0x7BEF;
         char elBuf[36];
-        if (track.currentEl > 0.0f) {
-            elCol = isRising ? 0x07E0 : TFT_YELLOW;
-            snprintf(elBuf, sizeof(elBuf), "EL:%+.1f°%s /%.0f°",
-                     track.currentEl, isRising ? "↑" : "↓", track.maxEl);
+        if (hasTarget) {
+            if (track.currentEl > 0.0f) {
+                elCol = isRising ? 0x07E0 : TFT_YELLOW;
+                snprintf(elBuf, sizeof(elBuf), "EL:%+.1f°%s /%.0f°",
+                         track.currentEl, isRising ? "↑" : "↓", track.maxEl);
+            } else {
+                // 地平线下（等待过境预位）：暗灰蓝色提示负仰角
+                elCol = canvas->color565(80, 110, 140);
+                snprintf(elBuf, sizeof(elBuf), "EL:%+.1f° /%.0f°",
+                         track.currentEl, track.maxEl);
+            }
         } else {
-            snprintf(elBuf, sizeof(elBuf), "EL:%+.1f° /%.0f°",
-                     track.currentEl, track.maxEl);
+            snprintf(elBuf, sizeof(elBuf), "EL:---° /--°");
         }
         canvas->setTextDatum(TR_DATUM);
         canvas->setTextColor(elCol);
@@ -383,97 +386,152 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
         canvas->setTextDatum(TL_DATUM);
         canvas->setTextColor(0x07FF);
         char antBuf[32];
-        int elTarget = (int)track.currentEl;
-        if (elTarget < 0) elTarget = 0;
-        // 使用简短英文方向码（N/NE/E/SE/S/SW/W/NW），节省大量空间
-        {
+        if (hasTarget) {
+            int elTarget = (int)track.currentEl;
+            if (elTarget < 0) elTarget = 0;
             float az = track.currentAz;
             while (az < 0.0f) az += 360.0f;
             while (az >= 360.0f) az -= 360.0f;
             static const char* dirs8[8] = {"N","NE","E","SE","S","SW","W","NW"};
             const char* shortDir = dirs8[(int)((az + 22.5f) / 45.0f) % 8];
-            snprintf(antBuf, sizeof(antBuf), "> %s %03.0f°/%02d°", shortDir, track.currentAz, elTarget);
+            if (isUpcoming) {
+                snprintf(antBuf, sizeof(antBuf), "> PRE %s %03.0f°/%02d°", shortDir, track.currentAz, elTarget);
+            } else {
+                snprintf(antBuf, sizeof(antBuf), "> %s %03.0f°/%02d°", shortDir, track.currentAz, elTarget);
+            }
+        } else {
+            snprintf(antBuf, sizeof(antBuf), "> STANDBY");
         }
         canvas->drawString(antBuf, 6, 31);
 
         // 多普勒：去掉 "Dopp:" 标签，直接显示频移值+实际频率，颜色区分正负
         canvas->setTextDatum(TR_DATUM);
         char dopBuf[36];
-        uint16_t dopCol = (track.dopplerHz < -10.0f) ? 0xFBE0 : ((track.dopplerHz > 10.0f) ? 0x07FF : 0xFFFF);
-        float actualFreq = track.baseFreqMHz + (track.dopplerHz / 1e6f);
-        if (abs(track.dopplerHz) >= 1000.0f) {
-            snprintf(dopBuf, sizeof(dopBuf), "%+.1fkHz %.3fM", track.dopplerHz / 1000.0f, actualFreq);
+        if (hasTarget && track.baseFreqMHz > 0.0f) {
+            if (isUpcoming) {
+                snprintf(dopBuf, sizeof(dopBuf), "PRESET %.3fM", track.baseFreqMHz);
+                canvas->setTextColor(TFT_YELLOW);
+            } else {
+                uint16_t dopCol = (track.dopplerHz < -10.0f) ? 0xFBE0 : ((track.dopplerHz > 10.0f) ? 0x07FF : 0xFFFF);
+                float actualFreq = track.baseFreqMHz + (track.dopplerHz / 1e6f);
+                if (abs(track.dopplerHz) >= 1000.0f) {
+                    snprintf(dopBuf, sizeof(dopBuf), "%+.1fkHz %.3fM", track.dopplerHz / 1000.0f, actualFreq);
+                } else {
+                    snprintf(dopBuf, sizeof(dopBuf), "%+.0fHz %.3fM", track.dopplerHz, actualFreq);
+                }
+                canvas->setTextColor(dopCol);
+            }
         } else {
-            snprintf(dopBuf, sizeof(dopBuf), "%+.0fHz %.3fM", track.dopplerHz, actualFreq);
+            snprintf(dopBuf, sizeof(dopBuf), "-- MHz");
+            canvas->setTextColor(0x7BEF);
         }
-        canvas->setTextColor(dopCol);
         canvas->drawString(dopBuf, width - 6, 31);
 
-        // 3. 紧凑时间轴仪表 (Y = 42 ~ 69)
-        int trackX = 12;
-        int trackW = width - 24;
+        // 3. 紧凑时间轴仪表 (Y = 41 ~ 69)
+        int trackX = 6;
+        int trackW = width - 12;
         int trackY = 53;
 
-        uint32_t totalDur = (track.losTime > track.aosTime) ? (track.losTime - track.aosTime) : 600;
-        if (totalDur == 0) totalDur = 600;
-        int32_t elapsedSec = (int32_t)totalDur / 2;
-        if (track.aosTime > 0 && track.losTime > track.aosTime) {
-            if (track.isRising) {
-                elapsedSec = (int32_t)((float)totalDur * 0.5f * (track.currentEl > 0 ? (track.currentEl / (track.maxEl > 1.0f ? track.maxEl : 1.0f)) : 0.05f));
-            } else {
-                elapsedSec = (int32_t)(totalDur * 0.5f + (float)totalDur * 0.5f * (1.0f - (track.currentEl > 0 ? (track.currentEl / (track.maxEl > 1.0f ? track.maxEl : 1.0f)) : 0.95f)));
+        if (hasTarget) {
+            uint32_t totalDur = (track.losTime > track.aosTime) ? (track.losTime - track.aosTime) : 600;
+            if (totalDur == 0) totalDur = 600;
+
+            // TCA 位置计算 (绝对物理位置，不随时间补偿而漂移)
+            int tcaX = trackX + trackW / 2;
+            if (track.tcaTime > track.aosTime && track.losTime > track.aosTime) {
+                float tcaRatio = (float)(track.tcaTime - track.aosTime) / (float)totalDur;
+                if (tcaRatio >= 0.05f && tcaRatio <= 0.95f) {
+                    tcaX = trackX + (int)(trackW * tcaRatio);
+                }
             }
-        }
-        if (elapsedSec < 0) elapsedSec = 0;
-        if (elapsedSec > (int32_t)totalDur) elapsedSec = (int32_t)totalDur;
-        int32_t remSec = (int32_t)totalDur - elapsedSec;
 
-        float progressRatio = (float)elapsedSec / (float)totalDur;
-        if (progressRatio < 0.0f) progressRatio = 0.0f;
-        if (progressRatio > 1.0f) progressRatio = 1.0f;
+            // 标签上移到 Y = 41 (字高 8px，底部在 49，与轴线 53 保持 4px 净空，彻底避免重叠)
+            canvas->setTextDatum(TL_DATUM);
+            canvas->setTextColor(0x7BEF);
+            canvas->drawString("AOS", trackX, 41);
 
-        canvas->fillRect(trackX, trackY - 1, trackW, 2, canvas->color565(30, 45, 60));
-        int fillTrackW = (int)(trackW * progressRatio);
-        if (fillTrackW > 0) {
-            canvas->fillRect(trackX, trackY - 1, fillTrackW, 2, canvas->color565(0, 180, 220));
-        }
-
-        int tcaX = trackX + trackW / 2;
-        if (track.tcaTime > track.aosTime && track.losTime > track.aosTime) {
-            float tcaRatio = (float)(track.tcaTime - track.aosTime) / (float)totalDur;
-            if (tcaRatio >= 0.1f && tcaRatio <= 0.9f) {
-                tcaX = trackX + (int)(trackW * tcaRatio);
-            }
-        }
-        canvas->drawCircle(tcaX, trackY, 2, TFT_YELLOW);
-
-        int curX = trackX + fillTrackW;
-        SatIconType satIcon = ICON_SATELLITE;
-        const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(track.satNorad);
-        if (entry) satIcon = entry->icon;
-        drawTimelineSatellite(canvas, curX, trackY, satIcon, rm.isListening(), track.isRising);
-
-        canvas->setTextDatum(TL_DATUM);
-        canvas->setTextColor(0x7BEF);
-        canvas->drawString("AOS", trackX, trackY - 10);
-        canvas->setTextDatum(TC_DATUM);
-        canvas->setTextColor(TFT_YELLOW);
-        canvas->drawString("TCA", tcaX, trackY - 10);
-        canvas->setTextDatum(TR_DATUM);
-        canvas->setTextColor(0x7BEF);
-        canvas->drawString("LOS", trackX + trackW, trackY - 10);
-
-        // 在时间轴卫星图标正下方显示时间校准偏差（如 +20s 或 -15s），不占用额外底框空间
-        if (track.timeOffsetSec != 0) {
-            char calibBuf[16];
-            snprintf(calibBuf, sizeof(calibBuf), "%+ds", track.timeOffsetSec);
-            int tw = canvas->textWidth(calibBuf);
-            int offX = curX;
-            if (offX - tw / 2 < 68) offX = 68 + tw / 2;
-            if (offX + tw / 2 > width - 60) offX = width - 60 - tw / 2;
             canvas->setTextDatum(TC_DATUM);
             canvas->setTextColor(TFT_YELLOW);
-            canvas->drawString(calibBuf, offX, trackY + 7);
+            canvas->drawString("TCA", tcaX, 41);
+
+            canvas->setTextDatum(TR_DATUM);
+            canvas->setTextColor(0x7BEF);
+            canvas->drawString("LOS", trackX + trackW, 41);
+
+            // 真实时间线进度：由当前仿真时间严格线性驱动，按 , / 增减补偿时图标毫秒级实时响应
+            float progressRatio = 0.0f;
+            if (track.losTime > track.aosTime && track.currentSimTime >= track.aosTime) {
+                progressRatio = (float)((int64_t)track.currentSimTime - (int64_t)track.aosTime) / (float)totalDur;
+            }
+            if (progressRatio < 0.0f) progressRatio = 0.0f;
+            if (progressRatio > 1.0f) progressRatio = 1.0f;
+
+            // 时间轴底槽与已通过进度条
+            canvas->fillRect(trackX, trackY - 1, trackW, 2, canvas->color565(30, 45, 60));
+            int fillTrackW = (int)(trackW * progressRatio);
+            if (fillTrackW > 0) {
+                canvas->fillRect(trackX, trackY - 1, fillTrackW, 2, canvas->color565(0, 180, 220));
+            }
+
+            // TCA 黄色标记圆点
+            canvas->drawCircle(tcaX, trackY, 2, TFT_YELLOW);
+
+            // 卫星图标实体
+            int curX = trackX + fillTrackW;
+            SatIconType satIcon = track.satIconType;
+            uint16_t satColor = track.satColor;
+            if (satIcon == ICON_SATELLITE) {
+                const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(track.satNorad);
+                if (entry) {
+                    satIcon = entry->icon;
+                    if (satColor == 0x07FF || satColor == 0) satColor = entry->color;
+                }
+            }
+            drawTimelineSatellite(canvas, curX, trackY, satIcon, satColor, hasPassNow && rm.isListening(), track.isRising);
+
+            // 时间轴起终点下方显示本地起止时刻 (Y = 58)
+            int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : 8 * 3600;
+            char timeBuf[16];
+
+            if (track.aosTime > 0) {
+                time_t aosLocal = (time_t)track.aosTime + tzOffsetSec;
+                struct tm tmAos;
+                gmtime_r(&aosLocal, &tmAos);
+                snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", tmAos.tm_hour, tmAos.tm_min, tmAos.tm_sec);
+                canvas->setTextDatum(TL_DATUM);
+                canvas->setTextColor(0x7BEF);
+                canvas->drawString(timeBuf, trackX, 58);
+            }
+
+            if (track.losTime > 0) {
+                time_t losLocal = (time_t)track.losTime + tzOffsetSec;
+                struct tm tmLos;
+                gmtime_r(&losLocal, &tmLos);
+                snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", tmLos.tm_hour, tmLos.tm_min, tmLos.tm_sec);
+                canvas->setTextDatum(TR_DATUM);
+                canvas->setTextColor(0x7BEF);
+                canvas->drawString(timeBuf, trackX + trackW, 58);
+            }
+
+            // 在时间轴卫星图标正下方居中跟随显示时间校准偏差（如 +20s 或 -15s）
+            if (track.timeOffsetSec != 0) {
+                char calibBuf[16];
+                snprintf(calibBuf, sizeof(calibBuf), "%+ds", track.timeOffsetSec);
+                int tw = canvas->textWidth(calibBuf);
+                int offX = curX;
+                // 安全 clamp，避免与两端的起止时间重叠挤压
+                if (offX - tw / 2 < trackX + 54) offX = trackX + 54 + tw / 2;
+                if (offX + tw / 2 > trackX + trackW - 54) offX = trackX + trackW - 54 - tw / 2;
+                canvas->setTextDatum(TC_DATUM);
+                canvas->setTextColor(TFT_YELLOW);
+                canvas->drawString(calibBuf, offX, 58);
+            }
+        } else {
+            // 无过境卫星目标时：呈现优雅的静息等待时间槽与待机状态
+            canvas->fillRect(trackX, trackY - 1, trackW, 2, canvas->color565(25, 35, 48));
+            canvas->setTextDatum(MC_DATUM);
+            canvas->setTextColor(0x4208);
+            canvas->drawString(I18N::get(TXT_RF_IDLE_STANDBY), width / 2, trackY);
         }
 
         // 4. 分隔细线 (Y = 71)
@@ -540,12 +598,47 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
                 }
             }
         } else {
-            // 空闲等待提示卡片 (纯净优雅)
+            // 空闲等待提示卡片 (纯净优雅，主次分明)
             canvas->setTextDatum(MC_DATUM);
-            canvas->setTextColor(0x7BEF);
-            canvas->drawString(I18N::get(TXT_RF_WAITING_PACKETS), width / 2, 93);
-            canvas->setTextColor(0x4208);
-            canvas->drawString(I18N::getLanguage() == LANG_ZH ? "[ 按 T 键注入测试遥测包 ]" : "[ Press T to inject test packet ]", width / 2, 109);
+            if (hasPassNow) {
+                canvas->setTextColor(0x07FF);
+                canvas->drawString(I18N::get(TXT_RF_TITLE), width / 2, 87);
+                canvas->setTextColor(0x7BEF);
+                canvas->drawString(I18N::get(TXT_RF_WAITING_PACKETS), width / 2, 101);
+                canvas->setTextColor(0x4208);
+                canvas->drawString(I18N::getLanguage() == LANG_ZH ? "[ 按 T 键注入测试遥测包 ]" : "[ Press T to inject test packet ]", width / 2, 115);
+            } else if (isUpcoming) {
+                int secToAos = (track.aosTime > track.currentSimTime) ? (int)(track.aosTime - track.currentSimTime) : 0;
+                int mm = secToAos / 60;
+                int ss = secToAos % 60;
+                char upTitle[64];
+                char upSub[64];
+                snprintf(upTitle, sizeof(upTitle), "%s: %s", 
+                         (I18N::getLanguage() == LANG_ZH ? "下一次过境目标" : "NEXT PASS TARGET"),
+                         track.satName.c_str());
+                if (mm >= 60) {
+                    int hh = mm / 60;
+                    mm = mm % 60;
+                    snprintf(upSub, sizeof(upSub), (I18N::getLanguage() == LANG_ZH ? "预计 %d小时%02d分 后升空 (峰值仰角 %.0f°)" : "AOS in %dh%02dm (Peak El %.0f deg)"),
+                             hh, mm, track.maxEl);
+                } else {
+                    snprintf(upSub, sizeof(upSub), (I18N::getLanguage() == LANG_ZH ? "预计 %02d分%02d秒 后升空 (峰值仰角 %.0f°)" : "AOS in %02dm%02ds (Peak El %.0f deg)"),
+                             mm, ss, track.maxEl);
+                }
+                canvas->setTextColor(TFT_YELLOW);
+                canvas->drawString(upTitle, width / 2, 87);
+                canvas->setTextColor(0x7BEF);
+                canvas->drawString(upSub, width / 2, 101);
+                canvas->setTextColor(0xCE79);
+                canvas->drawString(I18N::getLanguage() == LANG_ZH ? "[ 按 , / 键调整时间补偿 | 按 T 注入测试包 ]" : "[ Press , / to calibrate time | T to test ]", width / 2, 115);
+            } else {
+                canvas->setTextColor(TFT_YELLOW);
+                canvas->drawString(I18N::get(TXT_RF_NO_PASS_IDLE), width / 2, 87);
+                canvas->setTextColor(0x7BEF);
+                canvas->drawString(I18N::get(TXT_RF_AUTO_TRIGGER_TIP), width / 2, 101);
+                canvas->setTextColor(0x4208);
+                canvas->drawString(I18N::getLanguage() == LANG_ZH ? "[ 按 T 键注入测试遥测包 ]" : "[ Press T to inject test packet ]", width / 2, 115);
+            }
         }
     }
 

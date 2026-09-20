@@ -48,6 +48,7 @@ struct SatRealtimeCache {
     bool lastGeoValid = false;
     bool lastInShadow = false;
     bool isVisible = false;
+    bool isRadioPassing = false;
     OrbitCache cache;
 };
 
@@ -61,6 +62,7 @@ struct RecentLaunchRealtimeCache {
     bool lastGeoValid = false;
     bool lastInShadow = false;
     bool isVisible = false;
+    bool isRadioPassing = false;
     OrbitCache cache;
 };
 

@@ -57,6 +57,9 @@ struct SatRenderData {
     // Target tracking visual effects
     bool isSelected = false;
     SGP4Calc* calc = nullptr;
+
+    // Radio pass transmitting status (downlink active while in pass)
+    bool isRadioTransmitting = false;
 };
 
 class EarthRenderer {
@@ -112,6 +115,8 @@ public:
     }
 
     LGFX_Sprite* getCanvas() { return _canvas; }
+
+    static void renderSatelliteIcon(LGFX_Sprite* canvas, int x, int y, SatIconType iconType, uint16_t color, bool renderDark, float intensity = 1.0f);
 
 private:
     uint32_t _unixTime = 0;
