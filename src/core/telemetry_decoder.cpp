@@ -215,11 +215,6 @@ DecodedTelemetry TelemetryDecoder::decode(const RadioPacket& packet, uint32_t ex
     result.rawHex = toHex(packet.payload, packet.length);
     result.rawAscii = toAscii(packet.payload, packet.length);
 
-    // 通用基础射频指标
-    result.fields.push_back({"Freq", String(packet.freqMHz, 4), "MHz"});
-    result.fields.push_back({"RSSI", String(packet.rssi, 1), "dBm"});
-    result.fields.push_back({"SNR", String(packet.snr, 1), "dB"});
-
     // 1. 优先匹配 AX.25 UI-frame
     if (decodeAX25(packet.payload, packet.length, result)) {
         return result;

@@ -223,32 +223,70 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
 void RadioManager::injectTestPacket() {
     RadioPacket pkt;
     pkt.timestamp = millis();
-    pkt.freqMHz = _activeFreq > 100.0f ? _activeFreq : 436.700f;
     pkt.rssi = -82.0f;
     pkt.snr = 8.5f;
 
-    // 构造模拟 NORBI 遥测包 (48 字节)
-    uint8_t demoPayload[48] = {
-        0x55, 0xAA, 0x01, 0x20, // Sync & Header
-        0x0F, 0x3C,             // Voltage: 3900 mV
-        0x15,                   // Temperature: 21 C
-        0x02, 0x4B,             // Current: 587 mA
-        0x01, 0x00,             // Reboot counter: 1
-        0xAA, 0xBB, 0xCC, 0xDD
-    };
-    for (int i = 11; i < 48; i++) {
-        demoPayload[i] = (uint8_t)(0x10 + i);
+    uint32_t injectNorad = _activeSatNorad;
+    String injectName = _activeSatName;
+    float injectFreq = _activeFreq;
+
+    // 根据当前选中的卫星智能适配模拟报文；若无或非已知 LoRa 星，默认使用 PROVES-Electra 示范
+    bool isNorbi = (injectNorad == 46494 || injectName.indexOf("NORBI") != -1);
+    bool isProves = (injectNorad == 69795 || injectName.indexOf("PROVES") != -1);
+    if (!isNorbi && !isProves) {
+        // 默认示范星：PROVES-Electra
+        injectNorad = 69795;
+        injectName = "PROVES-Electra";
+        injectFreq = 437.400f;
+        isProves = true;
     }
 
-    pkt.length = 48;
-    memcpy(pkt.payload, demoPayload, 48);
+    pkt.freqMHz = injectFreq > 100.0f ? injectFreq : (isNorbi ? 436.700f : 437.400f);
+
+    if (isProves) {
+        // PROVES PySquared 真实信标格式
+        // byte 0: 0x03 (Spacecraft ID: Electra)
+        // byte 1-2: Vbat = 3970 mV (3.97 V) -> 0x82, 0x0F
+        // byte 3: Temp = 22 C -> 0x16
+        // byte 4-5: I_bus = 54.6 mA (546) -> 0x22, 0x02
+        // byte 6-7: Reboot counter = 4 -> 0x04, 0x00
+        // byte 8-10: "P1P"
+        uint8_t provesPayload[48] = {
+            0x03,
+            0x82, 0x0F,
+            0x16,
+            0x22, 0x02,
+            0x04, 0x00,
+            'P', '1', 'P', 0x00
+        };
+        for (int i = 12; i < 48; i++) provesPayload[i] = (uint8_t)(0x20 + i);
+        pkt.length = 48;
+        memcpy(pkt.payload, provesPayload, 48);
+    } else {
+        // NORBI LoRa 真实信标格式
+        // byte 0-1: Frame# = 1042 -> 0x12, 0x04
+        // byte 2-3: Vbat = 3920 mV (3.92 V) -> 0x50, 0x0F
+        // byte 4: Temp = 21 C -> 0x15
+        // byte 5-6: I_bus = 58.7 mA (587) -> 0x4B, 0x02
+        uint8_t norbiPayload[48] = {
+            0x12, 0x04,
+            0x50, 0x0F,
+            0x15,
+            0x4B, 0x02,
+            0x01, 0x00,
+            'N', 'O', 'R', 'B'
+        };
+        for (int i = 12; i < 48; i++) norbiPayload[i] = (uint8_t)(0x10 + i);
+        pkt.length = 48;
+        memcpy(pkt.payload, norbiPayload, 48);
+    }
 
     ReceivedLogItem item;
     item.raw = pkt;
-    item.decoded = TelemetryDecoder::decode(pkt, _activeSatNorad > 0 ? _activeSatNorad : 46494);
+    item.decoded = TelemetryDecoder::decode(pkt, injectNorad);
     if (item.decoded.satName.length() == 0 || item.decoded.satName == "Unknown Sat") {
-        item.decoded.satName = _activeSatName.length() > 0 ? _activeSatName : "NORBI";
-        item.decoded.noradId = _activeSatNorad > 0 ? _activeSatNorad : 46494;
+        item.decoded.satName = injectName;
+        item.decoded.noradId = injectNorad;
     }
 
     _recentPackets.insert(_recentPackets.begin(), item);
@@ -262,7 +300,7 @@ void RadioManager::injectTestPacket() {
     _toastStartTime = millis();
 
     logPacketToFile(item);
-    Serial.printf("[RadioManager] Injected test packet for %s\n", item.decoded.satName.c_str());
+    Serial.printf("[RadioManager] Injected test packet for %s (NORAD %u)\n", item.decoded.satName.c_str(), injectNorad);
 }
 
 void RadioManager::injectTestCrcError() {

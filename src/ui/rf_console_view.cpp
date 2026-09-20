@@ -611,6 +611,9 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
                 if (!p.decoded.fields.empty()) {
                     canvas->setTextColor(0xFFE0);
                     String fPreview = p.decoded.fields[0].key + ":" + p.decoded.fields[0].value + p.decoded.fields[0].unit;
+                    if (p.decoded.fields.size() > 1) {
+                        fPreview += " " + p.decoded.fields[1].key + ":" + p.decoded.fields[1].value + p.decoded.fields[1].unit;
+                    }
                     int maxClipW = width - 148;
                     if (i == visibleRows - 1) {
                         maxClipW = width - 148 - 66; // 为右下角常驻 RSSI 胶囊留出避让安全宽度
@@ -725,7 +728,7 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
         curY += 13;
 
         canvas->setTextColor(0xFFE0, 0x0841);
-        for (size_t f = 0; f < sel.decoded.fields.size() && f < 4; f += 2) {
+        for (size_t f = 0; f < sel.decoded.fields.size() && f < 6; f += 2) {
             String fRow = sel.decoded.fields[f].key + ":" + sel.decoded.fields[f].value + sel.decoded.fields[f].unit;
             if (f + 1 < sel.decoded.fields.size()) {
                 fRow += "  " + sel.decoded.fields[f+1].key + ":" + sel.decoded.fields[f+1].value + sel.decoded.fields[f+1].unit;
