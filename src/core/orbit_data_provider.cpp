@@ -168,190 +168,226 @@ bool OrbitDataProvider::downloadRecentLaunches(std::vector<RecentLaunchItem>& te
         }
     }
 
-    static const char* RAW_TMP_PATH = "/json_recent_raw.tmp";
-    static const char* RAW_JSONL_PATH = "/json_recent_raw.jsonl";
     static const char* CELESTRAK_URL = "http://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=json";
     
     // 静态大缓冲区，彻底消除任务栈负担（0 字节栈开销）
     static const size_t IN_BUF_SIZE = 2048;
-    static const size_t OUT_BUF_SIZE = 4096;
+    static const size_t OUT_BUF_SIZE = 2048;
     static uint8_t inBuf[IN_BUF_SIZE];
     static char outBuf[OUT_BUF_SIZE];
 
-    const int MAX_ATTEMPTS = 2;
-    for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        if (attempt > 1) {
-            LOG_I("RECENT_LAUNCH", "Retrying Celestrak download (attempt %d/%d)...", attempt, MAX_ATTEMPTS);
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
+    extern String recentLaunchErrorMsg;
+    esp_task_wdt_reset();
 
-        std::unique_ptr<WiFiClient> client(new WiFiClient());
-        if (!client) {
-            if (outHttpCode) *outHttpCode = -2;
-            return false;
-        }
+    // 诊断 DNS 解析
+    IPAddress hostIp;
+    if (WiFi.hostByName("celestrak.org", hostIp)) {
+        LOG_I("RECENT_LAUNCH", "DNS resolved celestrak.org -> %s", hostIp.toString().c_str());
+    } else {
+        LOG_W("RECENT_LAUNCH", "DNS resolution failed for celestrak.org");
+    }
+
+    std::unique_ptr<WiFiClient> client(new WiFiClient());
+    if (!client) {
+        if (outHttpCode) *outHttpCode = -2;
+        return false;
+    }
+    
+    std::unique_ptr<HTTPClient> http(new HTTPClient());
+    if (!http) {
+        if (outHttpCode) *outHttpCode = -2;
+        return false;
+    }
+    
+    // 超时时间严格控制在 12 秒内，确保绝对不触发系统任务看门狗(TWDT)复位
+    client->setTimeout(12);
+    http->setTimeout(12000);
+    http->setConnectTimeout(6000);
+    http->setUserAgent("Mozilla/5.0 (ESP32-Cardputer; SkyCompass Satellite Tracker)");
+    http->setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    
+    http->begin(*client, CELESTRAK_URL);
+    esp_task_wdt_reset();
+    
+    int httpCode = http->GET();
+    esp_task_wdt_reset();
+    if (outHttpCode) *outHttpCode = httpCode;
+    
+    if (httpCode != HTTP_CODE_OK) {
+        LOG_W("RECENT_LAUNCH", "Celestrak HTTP GET returned error code %d", httpCode);
+        http->end();
+        return false;
+    }
+    
+    int expectedSize = http->getSize();
+    WiFiClient* stream = http->getStreamPtr();
         
-        std::unique_ptr<HTTPClient> http(new HTTPClient());
-        if (!http) {
-            if (outHttpCode) *outHttpCode = -2;
-            return false;
-        }
-        
-        client->setTimeout(45);
-        http->setTimeout(45000);
-        http->setConnectTimeout(15000);
-        http->setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-        http->setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-        
-        http->begin(*client, CELESTRAK_URL);
-        http->addHeader("Accept", "application/json, text/plain, */*");
-        http->addHeader("Connection", "close");
-        
-        int httpCode = http->GET();
-        if (outHttpCode) *outHttpCode = httpCode;
-        
-        if (httpCode != HTTP_CODE_OK) {
-            http->end();
-            continue;
-        }
-        
-        int expectedSize = http->getSize();
-        WiFiClient* stream = http->getStreamPtr();
-        
-        // 每次尝试前清空临时文件，绝不破坏正式缓存 /json_recent_raw.jsonl
-        LittleFS.remove(RAW_TMP_PATH);
-        File f = LittleFS.open(RAW_TMP_PATH, "w", true);
-        if (!f) {
-            LOG_E("RECENT_LAUNCH", "Failed to open %s for writing!", RAW_TMP_PATH);
-            if (outHttpCode) *outHttpCode = -100;
-            http->end();
-            return false;
-        }
-        
-        int rawCount = 0;
-        int totalReadBytes = 0;
-        size_t outLen = 0;
-        
-        auto flushOut = [&]() {
-            if (outLen > 0) {
-                f.write((const uint8_t*)outBuf, outLen);
-                outLen = 0;
-                taskYIELD(); // 写 Flash 后让渡时间片，确保底层 Wi-Fi 驱动接收包不丢失
-            }
-        };
-        auto writeChar = [&](char ch) {
-            outBuf[outLen++] = ch;
-            if (outLen >= OUT_BUF_SIZE) {
-                flushOut();
-            }
-        };
-        
-        bool inString = false;
-        bool escaped = false;
-        int braceDepth = 0;
-        
-        uint32_t lastReadMs = millis();
-        const uint32_t TIMEOUT_MS = 40000; // 提升至40秒以容忍跨洋 TCP 拥塞丢包重传
-        
-        while (stream->connected() || stream->available()) {
-            int avail = stream->available();
-            if (avail > 0) {
-                int toRead = avail > (int)sizeof(inBuf) ? (int)sizeof(inBuf) : avail;
-                int r = stream->read(inBuf, toRead);
-                if (r > 0) {
-                    totalReadBytes += r;
-                    lastReadMs = millis();
-                    
-                    for (int i = 0; i < r; ++i) {
-                        char c = (char)inBuf[i];
-                        if (c == '\r' || c == '\n') continue;
-                        
-                        if (escaped) {
-                            escaped = false;
-                            if (braceDepth > 0) writeChar(c);
-                            continue;
-                        }
-                        if (c == '\\') {
-                            if (inString) escaped = true;
-                            if (braceDepth > 0) writeChar(c);
-                            continue;
-                        }
-                        if (c == '"') {
-                            inString = !inString;
-                            if (braceDepth > 0) writeChar(c);
-                            continue;
-                        }
-                        if (inString) {
-                            if (braceDepth > 0) writeChar(c);
-                            continue;
-                        }
-                        
-                        if (c == '{') {
-                            braceDepth++;
-                            writeChar(c);
-                        } else if (c == '}') {
-                            braceDepth--;
-                            writeChar(c);
-                            if (braceDepth == 0) {
-                                writeChar('\n');
-                                rawCount++;
-                            }
-                        } else {
-                            if (braceDepth > 0) {
-                                writeChar(c);
-                            }
-                        }
-                    }
+    static const char* RAW_DOWNLOAD_PATH = "/recent_raw.tmp";
+    static const char* RAW_JSONL_TMP = "/json_recent_raw.tmp";
+    static const char* RAW_JSONL_PATH = "/json_recent_raw.jsonl";
+    
+    // 阶段 1: 高速网络流直写 Flash，杜绝逐字符计算阻塞 TCP ACK 窗口
+    if (LittleFS.exists(RAW_DOWNLOAD_PATH)) {
+        LittleFS.remove(RAW_DOWNLOAD_PATH);
+    }
+    File fDown = LittleFS.open(RAW_DOWNLOAD_PATH, "w", true);
+    if (!fDown) {
+        LOG_E("RECENT_LAUNCH", "Failed to open %s for writing!", RAW_DOWNLOAD_PATH);
+        if (outHttpCode) *outHttpCode = -100;
+        http->end();
+        return false;
+    }
+    
+    int totalReadBytes = 0;
+    uint32_t lastReadMs = millis();
+    const uint32_t TIMEOUT_MS = 25000;
+    
+    while (stream->connected() || stream->available()) {
+        int avail = stream->available();
+        if (avail > 0) {
+            int toRead = avail > (int)sizeof(inBuf) ? (int)sizeof(inBuf) : avail;
+            int r = stream->read(inBuf, toRead);
+            if (r > 0) {
+                fDown.write(inBuf, r);
+                totalReadBytes += r;
+                lastReadMs = millis();
+                
+                if (expectedSize > 0) {
+                    int pct = (int)((int64_t)totalReadBytes * 100 / expectedSize);
+                    recentLaunchErrorMsg = String(totalReadBytes / 1024) + "KB (" + String(pct) + "%)";
+                } else {
+                    recentLaunchErrorMsg = String(totalReadBytes / 1024) + "KB";
                 }
-            } else {
-                if (!stream->connected()) {
-                    break;
-                }
-                if (millis() - lastReadMs > TIMEOUT_MS) {
-                    LOG_W("RECENT_LAUNCH", "Stream chunk read timed out (no data for %u ms, total read %d bytes)", 
-                          (unsigned int)TIMEOUT_MS, totalReadBytes);
-                    if (outHttpCode) *outHttpCode = -11;
-                    break;
-                }
-                vTaskDelay(pdMS_TO_TICKS(15));
-                esp_task_wdt_reset();
             }
-            
-            if (expectedSize > 0 && totalReadBytes >= expectedSize) {
-                LOG_I("RECENT_LAUNCH", "Stream completed successfully via size checking (%d/%d bytes)", totalReadBytes, expectedSize);
+        } else {
+            if (!stream->connected()) break;
+            if (millis() - lastReadMs > TIMEOUT_MS) {
+                LOG_W("RECENT_LAUNCH", "Stream chunk read timed out (no data for %u ms, total read %d bytes)", 
+                      (unsigned int)TIMEOUT_MS, totalReadBytes);
+                if (outHttpCode) *outHttpCode = -11;
                 break;
             }
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
-        
-        flushOut();
-        f.close();
-        http->end();
-        
-        bool completed = true;
-        if (expectedSize > 0 && totalReadBytes < expectedSize) {
-            completed = false;
-            if (outHttpCode && *outHttpCode == 0) {
-                *outHttpCode = -5;
-            }
-        }
-        
-        LOG_I("RECENT_LAUNCH", "Attempt %d finished. Raw json lines: %d. Expected size: %d, actual: %d", 
-              attempt, rawCount, expectedSize, totalReadBytes);
-              
-        if (completed && rawCount > 0) {
-            // 下载完整成功：原子替换正式缓存文件
-            LittleFS.remove(RAW_JSONL_PATH);
-            LittleFS.rename(RAW_TMP_PATH, RAW_JSONL_PATH);
-            LOG_I("RECENT_LAUNCH", "Atomically updated %s with %d objects!", RAW_JSONL_PATH, rawCount);
-            return true;
-        } else {
-            // 下载失败或未完成：删除残缺临时文件，保护原有缓存不受破坏
-            LittleFS.remove(RAW_TMP_PATH);
-            LOG_W("RECENT_LAUNCH", "Incomplete download (%d/%d bytes). Discarded temp file, preserved existing cache.", 
-                  totalReadBytes, expectedSize);
+        esp_task_wdt_reset();
+        if (expectedSize > 0 && totalReadBytes >= expectedSize) {
+            LOG_I("RECENT_LAUNCH", "Stream completed successfully (%d/%d bytes)", totalReadBytes, expectedSize);
+            break;
         }
     }
-    return false;
+    
+    fDown.close();
+    http->end();
+    
+    if (expectedSize > 0 && totalReadBytes < expectedSize) {
+        LOG_W("RECENT_LAUNCH", "Incomplete download (%d/%d bytes). Discarded raw file.", totalReadBytes, expectedSize);
+        LittleFS.remove(RAW_DOWNLOAD_PATH);
+        if (outHttpCode && *outHttpCode == 0) *outHttpCode = -5;
+        return false;
+    }
+    
+    // 阶段 2: 本地离线流式转换，将 JSON 数组拆分为每行一条的 JSONL 格式
+    File fRaw = LittleFS.open(RAW_DOWNLOAD_PATH, "r");
+    if (!fRaw) {
+        LittleFS.remove(RAW_DOWNLOAD_PATH);
+        return false;
+    }
+    
+    if (LittleFS.exists(RAW_JSONL_TMP)) {
+        LittleFS.remove(RAW_JSONL_TMP);
+    }
+    File fJsonl = LittleFS.open(RAW_JSONL_TMP, "w", true);
+    if (!fJsonl) {
+        fRaw.close();
+        LittleFS.remove(RAW_DOWNLOAD_PATH);
+        return false;
+    }
+    
+    int rawCount = 0;
+    size_t outLen = 0;
+    auto flushOut = [&]() {
+        if (outLen > 0) {
+            fJsonl.write((const uint8_t*)outBuf, outLen);
+            outLen = 0;
+        }
+    };
+    auto writeChar = [&](char ch) {
+        outBuf[outLen++] = ch;
+        if (outLen >= OUT_BUF_SIZE) {
+            flushOut();
+        }
+    };
+    
+    bool inString = false;
+    bool escaped = false;
+    int braceDepth = 0;
+    
+    while (fRaw.available()) {
+        int r = fRaw.read(inBuf, sizeof(inBuf));
+        if (r <= 0) break;
+        
+        for (int i = 0; i < r; ++i) {
+            char c = (char)inBuf[i];
+            if (c == '\r' || c == '\n') continue;
+            
+            if (escaped) {
+                escaped = false;
+                if (braceDepth > 0) writeChar(c);
+                continue;
+            }
+            if (c == '\\') {
+                if (inString) escaped = true;
+                if (braceDepth > 0) writeChar(c);
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                if (braceDepth > 0) writeChar(c);
+                continue;
+            }
+            if (inString) {
+                if (braceDepth > 0) writeChar(c);
+                continue;
+            }
+            
+            if (c == '{') {
+                braceDepth++;
+                writeChar(c);
+            } else if (c == '}') {
+                braceDepth--;
+                writeChar(c);
+                if (braceDepth == 0) {
+                    writeChar('\n');
+                    rawCount++;
+                }
+            } else {
+                if (braceDepth > 0) {
+                    writeChar(c);
+                }
+            }
+        }
+        esp_task_wdt_reset();
+    }
+    
+    flushOut();
+    fJsonl.close();
+    fRaw.close();
+    LittleFS.remove(RAW_DOWNLOAD_PATH); // 清理原始中间文件
+    
+    LOG_I("RECENT_LAUNCH", "Offline parsing complete. Raw json lines: %d. Total bytes: %d", rawCount, totalReadBytes);
+    
+    if (rawCount > 0) {
+        if (LittleFS.exists(RAW_JSONL_PATH)) {
+            LittleFS.remove(RAW_JSONL_PATH);
+        }
+        LittleFS.rename(RAW_JSONL_TMP, RAW_JSONL_PATH);
+        LOG_I("RECENT_LAUNCH", "Atomically updated %s with %d objects!", RAW_JSONL_PATH, rawCount);
+        return true;
+    } else {
+        LittleFS.remove(RAW_JSONL_TMP);
+        LOG_W("RECENT_LAUNCH", "No valid JSON objects parsed from downloaded raw data.");
+        return false;
+    }
 }
 
 static const char* META_CACHE_PATH = "/recent_launches_meta.bin";
@@ -539,6 +575,16 @@ bool OrbitDataProvider::loadRecentLaunchesFromCache(std::vector<RecentLaunchItem
         String singleJson = f.readStringUntil('\n');
         singleJson.trim();
         if (singleJson.length() == 0) continue;
+        if (singleJson.length() > 2048) {
+            // 异常超长损坏行，直接跳过，防止堆内存耗尽
+            continue;
+        }
+        
+        // 内存熔断保护：若剩余堆内存极低，提前终止加载并保留已有对象，防止系统 panic
+        if (ESP.getFreeHeap() < 24000) {
+            LOG_W("RECENT_LAUNCH", "Low heap memory during cache load (%u bytes), terminating parse early.", (unsigned int)ESP.getFreeHeap());
+            break;
+        }
         
         OrbitRecord record;
         if (parser.parse(singleJson, record)) {
@@ -547,8 +593,7 @@ bool OrbitDataProvider::loadRecentLaunchesFromCache(std::vector<RecentLaunchItem
             processRecentLaunchItem(tempLaunches, record, outPhases);
         }
         
-        // 方案三：优化看门狗与调度节拍，从每 5 行改为每 50 行
-        if (lineCount % 50 == 0) {
+        if (lineCount % 20 == 0) {
             esp_task_wdt_reset();
             taskYIELD();
         }

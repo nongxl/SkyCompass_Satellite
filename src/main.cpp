@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <sys/time.h>
 #include "core/log_manager.h"
 #include <M5Cardputer.h>
 #include "core/tle_data.h"
@@ -1154,16 +1155,20 @@ inline void drawScrollingText(LGFX_Sprite* canvas, const char* text, int x, int 
 }
 
 struct WiFiDisconnectGuard {
+    bool enabled;
+    WiFiDisconnectGuard(bool en = true) : enabled(en) {}
     ~WiFiDisconnectGuard() {
-        LOG_I("APP", "Network task complete. Turning off WiFi to reclaim memory.");
-        HalWifi::disconnect();
+        if (enabled) {
+            LOG_I("APP", "Network task complete. Turning off WiFi to reclaim memory.");
+            HalWifi::disconnect();
+        }
     }
 };
 
-void recentLaunchNetworkTaskImpl() {
+void recentLaunchNetworkTaskImpl(bool shouldDisconnectWifi = true) {
     NetworkActiveGuard guard;
     PredictorTaskSuspendGuard predGuard;
-    WiFiDisconnectGuard wifiGuard;
+    WiFiDisconnectGuard wifiGuard(shouldDisconnectWifi);
     recentLaunchDownloading = true;
     recentLaunchDownloadSuccess = false;
     recentLaunchErrorMsg = "";
@@ -1175,7 +1180,7 @@ void recentLaunchNetworkTaskImpl() {
         HalWifi::loadCredentials(ssid, pass);
         
         if (ssid.length() > 0) {
-            recentLaunchErrorMsg = "Connecting WiFi...";
+            recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
             HalWifi::begin(ssid.c_str(), pass.c_str());
         }
         
@@ -1194,7 +1199,7 @@ void recentLaunchNetworkTaskImpl() {
     // 2. Sync Time (NTP)
     // Pass gmtOffset_sec=0 to sync to UTC. getUnixTime() returns time() which is
     // affected by configTime()'s timezone offset. We always work in UTC internally.
-    recentLaunchErrorMsg = "Syncing NTP time...";
+    recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "正在同步时间..." : "Syncing NTP time...";
     HalWifi::syncNTPTime(0);
     uint32_t ntpTime = HalWifi::getUnixTime();
     if (ntpTime > 0) {
@@ -1234,7 +1239,7 @@ void recentLaunchNetworkTaskImpl() {
     }
     
     if (!success) {
-        recentLaunchErrorMsg = "Downloading GP JSON...";
+        recentLaunchErrorMsg = I18N::get(TXT_REFRESHING_GP);
         delay(200); // Give ESP32 stack and heap a brief breathing room to reclaim socket memory
         std::vector<RecentLaunchItem> dummy;
         int httpCode = 0;
@@ -1248,27 +1253,31 @@ void recentLaunchNetworkTaskImpl() {
         } else {
             if (httpCode < 0) {
                 if (httpCode == -100) {
-                    recentLaunchErrorMsg = "Storage Error";
+                    recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "存储空间错误" : "Storage Error";
                 } else if (httpCode == -11) {
-                    recentLaunchErrorMsg = "Download Timeout";
+                    recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "下载超时，请重试" : "Download Timeout";
                 } else if (httpCode == -5) {
-                    recentLaunchErrorMsg = "Incomplete Download";
+                    recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "数据接收不完整" : "Incomplete Download";
                 } else {
-                    recentLaunchErrorMsg = "Connection Refused";
+                    recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "网络连接被拒绝" : "Connection Refused";
                 }
             } else if (httpCode == 404) {
-                recentLaunchErrorMsg = "ID Not Found";
+                recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "数据不存在(404)" : "ID Not Found";
             } else {
-                recentLaunchErrorMsg = "HTTP Error " + String(httpCode);
+                recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? ("HTTP错误 " + String(httpCode)) : ("HTTP Error " + String(httpCode));
             }
         }
     }
     
     if (success) {
+        recentLaunchDownloadSuccess = true;
+        recentLaunchDownloading = false;
+        recentLaunchDownloadFinishedMs = millis();
+        recentLaunchErrorMsg = I18N::get(TXT_UPDATE_SUCCESS_CACHE);
         g_recentLaunchRefreshPending = true;
     } else {
-        if (recentLaunchErrorMsg == "Downloading GP JSON...") {
-            recentLaunchErrorMsg = "Download Failed!";
+        if (recentLaunchErrorMsg.length() == 0 || recentLaunchErrorMsg == I18N::get(TXT_REFRESHING_GP)) {
+            recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "下载失败，请重试" : "Download Failed!";
         }
         LOG_I("RECENT_LAUNCH", "Celestrak JSON fetch failed");
         recentLaunchDownloading = false;
@@ -1566,7 +1575,7 @@ void networkTaskImpl(void* parameter) {
         
         // Auto-trigger recent launches download sequentially if active tab is Recent Launch
         if (currentSatTab == TAB_RECENT_LAUNCH || recentLaunchDownloading) {
-            recentLaunchNetworkTaskImpl();
+            recentLaunchNetworkTaskImpl(false); // Do not disconnect WiFi; networkTaskImpl still needs it
         }
         
         // 2. Fetch NTP (UTC, gmtOffset_sec=0 ensures time() returns UTC)
@@ -2598,9 +2607,104 @@ void loop() {
         doScreenshot();
     }
 
-    // 仅在用户按键调整时光机快进期间短暂暂停 GNSS 串口解析，推荐列表等正常模式下保持 GNSS 实时解析
+    // 1. 全局系统时间推进引擎（所有界面与模式下统一单调前进）
+    time_t sysTimeNow = time(nullptr);
+    if (sysTimeNow >= 1704067200) { // 2024-01-01 后有效时间（已通过 NTP 或 GPS 授时）
+        current_unix = (uint32_t)sysTimeNow;
+    } else {
+        // 未授时的离线推演基准时间推进：按真实流逝时间单调累加，杜绝跳帧与漏秒
+        static unsigned long last_unix_tick = millis();
+        unsigned long now_ms = millis();
+        if (now_ms - last_unix_tick >= 1000) {
+            unsigned long elapsed_sec = (now_ms - last_unix_tick) / 1000;
+            current_unix += elapsed_sec;
+            last_unix_tick += elapsed_sec * 1000;
+        }
+    }
+
+    // 2. GNSS 状态处理与授时同步引擎（全局执行，不受任何界面 return 阻断）
     if (gnss && (lastTimeAdjustMillis == 0)) {
         gnss->update();
+
+        if (gnssStartTime == 0) gnssStartTime = millis();
+        if (gnss->isModuleInitialized() && !gnss->isInStandbyMode()) {
+            if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
+                GnssData gData = gnss->getData();
+                if (gData.isValid && (abs(gData.latitude) > 0.0001 || abs(gData.longitude) > 0.0001)) {
+                    double oldLat = baseUserLat;
+                    double oldLon = baseUserLon;
+                    double oldAlt = baseUserAlt;
+                    baseUserLat = gData.latitude;
+                    baseUserLon = gData.longitude;
+                    baseUserAlt = gData.altitude;
+                    gnssLocationFixed = true;
+                    
+                    if (pos_manager) {
+                        PositionData pos = {baseUserLat, baseUserLon, baseUserAlt};
+                        pos_manager->setPosition(pos);
+                    }
+                    
+                    if (abs(baseUserLat - oldLat) > 0.01 || abs(baseUserLon - oldLon) > 0.01 || abs(baseUserAlt - oldAlt) > 100.0) {
+                        lockPassMutex();
+                        lastPredictionBaseTime = 0; // 缓存失效
+                        predictionsReady = false;
+                        unlockPassMutex();
+                    }
+                    
+                    static unsigned long lastGnssNvsSaveMs = 0;
+                    static double lastSavedLat = 999.0;
+                    static double lastSavedLon = 999.0;
+                    bool posChangedForSave = (abs(baseUserLat - lastSavedLat) > 0.01 || abs(baseUserLon - lastSavedLon) > 0.01);
+                    if (posChangedForSave && (lastGnssNvsSaveMs == 0 || millis() - lastGnssNvsSaveMs > 60000)) {
+                        lastGnssNvsSaveMs = millis();
+                        lastSavedLat = baseUserLat;
+                        lastSavedLon = baseUserLon;
+                        Preferences posPrefs;
+                        if (posPrefs.begin("position", false)) {
+                            posPrefs.putDouble("cached_lat", baseUserLat);
+                            posPrefs.putDouble("cached_lon", baseUserLon);
+                            posPrefs.putDouble("cached_alt", baseUserAlt);
+                            posPrefs.putBool("use_manual_pos", false);
+                            posPrefs.end();
+                        }
+                    }
+                }
+                
+                static bool gnssTimeSynced = false;
+                if (gData.timeValid && gData.dateValid && !gnssTimeSynced) {
+                    uint32_t gpsUnix = convertGNSSDateToUnix(gData.year, gData.month, gData.day, gData.hour, gData.minute, gData.second);
+                    current_unix = gpsUnix;
+                    
+                    // 核心关键：同步设置 ESP32 硬件 RTC 系统时钟，使硬件定时器连续精准计时
+                    struct timeval tv;
+                    tv.tv_sec = gpsUnix;
+                    tv.tv_usec = 0;
+                    settimeofday(&tv, nullptr);
+                    
+                    gnssTimeSynced = true;
+                    g_timeSynced = true;
+                    LOG_I("APP", "Time synced to GNSS UTC: %u (Hardware RTC synchronized)", current_unix);
+                    
+                    // 重新触发卫星过境推演
+                    lockPassMutex();
+                    predictionsReady = false;
+                    lastPredictionBaseTime = 0; // 缓存失效
+                    unlockPassMutex();
+                    triggerPrediction = true;
+                }
+                
+                gnssTimedOut = false;
+                LOG_I("APP", "GNSS Locked. Location/Time synced. Entering standby mode to save power.");
+                gnss->enterStandbyMode();
+            } else {
+                unsigned long timeoutDuration = gnssManualMode ? 600000 : 300000;
+                if (millis() - gnssStartTime > timeoutDuration) {
+                    LOG_I("APP", "GNSS Timeout. Entering standby mode to save power.");
+                    gnssTimedOut = true;
+                    gnss->enterStandbyMode();
+                }
+            }
+        }
     }
 
     // Render at 30 FPS (33ms)
@@ -2638,6 +2742,7 @@ void loop() {
         static bool lastM = false;
         static bool lastCtrl = false;
         static bool lastT = false;
+        static bool lastP = false;
 
         bool currSemi = M5Cardputer.Keyboard.isKeyPressed(';');
         bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
@@ -2669,6 +2774,7 @@ void loop() {
         bool currM = M5Cardputer.Keyboard.isKeyPressed('m') || M5Cardputer.Keyboard.isKeyPressed('M');
         bool currCtrl = M5Cardputer.Keyboard.isKeyPressed(KEY_LEFT_CTRL) || M5Cardputer.Keyboard.keysState().ctrl;
         bool currT = M5Cardputer.Keyboard.isKeyPressed('t') || M5Cardputer.Keyboard.isKeyPressed('T');
+        bool currP = M5Cardputer.Keyboard.isKeyPressed('p') || M5Cardputer.Keyboard.isKeyPressed('P');
 
         static bool s_bootKeyFlushed = false;
         if (!s_bootKeyFlushed) {
@@ -2678,12 +2784,12 @@ void loop() {
             lastC = currC; lastR = currR; lastW = currW; lastS = currS;
             lastH = currH; lastG = currG; lastY = currY; lastN = currN;
             lastD = currD; lastF = currF; lastA = currA; lastTab = currTab; lastShift = currShift; lastL = currL;
-            lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl;
+            lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl; lastP = currP;
             s_bootKeyFlushed = true;
             currSemi = currDot = currComma = currSlash = currO = currV = false;
             currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = false;
             currC = currR = currW = currS = currH = currG = currY = currN = currD = currF = currA = false;
-            currTab = currShift = currL = currSpace = currM = currCtrl = false;
+            currTab = currShift = currL = currSpace = currM = currCtrl = currP = false;
         }
 
         bool justSemi = currSemi && !lastSemi;
@@ -2716,7 +2822,8 @@ void loop() {
         bool justM = currM && !lastM;
         bool justCtrl = currCtrl && !lastCtrl;
         bool justT = currT && !lastT;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl || justT;
+        bool justP = currP && !lastP;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl || justT || justP;
 
         // RF Console 全屏终端模式 (仅在主界面下按 Ctrl 开启，退出统一按 Esc 键)
         if (justCtrl && appState == STATE_MAIN && !RfConsoleView::getInstance().isActive()) {
@@ -2989,33 +3096,18 @@ void loop() {
                     }
                 } else if (justR) {
                     if (!showRecommendations && !showHelp) {
-                        // 1. Evaluate if time crosses a day boundary
-                        uint32_t beforeTime = current_unix + timeMachineOffset;
-                        uint32_t afterTime = current_unix;
-                        bool timeCrossedDay = false;
-                        int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
-                        uint32_t day1 = (beforeTime + tzOffsetSec) / 86400;
-                        uint32_t day2 = (afterTime + tzOffsetSec) / 86400;
-                        if (day1 != day2) {
-                            timeCrossedDay = true;
-                        }
-
-                        // 2. Evaluate if location shifted significantly
-                        bool locShifted = false;
-                        if (isManualLocationMode) {
-                            if (abs(baseUserLat - 39.90) > 0.01 || 
-                                abs(baseUserLon - 116.40) > 0.01 || 
-                                abs(baseUserAlt - 0.0) > 100.0) {
-                                locShifted = true;
-                            }
-                        }
-
-                        // 3. Apply reset actions
+                        // 1. 检查是否存在时间机器偏移并重置对齐现实时间
+                        bool hadOffset = (timeMachineOffset != 0);
                         timeMachineOffset = 0;
+                        lastTimeAdjustMillis = 0; // 立即退出快进保护
+
+                        // 2. 检查手动位置是否偏离
+                        bool locShifted = false;
                         if (isManualLocationMode) {
                             baseUserLat = 39.90; // Beijing default
                             baseUserLon = 116.40;
                             baseUserAlt = 0.0;
+                            locShifted = true;
                             
                             if (pos_manager) {
                                 PositionData pos = {baseUserLat, baseUserLon, baseUserAlt};
@@ -3030,16 +3122,14 @@ void loop() {
                             }
                         }
 
-                        // 4. Only recalculate if difference is beyond thresholds
-                        if (timeCrossedDay || locShifted) {
-                            // Serial.printf("[Debug] Cache reset on justR: timeCrossedDay=%d, locShifted=%d\n", timeCrossedDay, locShifted);
+                        // 3. 只要之前处于时间机器偏移状态或位置发生改变，立即刷新过境计算，严格与现实时间同步
+                        if (hadOffset || locShifted) {
                             lockPassMutex();
                             lastPredictionBaseTime = 0; // 缓存失效
                             predictionsReady = false;
                             unlockPassMutex();
                             triggerPrediction = true;
-                        } else {
-                            // Serial.println("[Debug] justR reset applied silently. Coords/Time shift within thresholds.");
+                            LOG_I("APP", "Reset to real-time via 'r' key. Time aligned to reality: %u", current_unix);
                         }
                     }
                 } else if (justBack) {
@@ -3384,7 +3474,7 @@ void loop() {
                             recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
                             drawSatSelectPage();
                             pushCanvasWithFilter();
-                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 6144, NULL, 1, NULL, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 5120, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 LOG_I("APP", "Failed to create RecentLaunchNetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
                                 recentLaunchDownloading = false;
@@ -3914,94 +4004,6 @@ void loop() {
             hardware_wizard.draw(earth_renderer->getCanvas());
             pushCanvasWithFilter();
             updateChainMonoDisplay();
-            return;
-        }
-
-        // Advance time in real-time (1s per 1000ms)
-        static unsigned long last_unix = millis();
-        if (millis() - last_unix >= 1000) {
-            current_unix += 1; 
-            last_unix = millis();
-        }
-        
-        // GNSS Power Management
-        if (gnssStartTime == 0) gnssStartTime = millis();
-        if (gnss && gnss->isModuleInitialized() && !gnss->isInStandbyMode()) {
-            if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
-                GnssData gData = gnss->getData();
-                if (gData.isValid && (abs(gData.latitude) > 0.0001 || abs(gData.longitude) > 0.0001)) {
-                    double oldLat = baseUserLat;
-                    double oldLon = baseUserLon;
-                    double oldAlt = baseUserAlt;
-                    baseUserLat = gData.latitude;
-                    baseUserLon = gData.longitude;
-                    baseUserAlt = gData.altitude;
-                    gnssLocationFixed = true; // Mark that we have a real location
-                    
-                    // Sync to pos_manager
-                    if (pos_manager) {
-                        PositionData pos = {baseUserLat, baseUserLon, baseUserAlt};
-                        pos_manager->setPosition(pos);
-                    }
-                    
-                    if (abs(baseUserLat - oldLat) > 0.01 || abs(baseUserLon - oldLon) > 0.01 || abs(baseUserAlt - oldAlt) > 100.0) {
-                        // Serial.printf("[Debug] GNSS sync cache reset: oldLat=%f, newLat=%f, oldLon=%f, newLon=%f, oldAlt=%f, newAlt=%f\n", 
-                        //               oldLat, baseUserLat, oldLon, baseUserLon, oldAlt, baseUserAlt);
-                        lockPassMutex();
-                        lastPredictionBaseTime = 0; // 缓存失效
-                        predictionsReady = false;
-                        unlockPassMutex();
-                    }
-                    
-                    // Save GNSS location to Preferences (NVS) at most once per 60 seconds
-                    // and only when position has meaningfully changed. NVS writes are slow
-                    // (10-200ms due to Flash wear-leveling page erasure) and must NOT occur
-                    // every frame or they cause intermittent 1-2s hitches during time adjustment.
-                    static unsigned long lastGnssNvsSaveMs = 0;
-                    static double lastSavedLat = 999.0;
-                    static double lastSavedLon = 999.0;
-                    bool posChangedForSave = (abs(baseUserLat - lastSavedLat) > 0.01 || abs(baseUserLon - lastSavedLon) > 0.01);
-                    if (posChangedForSave && (lastGnssNvsSaveMs == 0 || millis() - lastGnssNvsSaveMs > 60000)) {
-                        lastGnssNvsSaveMs = millis();
-                        lastSavedLat = baseUserLat;
-                        lastSavedLon = baseUserLon;
-                        Preferences posPrefs;
-                        if (posPrefs.begin("position", false)) {
-                            posPrefs.putDouble("cached_lat", baseUserLat);
-                            posPrefs.putDouble("cached_lon", baseUserLon);
-                            posPrefs.putDouble("cached_alt", baseUserAlt);
-                            posPrefs.putBool("use_manual_pos", false);
-                            posPrefs.end();
-                        }
-                    }
-                }
-                
-                static bool gnssTimeSynced = false;
-                if (gData.timeValid && gData.dateValid && !gnssTimeSynced) {
-                    current_unix = convertGNSSDateToUnix(gData.year, gData.month, gData.day, gData.hour, gData.minute, gData.second);
-                    gnssTimeSynced = true;
-                    g_timeSynced = true;
-                    LOG_I("APP", "Time synced to GNSS UTC: %u", current_unix);
-                    
-                    // Trigger predictor again with correct time
-                    lockPassMutex();
-                    predictionsReady = false;
-                    lastPredictionBaseTime = 0; // 缓存失效
-                    unlockPassMutex();
-                    triggerPrediction = true;
-                }
-                
-                gnssTimedOut = false;
-                LOG_I("APP", "GNSS Locked. Location/Time synced. Entering standby mode to save power.");
-                gnss->enterStandbyMode();
-            } else {
-                unsigned long timeoutDuration = gnssManualMode ? 600000 : 300000;
-                if (millis() - gnssStartTime > timeoutDuration) {
-                    LOG_I("APP", "GNSS Timeout. Entering standby mode to save power.");
-                    gnssTimedOut = true;
-                    gnss->enterStandbyMode();
-                }
-            }
         }
         
         // Target camera values for smooth transitions

@@ -19,78 +19,70 @@ void RfConsoleView::addRssiSample(float rssi) {
 static void drawTimelineSatellite(LGFX_Sprite* canvas, int cx, int cy, SatIconType icon, bool isListening, bool isRising) {
     if (!canvas) return;
 
-    // 垂直对准微刻度线
+    // 1. 垂直对准微刻度线（上下两条指引刻度）
     uint16_t pointerCol = isListening ? 0x07E0 : 0x07FF;
     canvas->drawFastVLine(cx, cy - 8, 3, pointerCol);
     canvas->drawFastVLine(cx, cy + 6, 3, pointerCol);
 
-    // 呼吸动态信标光点
+    // 2. 呼吸动态信标光点
     bool pulse = ((millis() / 400) % 2 == 0);
     uint16_t beaconCol = isListening ? (pulse ? 0x07E0 : 0x04A0) : 0x07FF;
 
-    static LGFX_Sprite* s_satSprite = nullptr;
-    if (!s_satSprite) {
-        s_satSprite = new LGFX_Sprite(canvas);
-        s_satSprite->setColorDepth(16);
-        s_satSprite->createSprite(26, 26);
-        s_satSprite->setPivot(13, 13);
-    }
-
-    const uint16_t CHROMA = 0x0001;
-    s_satSprite->fillScreen(CHROMA);
-
-    int scx = 13;
-    int scy = 13;
+    // 3. 直接在 canvas 上以 (cx, cy) 为中心像素级绘制卫星实体，100% 可见且锐利
+    int scx = cx;
+    int scy = cy;
 
     if (icon == ICON_STATION) {
-        s_satSprite->fillRect(scx - 3, scy - 1, 7, 3, 0xD6BA);
-        s_satSprite->fillRect(scx - 1, scy - 2, 3, 5, 0xE71C);
-        s_satSprite->drawFastHLine(scx - 9, scy, 19, 0x7BEF);
-        s_satSprite->fillRect(scx - 9, scy - 4, 4, 9, 0x1B3F);
-        s_satSprite->drawRect(scx - 9, scy - 4, 4, 9, 0xFDA0);
-        s_satSprite->drawFastHLine(scx - 9, scy, 4, TFT_BLACK);
-        s_satSprite->fillRect(scx + 6, scy - 4, 4, 9, 0x1B3F);
-        s_satSprite->drawRect(scx + 6, scy - 4, 4, 9, 0xFDA0);
-        s_satSprite->drawFastHLine(scx + 6, scy, 4, TFT_BLACK);
-        s_satSprite->drawPixel(scx, scy, beaconCol);
+        // 空间站：核心舱 + 左右两翼大太阳能帆板
+        canvas->fillRect(scx - 3, scy - 1, 7, 3, 0xD6BA);
+        canvas->fillRect(scx - 1, scy - 2, 3, 5, 0xE71C);
+        canvas->drawFastHLine(scx - 9, scy, 19, 0x7BEF);
+        canvas->fillRect(scx - 9, scy - 4, 4, 9, 0x1B3F);
+        canvas->drawRect(scx - 9, scy - 4, 4, 9, 0xFDA0);
+        canvas->drawFastHLine(scx - 9, scy, 4, TFT_BLACK);
+        canvas->fillRect(scx + 6, scy - 4, 4, 9, 0x1B3F);
+        canvas->drawRect(scx + 6, scy - 4, 4, 9, 0xFDA0);
+        canvas->drawFastHLine(scx + 6, scy, 4, TFT_BLACK);
+        canvas->drawPixel(scx, scy, beaconCol);
     } else if (icon == ICON_DFH1) {
-        s_satSprite->fillCircle(scx, scy, 3, 0xD6BA);
-        s_satSprite->drawCircle(scx, scy, 3, 0x7BEF);
-        s_satSprite->drawPixel(scx - 1, scy - 1, 0xFFFF);
-        s_satSprite->drawLine(scx - 2, scy - 2, scx - 6, scy - 5, TFT_WHITE);
-        s_satSprite->drawLine(scx + 2, scy - 2, scx + 6, scy - 5, TFT_WHITE);
-        s_satSprite->drawLine(scx - 2, scy + 2, scx - 6, scy + 5, TFT_WHITE);
-        s_satSprite->drawLine(scx + 2, scy + 2, scx + 6, scy + 5, TFT_WHITE);
-        s_satSprite->drawPixel(scx, scy, beaconCol);
+        // 东方红一号：圆形球体 + 四根斜天线
+        canvas->fillCircle(scx, scy, 3, 0xD6BA);
+        canvas->drawCircle(scx, scy, 3, 0x7BEF);
+        canvas->drawPixel(scx - 1, scy - 1, 0xFFFF);
+        canvas->drawLine(scx - 2, scy - 2, scx - 6, scy - 5, TFT_WHITE);
+        canvas->drawLine(scx + 2, scy - 2, scx + 6, scy - 5, TFT_WHITE);
+        canvas->drawLine(scx - 2, scy + 2, scx - 6, scy + 5, TFT_WHITE);
+        canvas->drawLine(scx + 2, scy + 2, scx + 6, scy + 5, TFT_WHITE);
+        canvas->drawPixel(scx, scy, beaconCol);
     } else if (icon == ICON_WEATHER) {
-        s_satSprite->fillRect(scx - 2, scy - 2, 4, 5, 0xCE79);
-        s_satSprite->fillRect(scx - 8, scy - 4, 5, 9, 0x0AD5);
-        s_satSprite->drawRect(scx - 8, scy - 4, 5, 9, 0x345F);
-        s_satSprite->drawFastHLine(scx - 8, scy, 5, TFT_BLACK);
-        s_satSprite->fillRect(scx + 2, scy - 1, 3, 3, 0x4208);
-        s_satSprite->drawPixel(scx + 5, scy, beaconCol);
+        // 气象卫星：单侧大太阳翼 + 传感器舱
+        canvas->fillRect(scx - 2, scy - 2, 4, 5, 0xCE79);
+        canvas->fillRect(scx - 8, scy - 4, 5, 9, 0x0AD5);
+        canvas->drawRect(scx - 8, scy - 4, 5, 9, 0x345F);
+        canvas->drawFastHLine(scx - 8, scy, 5, TFT_BLACK);
+        canvas->fillRect(scx + 2, scy - 1, 3, 3, 0x4208);
+        canvas->drawPixel(scx + 5, scy, beaconCol);
     } else if (icon == ICON_NAVIGATION) {
-        s_satSprite->fillRect(scx - 2, scy - 3, 5, 7, 0xD6BA);
-        s_satSprite->fillRect(scx - 8, scy - 2, 5, 5, 0x1B3F);
-        s_satSprite->drawRect(scx - 8, scy - 2, 5, 5, 0xFDA0);
-        s_satSprite->fillRect(scx + 4, scy - 2, 5, 5, 0x1B3F);
-        s_satSprite->drawRect(scx + 4, scy - 2, 5, 5, 0xFDA0);
-        s_satSprite->drawFastHLine(scx - 2, scy + 4, 5, TFT_WHITE);
-        s_satSprite->drawPixel(scx, scy, beaconCol);
+        // 导航卫星：对称一字型大翼板 + 天线阵
+        canvas->fillRect(scx - 2, scy - 3, 5, 7, 0xD6BA);
+        canvas->fillRect(scx - 8, scy - 2, 5, 5, 0x1B3F);
+        canvas->drawRect(scx - 8, scy - 2, 5, 5, 0xFDA0);
+        canvas->fillRect(scx + 4, scy - 2, 5, 5, 0x1B3F);
+        canvas->drawRect(scx + 4, scy - 2, 5, 5, 0xFDA0);
+        canvas->drawFastHLine(scx - 2, scy + 4, 5, TFT_WHITE);
+        canvas->drawPixel(scx, scy, beaconCol);
     } else {
-        s_satSprite->fillRect(scx - 2, scy - 2, 5, 5, 0xD6BA);
-        s_satSprite->drawRect(scx - 2, scy - 2, 5, 5, 0x07FF);
-        s_satSprite->drawFastHLine(scx - 7, scy, 5, 0x1B3F);
-        s_satSprite->drawFastHLine(scx + 3, scy, 4, 0x01EF);
-        s_satSprite->drawFastHLine(scx - 3, scy, 7, 0xBDF7);
-        s_satSprite->fillRect(scx - 2, scy - 2, 5, 5, 0xFEA0);
-        s_satSprite->fillRect(scx - 1, scy - 1, 3, 3, 0xFFFF);
-        s_satSprite->drawFastVLine(scx, scy + 3, 2, TFT_WHITE);
-        s_satSprite->drawPixel(scx, scy + 4, beaconCol);
+        // 通用卫星：立方体舱体 + 左右太阳翼 + 信标
+        canvas->fillRect(scx - 2, scy - 2, 5, 5, 0xD6BA);
+        canvas->drawRect(scx - 2, scy - 2, 5, 5, 0x07FF);
+        canvas->drawFastHLine(scx - 7, scy, 5, 0x1B3F);
+        canvas->drawFastHLine(scx + 3, scy, 4, 0x01EF);
+        canvas->drawFastHLine(scx - 3, scy, 7, 0xBDF7);
+        canvas->fillRect(scx - 2, scy - 2, 5, 5, 0xFEA0);
+        canvas->fillRect(scx - 1, scy - 1, 3, 3, 0xFFFF);
+        canvas->drawFastVLine(scx, scy + 3, 2, TFT_WHITE);
+        canvas->drawPixel(scx, scy + 4, beaconCol);
     }
-
-    // 旋转 45° 呈现沿轨滑行姿态
-    s_satSprite->pushRotateZoom(canvas, (float)cx, (float)cy, 45.0f, 1.0f, 1.0f, CHROMA);
 }
 
 static const char* getCompass8Dir(float az) {
@@ -362,49 +354,57 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
         // 顶部精简雷达与时间轴监控区 (Y = 20 ~ 71)
         // ===================================================================
 
-        // 1. 方位、仰角与峰值仰角 (Y = 20)
+        // 1. 方位（左）+ 仰角/峰值仰角（右）合并一行 (Y = 20)
         canvas->setTextDatum(TL_DATUM);
         canvas->setTextColor(0xCE79);
-        char azBuf[36];
-        snprintf(azBuf, sizeof(azBuf), "%s:%03.0f° %s", I18N::get(TXT_RF_AZ), track.currentAz, getCompass8Dir(track.currentAz));
+        char azBuf[28];
+        // 方位角：只用短方向码（英文字母），节省宽度
+        snprintf(azBuf, sizeof(azBuf), "AZ:%03.0f°", track.currentAz);
         canvas->drawString(azBuf, 6, 20);
 
-        char elBuf[32];
-        uint16_t elCol = 0x7BEF;
+        // 仰角 + 最大仰角合并右对齐，避免三列重叠
         bool isRising = track.isRising;
+        uint16_t elCol = 0x7BEF;
+        char elBuf[36];
         if (track.currentEl > 0.0f) {
             elCol = isRising ? 0x07E0 : TFT_YELLOW;
-            snprintf(elBuf, sizeof(elBuf), "%s:%+.1f°%s", I18N::get(TXT_RF_EL), track.currentEl, isRising ? "^" : "v");
+            snprintf(elBuf, sizeof(elBuf), "EL:%+.1f°%s /%.0f°",
+                     track.currentEl, isRising ? "↑" : "↓", track.maxEl);
         } else {
-            snprintf(elBuf, sizeof(elBuf), "%s:%+.1f°", I18N::get(TXT_RF_EL), track.currentEl);
+            snprintf(elBuf, sizeof(elBuf), "EL:%+.1f° /%.0f°",
+                     track.currentEl, track.maxEl);
         }
-        canvas->setTextDatum(TC_DATUM);
-        canvas->setTextColor(elCol);
-        canvas->drawString(elBuf, 118, 20);
-
         canvas->setTextDatum(TR_DATUM);
-        canvas->setTextColor(0xFFE0);
-        char maxBuf[32];
-        snprintf(maxBuf, sizeof(maxBuf), "%s:%.1f°", I18N::get(TXT_RF_MAX_EL), track.maxEl);
-        canvas->drawString(maxBuf, width - 6, 20);
+        canvas->setTextColor(elCol);
+        canvas->drawString(elBuf, width - 6, 20);
 
-        // 2. 天线朝向推荐与多普勒频移 (Y = 31)
+        // 2. 天线指引（极简）+ 多普勒频移（无标签）(Y = 31)
+        // 天线指引：去掉冗长前缀标签，只保留方向码+角度
         canvas->setTextDatum(TL_DATUM);
         canvas->setTextColor(0x07FF);
-        char antBuf[48];
+        char antBuf[32];
         int elTarget = (int)track.currentEl;
         if (elTarget < 0) elTarget = 0;
-        snprintf(antBuf, sizeof(antBuf), "%s: %s %03.0f°/%02d°", I18N::get(TXT_RF_ANTENNA_DIR), getCompass8Dir(track.currentAz), track.currentAz, elTarget);
+        // 使用简短英文方向码（N/NE/E/SE/S/SW/W/NW），节省大量空间
+        {
+            float az = track.currentAz;
+            while (az < 0.0f) az += 360.0f;
+            while (az >= 360.0f) az -= 360.0f;
+            static const char* dirs8[8] = {"N","NE","E","SE","S","SW","W","NW"};
+            const char* shortDir = dirs8[(int)((az + 22.5f) / 45.0f) % 8];
+            snprintf(antBuf, sizeof(antBuf), "> %s %03.0f°/%02d°", shortDir, track.currentAz, elTarget);
+        }
         canvas->drawString(antBuf, 6, 31);
 
+        // 多普勒：去掉 "Dopp:" 标签，直接显示频移值+实际频率，颜色区分正负
         canvas->setTextDatum(TR_DATUM);
-        char dopBuf[40];
+        char dopBuf[36];
         uint16_t dopCol = (track.dopplerHz < -10.0f) ? 0xFBE0 : ((track.dopplerHz > 10.0f) ? 0x07FF : 0xFFFF);
         float actualFreq = track.baseFreqMHz + (track.dopplerHz / 1e6f);
         if (abs(track.dopplerHz) >= 1000.0f) {
-            snprintf(dopBuf, sizeof(dopBuf), "%s:%+.1fk (%.3fM)", I18N::get(TXT_RF_DOPPLER), track.dopplerHz / 1000.0f, actualFreq);
+            snprintf(dopBuf, sizeof(dopBuf), "%+.1fkHz %.3fM", track.dopplerHz / 1000.0f, actualFreq);
         } else {
-            snprintf(dopBuf, sizeof(dopBuf), "%s:%+.0fHz (%.3fM)", I18N::get(TXT_RF_DOPPLER), track.dopplerHz, actualFreq);
+            snprintf(dopBuf, sizeof(dopBuf), "%+.0fHz %.3fM", track.dopplerHz, actualFreq);
         }
         canvas->setTextColor(dopCol);
         canvas->drawString(dopBuf, width - 6, 31);
@@ -462,18 +462,6 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
         canvas->setTextDatum(TR_DATUM);
         canvas->setTextColor(0x7BEF);
         canvas->drawString("LOS", trackX + trackW, trackY - 10);
-
-        canvas->setTextDatum(TL_DATUM);
-        char passedBuf[32];
-        snprintf(passedBuf, sizeof(passedBuf), "%02d:%02d (%d%%)", elapsedSec / 60, elapsedSec % 60, (int)(progressRatio * 100));
-        canvas->setTextColor(0x07E0);
-        canvas->drawString(passedBuf, trackX, trackY + 7);
-
-        canvas->setTextDatum(TR_DATUM);
-        char remBuf[32];
-        snprintf(remBuf, sizeof(remBuf), "%02d:%02d", remSec / 60, remSec % 60);
-        canvas->setTextColor(0xFFE0);
-        canvas->drawString(remBuf, trackX + trackW, trackY + 7);
 
         // 在时间轴卫星图标正下方显示时间校准偏差（如 +20s 或 -15s），不占用额外底框空间
         if (track.timeOffsetSec != 0) {

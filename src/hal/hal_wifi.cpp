@@ -29,14 +29,12 @@ void HalWifi::begin(const char* ssid, const char* password) {
 
     LOG_I("APP", "Connecting to WiFi: %s", ssid);
     
-    // 1. 彻底重置并启动 STA 模式，确保底层 esp_wifi 硬件驱动完全就绪
-    WiFi.disconnect(true, true);
-    delay(50);
-    WiFi.mode(WIFI_OFF);
-    delay(50);
-    WiFi.mode(WIFI_STA);
+    // 1. 确保处于 STA 模式并唤醒 esp_wifi 射频硬件，绝不使用 WIFI_OFF 以防堆碎片导致驱动重新初始化失败(ESP_ERR_NO_MEM)
+    if (WiFi.getMode() != WIFI_STA) {
+        WiFi.mode(WIFI_STA);
+    }
     esp_wifi_start();
-    delay(50);
+    delay(20);
     
     // 2. 关键：彻底禁用 Wi-Fi 休眠（Modem Sleep），避免 TCP SYN-ACK 握手包被丢弃导致超时！
     WiFi.setSleep(false);
@@ -90,9 +88,8 @@ void HalWifi::begin(const char* ssid, const char* password) {
         LOG_I("APP", "\nWiFi Connected! IP: %s, DNS: %s", s_cachedIp.toString().c_str(), s_cachedDns.toString().c_str());
     } else {
         LOG_I("APP", "\nWiFi Connection Failed (Timeout).");
-        WiFi.disconnect(true, true);
-        delay(50);
-        WiFi.mode(WIFI_OFF);
+        WiFi.disconnect(false, false);
+        WiFi.setSleep(true);
     }
 }
 
@@ -144,11 +141,11 @@ std::vector<WiFiNetwork> HalWifi::scanNetworks() {
     std::vector<WiFiNetwork> networks;
     LOG_I("APP", "Scanning WiFi networks...");
     
-    WiFi.mode(WIFI_OFF);
-    delay(30);
-    WiFi.mode(WIFI_STA);
+    if (WiFi.getMode() != WIFI_STA) {
+        WiFi.mode(WIFI_STA);
+    }
     esp_wifi_start();
-    delay(50);
+    delay(20);
     
     int n = WiFi.scanNetworks(false, true);
     LOG_I("APP", "Found %d networks", n);
@@ -189,11 +186,11 @@ bool HalWifi::loadCredentials(String& outSsid, String& outPassword) {
 
 void HalWifi::disconnect() {
     WiFi.setAutoReconnect(false);
-    WiFi.disconnect(true, false);
-    delay(50);
+    WiFi.disconnect(true, true);
+    delay(30);
     WiFi.mode(WIFI_OFF);
     esp_wifi_stop();
-    delay(50);
-    LOG_I("APP", "WiFi disconnected, turned OFF and stopped to return memory to heap.");
+    delay(30);
+    LOG_I("APP", "WiFi disconnected, turned OFF and released ~35KB memory to heap.");
 }
 

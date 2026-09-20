@@ -1421,14 +1421,13 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
         if (currentSatTab == TAB_RECENT_LAUNCH) {
             if (recentLaunchDownloading) {
                 textColor = TFT_YELLOW;
-                msg = String(I18N::get(TXT_TAB_RECENT_LAUNCH)) + " " + I18N::get(TXT_DOWNLOADING) + " " + recentLaunchErrorMsg;
+                msg = recentLaunchErrorMsg.length() > 0 ? recentLaunchErrorMsg : String(I18N::get(TXT_REFRESHING_GP));
             } else if (recentLaunchDownloadSuccess) {
                 textColor = TFT_GREEN;
-                msg = I18N::get(TXT_UPDATE_SUCCESS_CACHE);
+                msg = recentLaunchErrorMsg.length() > 0 ? recentLaunchErrorMsg : String(I18N::get(TXT_UPDATE_SUCCESS_CACHE));
             } else {
                 textColor = getBannerTextColor(recentLaunchErrorMsg);
-                msg = (recentLaunchErrorMsg.indexOf("Busy") != -1 || recentLaunchErrorMsg.indexOf(u8"繁忙") != -1) ? 
-                      recentLaunchErrorMsg : (String(I18N::get(TXT_UPDATE_FAILED)) + recentLaunchErrorMsg);
+                msg = recentLaunchErrorMsg.length() > 0 ? recentLaunchErrorMsg : String(I18N::get(TXT_UPDATE_FAILED));
             }
         } else if (currentSatTab == TAB_ENCYCLOPEDIA) {
             msg = downloadErrorMsg;
