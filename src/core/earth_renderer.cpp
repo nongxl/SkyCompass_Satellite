@@ -692,35 +692,35 @@ static uint16_t scaleColor(uint16_t color, float factor) {
 static void drawRadioTransmissionWave(LGFX_Sprite* canvas, int sx, int sy, uint16_t satColor) {
     if (!canvas) return;
 
-    // 发射源微天线基准点：位于卫星本体正上方 (sx, sy - 6)
+    // 发射源微天线基准点：位于卫星本体正下方 (sx, sy + 6)，生动展现向地球/地面交互发射下行射频波
     int tx = sx;
-    int ty = sy - 6;
+    int ty = sy + 6;
 
-    // 动态射频发射脉冲 (每 200ms 一帧，三级循环辐射扩散)
+    // 动态射频发射脉冲 (每 200ms 一帧，三级循环向下辐射扩散)
     int phase = ((millis() / 200) % 3);
 
     // 1. 发射源核心信标天线点
     uint16_t centerCol = (phase == 0) ? TFT_WHITE : 0x07E0;
     canvas->drawPixel(tx, ty, centerCol);
 
-    // 2. 第一层发射微弧波 (半径 2~3px)
+    // 2. 第一层发射微弧波 (向下方地面扩散，凸面向下，半径 2~3px)
     uint16_t c1 = (phase == 0) ? 0x07E0 : ((phase == 1) ? TFT_WHITE : 0x04A0);
-    canvas->drawPixel(tx - 2, ty - 1, c1);
-    canvas->drawPixel(tx - 1, ty - 2, c1);
-    canvas->drawPixel(tx,     ty - 2, c1);
-    canvas->drawPixel(tx + 1, ty - 2, c1);
-    canvas->drawPixel(tx + 2, ty - 1, c1);
+    canvas->drawPixel(tx - 2, ty + 1, c1);
+    canvas->drawPixel(tx - 1, ty + 2, c1);
+    canvas->drawPixel(tx,     ty + 2, c1);
+    canvas->drawPixel(tx + 1, ty + 2, c1);
+    canvas->drawPixel(tx + 2, ty + 1, c1);
 
-    // 3. 第二层扩散发射大弧波 (半径 4~5px)
+    // 3. 第二层扩散发射大弧波 (进一步向下方地面扩散，半径 4~5px)
     if (phase >= 1) {
         uint16_t c2 = (phase == 1) ? 0x07FF : 0x03E0;
-        canvas->drawPixel(tx - 4, ty - 1, c2);
-        canvas->drawPixel(tx - 3, ty - 3, c2);
-        canvas->drawPixel(tx - 1, ty - 4, c2);
-        canvas->drawPixel(tx,     ty - 4, c2);
-        canvas->drawPixel(tx + 1, ty - 4, c2);
-        canvas->drawPixel(tx + 3, ty - 3, c2);
-        canvas->drawPixel(tx + 4, ty - 1, c2);
+        canvas->drawPixel(tx - 4, ty + 1, c2);
+        canvas->drawPixel(tx - 3, ty + 3, c2);
+        canvas->drawPixel(tx - 1, ty + 4, c2);
+        canvas->drawPixel(tx,     ty + 4, c2);
+        canvas->drawPixel(tx + 1, ty + 4, c2);
+        canvas->drawPixel(tx + 3, ty + 3, c2);
+        canvas->drawPixel(tx + 4, ty + 1, c2);
     }
 }
 

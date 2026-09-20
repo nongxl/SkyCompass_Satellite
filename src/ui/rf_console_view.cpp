@@ -18,6 +18,7 @@ RfConsoleView::RfConsoleView() {
 void RfConsoleView::addRssiSample(float rssi) {
     if (rssi < -135.0f) rssi = -135.0f;
     if (rssi > -40.0f) rssi = -40.0f;
+    _lastInstantRssi = rssi;
     _rssiHistory[_historyHead] = rssi;
     _historyHead = (_historyHead + 1) % WATERFALL_POINTS;
 }
@@ -183,6 +184,24 @@ static uint16_t getWaterfallHeatColor(float norm, bool isGlowLine) {
 void RfConsoleView::drawBackgroundWaterfall(LGFX_Sprite* canvas, int width, int height) {
     int bgY = 22;
     int bgH = height - bgY; // 113px
+
+    // 绘制极简暗态参考线与微型刻度标尺 (-80dBm 强信号门限 与 -105dBm 弱信号/卫星门限)
+    auto drawDottedRefLine = [&](float dbm, const char* label) {
+        float norm = (dbm - (-125.0f)) / 70.0f;
+        if (norm < 0.0f) norm = 0.0f;
+        if (norm > 1.0f) norm = 1.0f;
+        int ly = height - 1 - (int)(norm * (bgH - 6));
+        uint16_t lineColor = canvas->color565(22, 32, 44); // 极暗灰蓝，完全不干扰前景
+        for (int x = 2; x < width - 26; x += 4) {
+            canvas->drawPixel(x, ly, lineColor);
+        }
+        canvas->setTextDatum(MR_DATUM);
+        canvas->setTextColor(canvas->color565(55, 75, 95));
+        canvas->drawString(label, width - 4, ly);
+    };
+
+    drawDottedRefLine(-80.0f, "-80");
+    drawDottedRefLine(-105.0f, "-105");
 
     // 将采样数据渲染为热力图色彩的深邃背景频谱波形
     int prevX = -1;
@@ -592,9 +611,15 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
                 if (!p.decoded.fields.empty()) {
                     canvas->setTextColor(0xFFE0);
                     String fPreview = p.decoded.fields[0].key + ":" + p.decoded.fields[0].value + p.decoded.fields[0].unit;
-                    canvas->setClipRect(144, rowY, width - 148, rowH);
-                    canvas->drawString(fPreview.c_str(), 144, rowY + 2);
-                    canvas->clearClipRect();
+                    int maxClipW = width - 148;
+                    if (i == visibleRows - 1) {
+                        maxClipW = width - 148 - 66; // 为右下角常驻 RSSI 胶囊留出避让安全宽度
+                    }
+                    if (maxClipW > 10) {
+                        canvas->setClipRect(144, rowY, maxClipW, rowH);
+                        canvas->drawString(fPreview.c_str(), 144, rowY + 2);
+                        canvas->clearClipRect();
+                    }
                 }
             }
         } else {
@@ -640,6 +665,32 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
                 canvas->drawString(I18N::getLanguage() == LANG_ZH ? "[ 按 T 键注入测试遥测包 ]" : "[ Press T to inject test packet ]", width / 2, 115);
             }
         }
+    }
+
+    // 4. 屏幕右下角常驻实时数字 RSSI 呈现 (无全屏模态弹窗时)
+    if (!_showDetailModal && !_showDeleteModal) {
+        char rssiStr[24];
+        if (rm.isHardwareReady()) {
+            snprintf(rssiStr, sizeof(rssiStr), "RSSI:%+.0fdBm", _lastInstantRssi);
+        } else {
+            snprintf(rssiStr, sizeof(rssiStr), "RSSI:--dBm");
+        }
+        canvas->setTextDatum(BR_DATUM);
+        int tw = canvas->textWidth(rssiStr);
+        int bx = width - tw - 6;
+        int by = height - 12;
+        int bw = tw + 5;
+        int bh = 11;
+
+        // 半透明微深底衬与精致发光细外框
+        canvas->fillRect(bx, by, bw, bh, canvas->color565(10, 16, 24));
+        canvas->drawRect(bx, by, bw, bh, canvas->color565(30, 48, 68));
+
+        // 动态状态色彩：强信号亮红/橙，有效信号青绿，弱底噪柔和灰蓝
+        uint16_t valColor = (_lastInstantRssi > -80.0f) ? 0xFBE0 : ((_lastInstantRssi > -100.0f) ? 0x07FF : 0x7BEF);
+        if (!rm.isHardwareReady()) valColor = 0x52AA;
+        canvas->setTextColor(valColor, canvas->color565(10, 16, 24));
+        canvas->drawString(rssiStr, width - 4, height - 2);
     }
 
     // 4. 详情弹窗 (Detail Modal)

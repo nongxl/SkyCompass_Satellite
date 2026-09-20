@@ -37,6 +37,7 @@ private:
     float _rssiHistory[WATERFALL_POINTS];
     int _historyHead = 0;
     uint32_t _lastSampleTime = 0;
+    float _lastInstantRssi = -120.0f;
 
     // 绘制背景信号瀑布波形
     void drawBackgroundWaterfall(LGFX_Sprite* canvas, int width, int height);
