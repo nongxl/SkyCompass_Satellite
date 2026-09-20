@@ -2429,6 +2429,10 @@ void updateRadioTrackingPipeline(uint32_t currentSimTime, int32_t tmOffset) {
     if (appState != STATE_MAIN && !RfConsoleView::getInstance().isActive()) {
         return;
     }
+    // 当在主界面且用户正在长按时间调整键滚动时光机时，跳过后台射频管线调度，确保 3D 地球与卫星运动极致丝滑
+    if (!RfConsoleView::getInstance().isActive() && lastTimeAdjustMillis != 0) {
+        return;
+    }
     RadioTrackingPipeline::update(currentSimTime, tmOffset);
 }
 
@@ -4841,18 +4845,6 @@ void loop() {
                     const char* satViewStr = (currL == LANG_ZH) ? "视角锁定" : ((currL == LANG_JA) ? "視点固定" : ((currL == LANG_ES) ? "Vista sat" : "Sat View"));
                     earth_renderer->getCanvas()->drawString(satViewStr, 180, 5);
 
-                    // 绘制正在过境监听的动态 WiFi 弧形辐射波纹图标
-                    if (RadioManager::getInstance().isEmittingWaves()) {
-                        int wx = 168;
-                        int wy = 11;
-                        float phase = RadioManager::getInstance().getWavePhase();
-                        for (int arc = 1; arc <= 3; arc++) {
-                            int r = arc * 3 + (int)(phase * 2.5f);
-                            uint16_t col = (arc == 1) ? 0x07E0 : ((arc == 2) ? 0x07FF : 0x2965);
-                            earth_renderer->getCanvas()->drawCircle(wx, wy, r, col);
-                        }
-                        earth_renderer->getCanvas()->fillCircle(wx, wy, 2, 0x07E0);
-                    }
                     
                     double az = 0, el = 0, dist = 0, range_rate = 0, skew = 0;
                     bool hasValidPos = false;

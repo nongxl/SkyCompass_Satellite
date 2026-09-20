@@ -20,6 +20,7 @@ extern SatRealtimeCache g_satCaches[];
 extern void lockPassMutex();
 extern void unlockPassMutex();
 extern std::vector<PassEvent> recommendedPasses;
+extern unsigned long lastTimeAdjustMillis;
 
 void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
     GeodeticCoord obsRadio = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
@@ -193,14 +194,31 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
         static float s_cachedMaxEl = 0.0f;
 
         if (!passFound) {
+            // 缓存有效性判定：同一颗卫星、且当前模拟时间尚未超过过境结束+60秒、且过境点在未来合理窗口内（4小时内）
             if (s_cachedSatNorad == rNorad && s_cachedAos > 0 && s_cachedLos > s_cachedAos &&
-                currentSimTime >= s_cachedAos - 120 && currentSimTime <= s_cachedLos + 60) {
+                currentSimTime <= s_cachedLos + 60 && currentSimTime + 14400 >= s_cachedAos) {
                 trackInfo.aosTime = s_cachedAos;
                 trackInfo.tcaTime = s_cachedTca;
                 trackInfo.losTime = s_cachedLos;
                 trackInfo.maxEl = s_cachedMaxEl;
                 passFound = true;
             }
+        }
+
+        // 若用户正在长按按键快进调节时间（时光机高速滚动），跳过昂贵的未来步进轨道搜索，保持极致流畅
+        if (!passFound && lastTimeAdjustMillis != 0) {
+            if (s_cachedSatNorad == rNorad && s_cachedAos > 0) {
+                trackInfo.aosTime = s_cachedAos;
+                trackInfo.tcaTime = s_cachedTca;
+                trackInfo.losTime = s_cachedLos;
+                trackInfo.maxEl = s_cachedMaxEl;
+            } else {
+                trackInfo.aosTime = currentSimTime + 3600;
+                trackInfo.tcaTime = currentSimTime + 3900;
+                trackInfo.losTime = currentSimTime + 4200;
+                trackInfo.maxEl = 45.0f;
+            }
+            passFound = true;
         }
 
         if (!passFound) {
@@ -236,35 +254,39 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
                     }
                 }
             } else {
-                // 当前在地平线以下：向未来探测下一次升交时刻 AOS
+                // 当前在地平线以下：向未来探测下一次升交时刻 AOS (以 120 秒步长快速跳步探测未来 2 小时)
                 bool nextAosFound = false;
-                for (int s = 0; s < 120; s++) {
-                    uint32_t t = currentSimTime + s * 60;
+                for (int s = 0; s < 60; s++) {
+                    uint32_t t = currentSimTime + s * 120;
                     if (getEl(t) > 0.0f) {
-                        stepAos = (s > 0) ? (currentSimTime + (s - 1) * 60) : t;
+                        stepAos = (s > 0) ? (currentSimTime + (s - 1) * 120) : t;
                         nextAosFound = true;
                         break;
                     }
                 }
                 if (nextAosFound) {
                     stepLos = stepAos + 600;
-                    for (int s = 0; s < 30; s++) {
-                        uint32_t t = stepAos + (s + 1) * 30;
+                    for (int s = 0; s < 15; s++) {
+                        uint32_t t = stepAos + (s + 1) * 60;
                         if (getEl(t) <= 0.0f) {
                             stepLos = t;
                             break;
                         }
                     }
+                } else {
+                    // 未来 2 小时未探测到过境，将缓存有效区延后 2 小时，避免后续帧重复暴力全量探测
+                    stepAos = currentSimTime + 7200;
+                    stepLos = currentSimTime + 7800;
                 }
             }
 
-            // 在 [stepAos, stepLos] 整个过境区间内全面全局搜索最高仰角点 TCA
+            // 在 [stepAos, stepLos] 整个过境区间内快速采样最高仰角点 TCA
             float peakEl = -90.0f;
             uint32_t peakTime = (stepAos + stepLos) / 2;
             uint32_t searchSpan = (stepLos > stepAos) ? (stepLos - stepAos) : 600;
-            int numSteps = 15;
+            int numSteps = 8;
             uint32_t stepSec = searchSpan / numSteps;
-            if (stepSec < 5) stepSec = 5;
+            if (stepSec < 10) stepSec = 10;
 
             for (uint32_t t = stepAos; t <= stepLos; t += stepSec) {
                 float el = getEl(t);
