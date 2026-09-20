@@ -82,6 +82,17 @@ const std::vector<SatelliteTlmProfile>& TelemetryDecoder::getBuiltinProfiles() {
         edelveis.rules.push_back({"Temp", 3, FMT_INT8, 1.0f, 0.0f, "C", 0});
         s_builtinProfiles.push_back(edelveis);
 
+        // 5. PROVES-Electra (NORAD 69795) / PySquared 平台
+        SatelliteTlmProfile proves;
+        proves.noradId = 69795;
+        proves.satName = "PROVES-Electra";
+        proves.frameType = "PROVES PySquared";
+        proves.rules.push_back({"Vbat", 1, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        proves.rules.push_back({"Temp", 3, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        proves.rules.push_back({"I_bus", 4, FMT_UINT16_LE, 0.1f, 0.0f, "mA", 1});
+        proves.rules.push_back({"Reboot", 6, FMT_UINT16_LE, 1.0f, 0.0f, "", 0});
+        s_builtinProfiles.push_back(proves);
+
         s_initialized = true;
     }
     return s_builtinProfiles;

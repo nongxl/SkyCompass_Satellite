@@ -33,6 +33,78 @@ void RadioManager::init() {
     _initialized = true;
 }
 
+static void parseLoRaParams(const String& modeStr, uint32_t noradId, float& outBw, uint8_t& outSf, uint8_t& outCr, uint8_t& outSyncWord) {
+    outBw = 125.0f;
+    outSf = 9;
+    outCr = 7; // 默认 4/7
+    outSyncWord = 0x12;
+
+    String s = modeStr;
+    s.toUpperCase();
+
+    // 1. 扩频因子 SF (支持 SF5 ~ SF12)
+    int idxSf = s.indexOf("SF");
+    if (idxSf != -1) {
+        int val = s.substring(idxSf + 2).toInt();
+        if (val >= 5 && val <= 12) {
+            outSf = (uint8_t)val;
+        }
+    }
+
+    // 2. 带宽 BW (kHz)
+    int idxBw = s.indexOf("BW");
+    if (idxBw != -1) {
+        float val = s.substring(idxBw + 2).toFloat();
+        if (val > 10.0f && val < 600.0f) {
+            outBw = val;
+        }
+    }
+
+    // 3. 编码率 CR (支持 CR4/5, CR4:5, CR4/7, CR4:7, CR4/8 等)
+    int idxCr = s.indexOf("CR");
+    if (idxCr != -1) {
+        String crPart = s.substring(idxCr + 2);
+        if (crPart.startsWith("4/5") || crPart.startsWith("4:5") || crPart.startsWith("5")) {
+            outCr = 5;
+        } else if (crPart.startsWith("4/6") || crPart.startsWith("4:6") || crPart.startsWith("6")) {
+            outCr = 6;
+        } else if (crPart.startsWith("4/7") || crPart.startsWith("4:7") || crPart.startsWith("7")) {
+            outCr = 7;
+        } else if (crPart.startsWith("4/8") || crPart.startsWith("4:8") || crPart.startsWith("8")) {
+            outCr = 8;
+        }
+    }
+
+    // 4. 同步字 SyncWord (例如 SW18 或 SW12)
+    int idxSw = s.indexOf("SW");
+    if (idxSw != -1) {
+        long val = strtol(s.substring(idxSw + 2).c_str(), nullptr, 16);
+        if (val > 0 && val <= 0xFF) {
+            outSyncWord = (uint8_t)val;
+        }
+    }
+
+    // 5. 针对已知卫星 NORAD ID 兜底补充校准
+    if (noradId == 69795) { // PROVES-Electra
+        outSf = 8;
+        outCr = 5; // 4/5
+        outBw = 125.0f;
+        outSyncWord = 0x12;
+    } else if (noradId == 46494) { // NORBI
+        outSf = 9;
+        outCr = 7;
+    } else if (noradId == 61751) { // Vladivostok-1
+        outSf = 10;
+        outCr = 7;
+    } else if (noradId == 62676) { // FOSSASAT-2E
+        outSf = 10;
+        outCr = 7;
+    } else if (noradId == 57172) { // UMKA-1
+        outSf = 8;
+        outCr = 5;
+    }
+}
+
 bool RadioManager::isHardwareReady() const {
     return HardwareConfig::getInstance().isEnabled(HW_MOD_CAP_LORA1262) &&
            HalRadio::getInstance().isHardwareDetected();
@@ -81,11 +153,14 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
                 // 默认 4.8kbps, dev 5kHz, bw 50kHz
                 HalRadio::getInstance().configFSK(targetFreq, 4.8f, 5.0f, 50.0f);
             } else {
-                // 默认 LoRa SF9 / SF10, 125kHz
+                // 自适应解析 LoRa 调制参数 (BW, SF, CR, SyncWord)
+                float bw = 125.0f;
                 uint8_t sf = 9;
-                if (targetNorad == 46494) sf = 9;  // NORBI
-                else if (targetNorad == 61751) sf = 10; // Vladivostok-1
-                HalRadio::getInstance().configLoRa(targetFreq, 125.0f, sf, 7, 0x12);
+                uint8_t cr = 7;
+                uint8_t syncWord = 0x12;
+                parseLoRaParams(targetMode, targetNorad, bw, sf, cr, syncWord);
+
+                HalRadio::getInstance().configLoRa(targetFreq, bw, sf, cr, syncWord);
             }
 
             _isListening = true;

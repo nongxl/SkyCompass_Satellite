@@ -644,6 +644,28 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         false  // defaultSelected
     },
 
+    // 69795 PROVES-Electra (加州大学圣克鲁兹分校开源立方星)
+    {
+        69795,
+        "PROVES-Electra",
+        Category::COMMUNICATIONS,
+        ICON_SATELLITE,
+        "加州大学圣克鲁兹分校(UCSC)基于开源PySquared架构研制的1U立方星，由国际空间站释放。以437.400MHz下行发射LoRa扩频遥测(SF8/BW 125k/CR 4:5, 同步字0x12)，是TinyGS全球分布式地面站网络极其活跃的核心目标。",
+        "1U CubeSat developed by UC Santa Cruz based on open-source PySquared architecture, deployed from ISS. Transmits 437.400 MHz LoRa telemetry (SF8/BW 125k/CR 4:5, SyncWord 0x12), highly active on TinyGS.",
+        "カリフォルニア大学サンタクルーズ校(UCSC)開発のオープンソース1U CubeSat。ISSから放出され、437.400MHz LoRa(SF8/BW 125k/CR 4:5)でテレメトリを送信するTinyGSの人気衛星。",
+        "CubeSat 1U de UC Santa Cruz basado en PySquared de codigo abierto, desplegado desde la ISS. Transmite telemetria LoRa en 437.400 MHz (SF8/BW 125k/CR 4:5), muy activo en TinyGS.",
+        FLAG_RADIO | FLAG_SCIENCE,
+        TFT_MAGENTA,
+        0,
+        9.0,
+        SAT_TYPE_HAM,
+        "437.400",
+        "LoRa (SF8/BW125/CR4:5)",
+        "",
+        "",
+        false  // defaultSelected
+    },
+
     // 40908 LilacSat-2 (哈工大 CAS-3H 紫丁香二号)
     {
         40908,

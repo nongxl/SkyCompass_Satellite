@@ -431,9 +431,16 @@ static const BuiltinTLEItem g_builtin_tle_database[] = {
         "1 36830U 10037A   26262.27809029 -.00000062  00000+0  00000+0 0  9993",
         "2 36830   0.0154 165.3226 0005646  13.7903 272.1983  1.00272339 59318"
     },
+    // 69795 PROVES-Electra
+    {
+        69795,
+        "PROVES-Electra",
+        "1 69795U 98067YK  26250.72444797  .00061681  00000-0  85325-3 0  9993",
+        "2 69795  51.6289 249.7261 0007534 107.8753 252.3061 15.56497378104760"
+    },
 };
 
-static const size_t g_builtin_tle_count = 59;
+static const size_t g_builtin_tle_count = 60;
 
 inline bool getBuiltinTLE(uint32_t noradId, TLEData& outTle) {
     for (size_t i = 0; i < g_builtin_tle_count; i++) {
