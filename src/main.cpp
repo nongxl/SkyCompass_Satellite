@@ -3996,6 +3996,7 @@ void loop() {
             hardware_wizard.draw(earth_renderer->getCanvas());
             pushCanvasWithFilter();
             updateChainMonoDisplay();
+            return;
         }
         
         // Target camera values for smooth transitions
