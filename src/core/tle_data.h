@@ -32,6 +32,9 @@ public:
     static TLEData getNORBY2_TLE();
     static TLEData getUMKA1_TLE();
     
+    // 统一获取出厂预置最新 TLE (覆盖全部 59 颗预置卫星)
+    static bool getBuiltinTLE(uint32_t noradId, TLEData& outTle);
+    
     // For Phase 3 offline testing, we need a time anchor that matches the TLE epochs.
     // Returns seconds since UNIX epoch for the mock time (June 10, 2024).
     static uint32_t getMockTimeAnchor();

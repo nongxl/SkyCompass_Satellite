@@ -51,7 +51,11 @@ cd SkyCompass_Satellite
 
 ### 3. 编译与烧录命令
 
-在项目根目录下执行：
+#### (推荐) 打包前更新出厂轨道数据
+在编译发布固件前，推荐先运行出厂 TLE 更新脚本，将当天最新的卫星轨道根数自动烘焙进源码只读区。这样首次烧录后即使不上网也能立即高精度预测，并彻底避免首次开机联网连续请求 CelesTrak 触发 IP 封锁（HTTP 403）：
+```bash
+python scripts/update_builtin_tles.py
+```
 
 #### 仅编译检查语法
 ```bash

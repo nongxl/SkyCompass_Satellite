@@ -272,6 +272,12 @@ TLEData TLEManager::getUMKA1_TLE() {
     return d;
 }
 
+#include "builtin_tles.h"
+
+bool TLEManager::getBuiltinTLE(uint32_t noradId, TLEData& outTle) {
+    return ::getBuiltinTLE(noradId, outTle);
+}
+
 uint32_t TLEManager::getMockTimeAnchor() {
     // 2026-06-14 00:00:00 UTC = 1781395200
     // MUST match the 2026 TLE epoch

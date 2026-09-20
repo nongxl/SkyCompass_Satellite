@@ -36,6 +36,25 @@
 
 ![Hardware Connection Diagram](docs/schematic_diagram.png)
 
+### Preset Hardware Scenarios Quick Reference
+
+Users can freely choose any of the following combinations based on available hardware modules. All scenarios are supported and tested in firmware:
+
+| Hardware Combination | Top 14-Pin Slot | Cap Top HY2.0-4P Port | Side Grove Port A | Hardware Features & Use Cases |
+| :--- | :--- | :--- | :--- | :--- |
+| **Cap + Gimbal + Pixel Screen** | **Cap LoRa-1262** (GNSS+RF) | **Unit 8Servos** (I2C: G8/G9) | **Chain Mono** (UART: G1/G2) | **All-in-One Concurrency**: Precision GNSS, telemetry capture, 3-axis mechanical gimbal, and 8x8 pixel display all active simultaneously |
+| **Cap + Mechanical Gimbal** | **Cap LoRa-1262** (GNSS+RF) | **Unit 8Servos** (I2C: G8/G9) | Idle / Spare | Physical 3-axis space tracking, reproducing orbital heading, peak elevation, and satellite transit progress |
+| **Cap + Pixel Screen** | **Cap LoRa-1262** (GNSS+RF) | Idle / Spare | **Chain Mono** (UART: G1/G2) | Portable dual-band positioning, telemetry listening, and real-time pass animations on external 8x8 pixel display |
+| **Cap Standalone (Handheld)** | **Cap LoRa-1262** (GNSS+RF) | Idle / Spare | Idle / Spare | **Handheld Portable**: Zero dangling cables, ultra-compact form factor with high-precision GNSS and 433~438MHz RF reception |
+| **Unit GPS Portable (Hiking)** | Not attached | - | **Unit GPS v1.1** (UART Dedicated) | External high-sensitivity ceramic antenna GNSS module, ideal for outdoor field observations |
+| **Standalone Gimbal (No Cap)** | Not attached | - | **Unit 8Servos** (I2C: G2/G1) | Connects directly to servo driver, synchronized via WiFi NTP or offline cached coordinates |
+| **Standalone Pixel Screen (No Cap)**| Not attached | - | **Chain Mono** (UART: G1/G2) | Connects directly to 8x8 display, synchronized via WiFi NTP or offline cached coordinates |
+| **Standalone Simulator (No HW)** | No external hardware | - | Idle | Zero extra hardware, runs software simulation using WiFi NTP and manual/preset coordinates (`C` key) |
+
+> 💡 **Hardware Setup Wizard**: Press **`M`** on any main screen to open the interactive Hardware Wizard, toggle connected modules, validate bus conflicts, and view real-time wiring guides.  
+> ⚠️ **Servo Power Requirement**: When driving the 3-axis Lego gimbal, connect an **external 5V DC power supply** to Unit 8Servos (peak current up to 1.5A). Do NOT power 3 servos solely from Cardputer.  
+> 🔌 **Chain Mono Port**: Connect the Grove cable to the module's **IN port** (connecting to the OUT port will prevent communication).
+
 ---
 
 ## Interactive Controls & Keybindings
@@ -102,9 +121,30 @@ SkyCompass_Satellite/
 │   │   └── startup_view.*        # Boot-up 3D spinning globe & progress bar
 │   └── main.cpp                  # setup(), loop() event pump & background orbit task
 ├── docs/                         # Technical whitepapers and hardware design documents
-├── scripts/                      # PC companion utilities (screenshot listener, map/pointcloud generators)
+├── scripts/                      # PC companion utilities & offline preprocessing toolchain
+│   ├── update_builtin_tles.py    # Factory TLE automated fetcher & C++ header baking script
+│   ├── get_screenshot.py         # Lossless raw RGB565 serial stream receiver & BMP reconstructor
+│   ├── gen_light_points.py       # NASA Black Marble city lights point-cloud sampler
+│   └── optimize_earth_data.py    # Offline trigonometric precomputation for continental vectors
 └── platformio.ini                # PlatformIO build configurations and library dependencies
 ```
+
+### Factory Firmware Packaging & Built-in TLE Updates (scripts/update_builtin_tles.py)
+
+To ensure immediate out-of-the-box offline precision right after a clean flash without requiring an immediate WiFi connection, and to prevent initial boot-up rate-limiting (HTTP 403) from CelesTrak, the project provides an automated factory TLE baking script `scripts/update_builtin_tles.py`:
+
+```bash
+# Step 1: Fetch fresh orbital data for all 59 built-in satellites and bake into src/core/builtin_tles.h
+python scripts/update_builtin_tles.py
+
+# Step 2: Build and flash firmware
+pio run -t upload
+```
+
+- **Full Catalog Static Parsing**: Automatically inspects `src/core/encyclopedia.cpp` to extract NORAD IDs and metadata for all 59 built-in targets (Tiangong, ISS, HST, navigation constellations, amateur radio satellites, deep space observatories, etc.);
+- **Dual-channel Fallback & Dynamics Engine**: Prioritizes official CelesTrak GP API, seamlessly falling back to open-source orbital mirrors when rate-limited; deep space missions (JWST, Queqiao, Roman) automatically utilize dedicated Keplerian dynamics fitting for 100% coverage;
+- **Firmware Static Baking**: Auto-generates read-only C++ header `src/core/builtin_tles.h` with structured TLE arrays and exact second-level UTC timestamps;
+- **First-boot Cache Seeding**: On virgin boot (blank LittleFS), the firmware immediately seeds LittleFS with this fresh factory data. Subsequent boots and WiFi syncs reuse valid local cache, eliminating redundant bulk network calls and preventing WAF rate-limiting.
 
 ---
 

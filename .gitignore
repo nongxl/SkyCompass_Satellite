@@ -3,8 +3,9 @@
 .cache/
 compile_commands.json
 *.log
-logs.txt
-docs/
+docs/*
+!docs/*.md
+!docs/schematic_diagram.png
 prompts/
 .gitignore
 plan.txt

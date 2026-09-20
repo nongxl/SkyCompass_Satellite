@@ -2206,26 +2206,18 @@ void setup() {
                     g_satellites[i].tle = loaded_tle;
                     unlockSatMutex();
                 } else {
-                    // Fallback using noradId instead of hardcoded index
+                    // 全量出厂最新 TLE 数据库兜底 (覆盖全部 59 颗卫星)
                     uint32_t norad = g_satellites[i].noradId;
-                    lockSatMutex();
-                    if (norad == 25544) g_satellites[i].tle = TLEManager::getISS_TLE();
-                    else if (norad == 48274) g_satellites[i].tle = TLEManager::getTiangong_TLE();
-                    else if (norad == 20580) g_satellites[i].tle = TLEManager::getHubble_TLE();
-                    else if (norad == 50463) g_satellites[i].tle = TLEManager::getJWST_TLE();
-                    else if (norad == 100532) g_satellites[i].tle = TLEManager::getNGRST_TLE();
-                    else if (norad == 34937) g_satellites[i].tle = TLEManager::getHerschel_TLE();
-                    else if (norad == 27607) g_satellites[i].tle = TLEManager::getSO50_TLE();
-                    else if (norad == 43017) g_satellites[i].tle = TLEManager::getAO91_TLE();
-                    else if (norad == 46494) g_satellites[i].tle = TLEManager::getNORBI_TLE();
-                    else if (norad == 62676) g_satellites[i].tle = TLEManager::getFOSSASAT2E_TLE();
-                    else if (norad == 40908) g_satellites[i].tle = TLEManager::getLilacSat2_TLE();
-                    else if (norad == 50466) g_satellites[i].tle = TLEManager::getXW3_TLE();
-                    else if (norad == 59112) g_satellites[i].tle = TLEManager::getSONATE2_TLE();
-                    else if (norad == 61751) g_satellites[i].tle = TLEManager::getVladivostok1_TLE();
-                    else if (norad == 57179) g_satellites[i].tle = TLEManager::getNORBY2_TLE();
-                    else if (norad == 57172) g_satellites[i].tle = TLEManager::getUMKA1_TLE();
-                    unlockSatMutex();
+                    TLEData builtinTle;
+                    if (TLEManager::getBuiltinTLE(norad, builtinTle)) {
+                        builtinTle.baseScore = g_satellites[i].baseScore;
+                        lockSatMutex();
+                        g_satellites[i].tle = builtinTle;
+                        unlockSatMutex();
+                        // 首次烧录自初始化：自动将出厂最新 TLE 写入本地 LittleFS 缓存
+                        // 这样首次开机直接建立有效缓存，开机联网时不会一口气连续请求 37 次 CelesTrak 触发 403
+                        TLEUpdater::saveToCache(norad, builtinTle, 0);
+                    }
                 }
                 
                 if (g_satellites[i].tle.line1.length() > 0) {
