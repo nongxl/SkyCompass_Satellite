@@ -2478,7 +2478,9 @@ void updateRadioTrackingPipeline(uint32_t currentSimTime, int32_t tmOffset) {
 }
 
 void loop() {
-    gimbal.tick();
+    if (HardwareConfig::getInstance().isEnabled(HW_MOD_UNIT_8SERVOS)) {
+        gimbal.tick();
+    }
     // Resume suspended predictorTask after 500ms debounce of time machine adjustments
     if (lastTimeAdjustMillis != 0 && millis() - lastTimeAdjustMillis > 500) {
         lastTimeAdjustMillis = 0;
@@ -3147,11 +3149,13 @@ void loop() {
         if ((M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) || justW) {
             if (appState == STATE_MAIN) {
                 if (justShift) {
-                    appState = STATE_SERVO_TEST;
-                    servo_test_view.reset();
-                    g_imuSamplingEnabled = false;
-                    delay(15);
-                    gimbal.enterManualTest();
+                    if (HardwareConfig::getInstance().isEnabled(HW_MOD_UNIT_8SERVOS)) {
+                        appState = STATE_SERVO_TEST;
+                        servo_test_view.reset();
+                        g_imuSamplingEnabled = false;
+                        delay(15);
+                        gimbal.enterManualTest();
+                    }
                 } else if (justTab) {
                     int nextMode = (earth_renderer->getVisualMode() + 1) % 2;
                     earth_renderer->setVisualMode(nextMode);
@@ -4809,7 +4813,7 @@ void loop() {
         updateRadioTrackingPipeline(current_unix + timeMachineOffset, timeMachineOffset);
 
         // Update 3-axis Gimbal Targets based on active sat tracking (地表全天自主巡天跟踪站 Autonomous Sky Patrol)
-        if (gimbal.isOnline() && appState != STATE_SERVO_TEST) {
+        if (HardwareConfig::getInstance().isEnabled(HW_MOD_UNIT_8SERVOS) && gimbal.isOnline() && appState != STATE_SERVO_TEST) {
             GimbalTrackingPipeline::update(current_unix + timeMachineOffset);
         }
         
