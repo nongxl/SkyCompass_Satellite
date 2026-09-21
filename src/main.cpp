@@ -573,8 +573,8 @@ void predictorTask(void* parameter) {
             continue;
         }
         
-        // Heap Protection: 检查剩余总内存和最大连续内存块（推算峰值开销仅需约 3~4KB，设为 14KB/2.5KB 兼顾多卫星与系统安全）
-        if (ESP.getFreeHeap() < 14000 || ESP.getMaxAllocHeap() < 2500) {
+        // Heap Protection: 检查剩余总内存和最大连续内存块
+        if (ESP.getFreeHeap() < 16000 || ESP.getMaxAllocHeap() < 3000) {
             LOG_I("APP", "Predictor task deferred: low heap safety guard triggered (free: %u, maxBlock: %u)", 
                   (unsigned int)ESP.getFreeHeap(), (unsigned int)ESP.getMaxAllocHeap());
             vTaskDelay(pdMS_TO_TICKS(1000));
@@ -650,7 +650,7 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (ESP.getFreeHeap() < 14000 || ESP.getMaxAllocHeap() < 2500) {
+                if (ESP.getFreeHeap() < 16000 || ESP.getMaxAllocHeap() < 3000) {
                     LOG_I("APP", "Predictor task Phase 1 safely limited: heap protection (free: %u, passes: %d)", 
                           (unsigned int)ESP.getFreeHeap(), (int)phase1Passes.size());
                     phase1AbortedByHeap = true;
@@ -700,7 +700,7 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (phase1Passes.size() >= 24 || ESP.getFreeHeap() < 14000 || ESP.getMaxAllocHeap() < 2500) {
+                if (phase1Passes.size() >= 24 || ESP.getFreeHeap() < 16000 || ESP.getMaxAllocHeap() < 3000) {
                     break;
                 }
                 
@@ -747,44 +747,37 @@ void predictorTask(void* parameter) {
                 continue;
             }
             
-            // 立即发布 Phase 1 今夜过境至 UI！
-            std::vector<PassEvent> upcomingPhase1;
-            upcomingPhase1.reserve(phase1Passes.size());
-            for (const auto& pass : phase1Passes) {
-                if (pass.losTime >= current_unix + timeMachineOffset) {
-                    upcomingPhase1.push_back(pass);
-                }
-            }
-            std::sort(upcomingPhase1.begin(), upcomingPhase1.end(), [](const PassEvent& a, const PassEvent& b) {
+            // === 零内存分配就地整理 Phase 1 今夜过境 ===
+            uint32_t nowTs1 = current_unix + timeMachineOffset;
+            phase1Passes.erase(std::remove_if(phase1Passes.begin(), phase1Passes.end(), [nowTs1](const PassEvent& p) {
+                return p.losTime < nowTs1;
+            }), phase1Passes.end());
+
+            std::sort(phase1Passes.begin(), phase1Passes.end(), [](const PassEvent& a, const PassEvent& b) {
                 return a.aosTime < b.aosTime;
             });
-            if (upcomingPhase1.size() > 24) {
-                upcomingPhase1.resize(24);
+            if (phase1Passes.size() > 24) {
+                phase1Passes.resize(24);
             }
             
             std::vector<TreeItem> tempDisplayTree1;
-            rebuildTreeLocal(tempDisplayTree1, upcomingPhase1, current_unix + timeMachineOffset);
+            tempDisplayTree1.reserve(phase1Passes.size() + 4);
+            rebuildTreeLocal(tempDisplayTree1, phase1Passes, nowTs1);
             
-            // 立即以 swap 零拷贝安全发布至 UI，绝不执行 operator= 避免 bad_alloc 崩溃
             lockPassMutex();
-            recommendedPasses.swap(upcomingPhase1);
+            recommendedPasses = phase1Passes; // 快速快照发布至 UI（此时受限至多 24 项，开销极低）
             displayTree.swap(tempDisplayTree1);
             predictionsReady = true;
             lastPredictionBaseTime = startTime;
             g_passTreeVersion++;
             unlockPassMutex();
             
-            // 释放临时树，但完整保留 phase1Passes 作为 Phase 2 坚实基础
             tempDisplayTree1.clear();
             tempDisplayTree1.shrink_to_fit();
-            upcomingPhase1.clear();
-            upcomingPhase1.shrink_to_fit();
             
             // === PHASE 2: Background 7-Day Full Pass Calculation ===
             completedCount = 0;
-            std::vector<PassEvent> allPasses = phase1Passes; // 继承今晚所有有效事件，杜绝今晚事件被未来挤掉！
-            phase1Passes.clear();
-            phase1Passes.shrink_to_fit();
+            std::vector<PassEvent> allPasses = std::move(phase1Passes); // 0 拷贝所有权移交，杜绝多 vector 并存内存膨胀！
             
             auto isAlreadyInAllPasses = [&](const PassEvent& p) -> bool {
                 for (const auto& exist : allPasses) {
@@ -801,7 +794,7 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (ESP.getFreeHeap() < 14000 || ESP.getMaxAllocHeap() < 2500 || allPasses.size() >= 48) {
+                if (ESP.getFreeHeap() < 16000 || ESP.getMaxAllocHeap() < 3000 || allPasses.size() >= 32) {
                     LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
                           ESP.getFreeHeap(), (int)allPasses.size());
                     break;
@@ -852,7 +845,7 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (ESP.getFreeHeap() < 14000 || ESP.getMaxAllocHeap() < 2500 || allPasses.size() >= 48) {
+                if (ESP.getFreeHeap() < 16000 || ESP.getMaxAllocHeap() < 3000 || allPasses.size() >= 32) {
                     LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
                           ESP.getFreeHeap(), (int)allPasses.size());
                     break;
@@ -899,58 +892,47 @@ void predictorTask(void* parameter) {
             continue;
         }
         
-        // Filter out past passes relative to the simulated time
-        std::vector<PassEvent> upcomingPasses;
-        upcomingPasses.reserve(allPasses.size());
-        for (const auto& pass : allPasses) {
-            if (pass.losTime >= current_unix + timeMachineOffset) {
-                upcomingPasses.push_back(pass);
-            }
-        }
+        // === 零内存分配的就地整理与容量裁剪，根除多 vector 复制导致的 OOM 崩溃 ===
+        uint32_t nowTs = current_unix + timeMachineOffset;
         
-        // 核心保护机制：确保“今晚（24小时内）”的所有有效事件完整保留，绝不被未来事件挤掉
-        uint32_t tonightLimit = current_unix + timeMachineOffset + 24 * 3600;
-        std::vector<PassEvent> tonightList;
-        std::vector<PassEvent> futureList;
-        tonightList.reserve(upcomingPasses.size());
-        futureList.reserve(upcomingPasses.size());
+        // 1. 就地移除已落山/已结束的事件 (0 字节内存分配)
+        allPasses.erase(std::remove_if(allPasses.begin(), allPasses.end(), [nowTs](const PassEvent& p) {
+            return p.losTime < nowTs;
+        }), allPasses.end());
 
-        for (const auto& p : upcomingPasses) {
-            if (p.aosTime < tonightLimit) {
-                tonightList.push_back(p);
-            } else {
-                futureList.push_back(p);
-            }
-        }
+        // 2. 就地二分分区：今晚（24小时内）事件在前，未来事件在后 (0 字节内存分配)
+        uint32_t tonightLimit = nowTs + 24 * 3600;
+        auto futureBegin = std::partition(allPasses.begin(), allPasses.end(), [tonightLimit](const PassEvent& p) {
+            return p.aosTime < tonightLimit;
+        });
 
-        // 未来事件按分数优先（高质量优先），其次按时间先后排列
-        std::sort(futureList.begin(), futureList.end(), [](const PassEvent& a, const PassEvent& b) {
+        // 3. 对未来事件就地按质量评分降序、时间先后升序排序 (0 字节内存分配)
+        std::sort(futureBegin, allPasses.end(), [](const PassEvent& a, const PassEvent& b) {
             if (a.score != b.score) return a.score > b.score;
             return a.aosTime < b.aosTime;
         });
 
-        // 总常驻事件容量放宽至 36 个（满足用户对丰富过境事件的需求）
-        const size_t TOTAL_MAX_PASSES = 36;
-        size_t allowedFuture = (TOTAL_MAX_PASSES > tonightList.size()) ? (TOTAL_MAX_PASSES - tonightList.size()) : 0;
-        if (futureList.size() > allowedFuture) {
-            futureList.resize(allowedFuture);
+        // 4. 就地截断未来事件，总常驻容量控制在 32 个以内 (释放尾部内存，0 字节分配)
+        size_t tonightCount = std::distance(allPasses.begin(), futureBegin);
+        const size_t TOTAL_MAX_PASSES = 32;
+        size_t allowedFuture = (TOTAL_MAX_PASSES > tonightCount) ? (TOTAL_MAX_PASSES - tonightCount) : 0;
+        size_t actualFuture = std::distance(futureBegin, allPasses.end());
+        if (actualFuture > allowedFuture) {
+            allPasses.erase(futureBegin + allowedFuture, allPasses.end());
         }
 
-        // 合并今晚与未来事件
-        upcomingPasses = std::move(tonightList);
-        upcomingPasses.insert(upcomingPasses.end(), futureList.begin(), futureList.end());
-
-        // 最终列表统一按时间先后升序排列，使 UI 各分类展开均呈现清晰的时间流
-        std::sort(upcomingPasses.begin(), upcomingPasses.end(), [](const PassEvent& a, const PassEvent& b) {
+        // 5. 最终列表整体按时间升序排列 (0 字节内存分配)
+        std::sort(allPasses.begin(), allPasses.end(), [](const PassEvent& a, const PassEvent& b) {
             return a.aosTime < b.aosTime;
         });
 
-        // Compute local temporary variables outside the critical section to prevent malloc/OOM within spinlocks
+        // 6. 重建显示树并以 swap 零拷贝原子置换至 UI
         std::vector<TreeItem> tempDisplayTree;
-        rebuildTreeLocal(tempDisplayTree, upcomingPasses, current_unix + timeMachineOffset);
+        tempDisplayTree.reserve(allPasses.size() + 4);
+        rebuildTreeLocal(tempDisplayTree, allPasses, nowTs);
         
         lockPassMutex();
-        recommendedPasses.swap(upcomingPasses);
+        recommendedPasses.swap(allPasses);
         displayTree.swap(tempDisplayTree);
         predictionsReady = true;
         lastPredictionBaseTime = startTime; // 写入本次成功的基准时间缓存
@@ -960,8 +942,6 @@ void predictorTask(void* parameter) {
         
         allPasses.clear();
         allPasses.shrink_to_fit();
-        upcomingPasses.clear();
-        upcomingPasses.shrink_to_fit();
         tempDisplayTree.clear();
         tempDisplayTree.shrink_to_fit();
         
