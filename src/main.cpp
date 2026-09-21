@@ -571,11 +571,12 @@ void predictorTask(void* parameter) {
             continue;
         }
         
-        // Heap Protection: 检查剩余总内存和最大连续内存块，防碎片化
-        if (ESP.getFreeHeap() < 16000 || ESP.getMaxAllocHeap() < 5000) {
+        // Heap Protection: 检查剩余总内存和最大连续内存块，统一至 24KB 门槛，防碎片化
+        if (ESP.getFreeHeap() < 24000 || ESP.getMaxAllocHeap() < 4000) {
             LOG_I("APP", "Predictor task deferred: low heap safety guard triggered (free: %u, maxBlock: %u)", 
-                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+                  (unsigned int)ESP.getFreeHeap(), (unsigned int)ESP.getMaxAllocHeap());
             vTaskDelay(pdMS_TO_TICKS(1000));
+            triggerPrediction = true; // 保持触发状态，等内存恢复后重试
             continue;
         }
         
@@ -634,15 +635,20 @@ void predictorTask(void* parameter) {
             // === PHASE 1: Fast 24-Hour (Tonight) Pass Calculation (< 300ms) ===
             std::vector<PassEvent> phase1Passes;
             phase1Passes.reserve(24);
+            bool phase1AbortedByHeap = false;
             
             // Phase 1 - 候选高亮度目视与业余无线电卫星
             for (int satIdx : candidateSatIndices) {
                 vTaskDelay(1);
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (phase1Passes.size() >= 24 || ESP.getFreeHeap() < 24000 || ESP.getMaxAllocHeap() < 3500) {
-                    LOG_I("APP", "Predictor task Phase 1 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
+                if (ESP.getFreeHeap() < 24000 || ESP.getMaxAllocHeap() < 3500) {
+                    LOG_I("APP", "Predictor task Phase 1 safely limited: heap protection (free: %u, passes: %d)", 
                           (unsigned int)ESP.getFreeHeap(), (int)phase1Passes.size());
+                    phase1AbortedByHeap = true;
+                    break;
+                }
+                if (phase1Passes.size() >= 24) {
                     break;
                 }
                 
@@ -720,6 +726,15 @@ void predictorTask(void* parameter) {
                     g_orbitCalculating = false;
                     g_currentPredictingBaseTime = 0;
                 }
+                continue;
+            }
+            
+            // 若因低内存提前中断且未算到有效事件，绝不发布假空结果误导用户为“无事件”，保持等待并重试
+            if (phase1AbortedByHeap && phase1Passes.empty() && totalCandidates > 0) {
+                LOG_W("APP", "Predictor task Phase 1 incomplete due to low heap. Retrying in 1.5s...");
+                g_orbitCalculating = false;
+                triggerPrediction = true;
+                vTaskDelay(pdMS_TO_TICKS(1500));
                 continue;
             }
             
@@ -3994,7 +4009,12 @@ void loop() {
             updateChainMonoDisplay();
             
             if (wifi_setup_view.isScanning()) {
+                NetworkActiveGuard netGuard; // 保护扫描期间不被 predictorTask 抢占争夺内存
                 wifi_setup_view.performScan();
+                // 扫描完成后释放了 WiFi 堆栈缓冲区，唤醒推算任务重新计算
+                if (!predictionsReady) {
+                    triggerPrediction = true;
+                }
             }
             return;
         } else if (appState == STATE_SAT_SELECT) {
