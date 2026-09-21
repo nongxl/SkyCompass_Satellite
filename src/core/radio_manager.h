@@ -28,6 +28,10 @@ struct RadioTrackingInfo {
     bool isRising = false;        // 是否处于上升期 (AOS -> TCA)
     SatIconType satIconType = ICON_SATELLITE; // 卫星图标类型
     uint16_t satColor = 0x07FF;   // 卫星代表色
+    float aosAz = 0.0f;           // AOS 升空方位角 (度)
+    float losAz = 0.0f;           // LOS 落山方位角 (度)
+    float distanceKm = 0.0f;      // 实时对地斜距 (km)
+    String modulation = "";       // 调制模式 (如 LoRa, GFSK, AFSK, SSTV 等)
 };
 
 class RadioManager {

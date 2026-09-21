@@ -378,6 +378,15 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
         }
         canvas->drawString(azBuf, 6, 20);
 
+        // 内存使用率条下方中间 (X=width/2, Y=20)：显示实时对地斜距 (Slant Range)
+        if (hasTarget && track.distanceKm > 0.0f) {
+            char distBuf[24];
+            snprintf(distBuf, sizeof(distBuf), "%.0fkm", track.distanceKm);
+            canvas->setTextDatum(TC_DATUM);
+            canvas->setTextColor(canvas->color565(0, 210, 255)); // 科技青色
+            canvas->drawString(distBuf, width / 2, 20);
+        }
+
         // 仰角 + 最大仰角合并右对齐，避免三列重叠
         bool isRising = track.isRising;
         uint16_t elCol = 0x7BEF;
@@ -400,7 +409,7 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
         canvas->setTextColor(elCol);
         canvas->drawString(elBuf, width - 6, 20);
 
-        // 2. 天线指引（极简）+ 多普勒频移（无标签）(Y = 31)
+        // 2. 天线指引（极简）+ 多普勒频移（无标签）+ 调制模式 (Y = 31)
         // 天线指引：去掉冗长前缀标签，只保留方向码+角度
         canvas->setTextDatum(TL_DATUM);
         canvas->setTextColor(0x07FF);
@@ -423,25 +432,42 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
         }
         canvas->drawString(antBuf, 6, 31);
 
-        // 多普勒：去掉 "Dopp:" 标签，直接显示频移值+实际频率，颜色区分正负
+        // 多普勒与频率：显示频移值+实际频率+调制模式，颜色区分正负
         canvas->setTextDatum(TR_DATUM);
-        char dopBuf[36];
+        char dopBuf[64];
+        const char* modStr = (track.modulation.length() > 0) ? track.modulation.c_str() : "";
         if (hasTarget && track.baseFreqMHz > 0.0f) {
             if (isUpcoming) {
-                snprintf(dopBuf, sizeof(dopBuf), "PRESET %.3fM", track.baseFreqMHz);
+                if (strlen(modStr) > 0) {
+                    snprintf(dopBuf, sizeof(dopBuf), "PRESET %.3fM %s", track.baseFreqMHz, modStr);
+                } else {
+                    snprintf(dopBuf, sizeof(dopBuf), "PRESET %.3fM", track.baseFreqMHz);
+                }
                 canvas->setTextColor(TFT_YELLOW);
             } else {
                 uint16_t dopCol = (track.dopplerHz < -10.0f) ? 0xFBE0 : ((track.dopplerHz > 10.0f) ? 0x07FF : 0xFFFF);
                 float actualFreq = track.baseFreqMHz + (track.dopplerHz / 1e6f);
-                if (abs(track.dopplerHz) >= 1000.0f) {
-                    snprintf(dopBuf, sizeof(dopBuf), "%+.1fkHz %.3fM", track.dopplerHz / 1000.0f, actualFreq);
+                if (strlen(modStr) > 0) {
+                    if (abs(track.dopplerHz) >= 1000.0f) {
+                        snprintf(dopBuf, sizeof(dopBuf), "%+.1fkHz %.3fM %s", track.dopplerHz / 1000.0f, actualFreq, modStr);
+                    } else {
+                        snprintf(dopBuf, sizeof(dopBuf), "%+.0fHz %.3fM %s", track.dopplerHz, actualFreq, modStr);
+                    }
                 } else {
-                    snprintf(dopBuf, sizeof(dopBuf), "%+.0fHz %.3fM", track.dopplerHz, actualFreq);
+                    if (abs(track.dopplerHz) >= 1000.0f) {
+                        snprintf(dopBuf, sizeof(dopBuf), "%+.1fkHz %.3fM", track.dopplerHz / 1000.0f, actualFreq);
+                    } else {
+                        snprintf(dopBuf, sizeof(dopBuf), "%+.0fHz %.3fM", track.dopplerHz, actualFreq);
+                    }
                 }
                 canvas->setTextColor(dopCol);
             }
         } else {
-            snprintf(dopBuf, sizeof(dopBuf), "-- MHz");
+            if (strlen(modStr) > 0) {
+                snprintf(dopBuf, sizeof(dopBuf), "-- MHz %s", modStr);
+            } else {
+                snprintf(dopBuf, sizeof(dopBuf), "-- MHz");
+            }
             canvas->setTextColor(0x7BEF);
         }
         canvas->drawString(dopBuf, width - 6, 31);
@@ -464,18 +490,30 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
                 }
             }
 
-            // 标签上移到 Y = 41 (字高 8px，底部在 49，与轴线 53 保持 4px 净空，彻底避免重叠)
+            // 标签上移到 Y = 41 (AOS 右侧增加进境方位角，LOS 左侧增加出境方位角)
+            char aosLabel[32];
+            if (track.aosAz > 0.0f || track.losAz > 0.0f) {
+                snprintf(aosLabel, sizeof(aosLabel), "AOS %03.0f°", track.aosAz);
+            } else {
+                snprintf(aosLabel, sizeof(aosLabel), "AOS");
+            }
             canvas->setTextDatum(TL_DATUM);
             canvas->setTextColor(0x7BEF);
-            canvas->drawString("AOS", trackX, 41);
+            canvas->drawString(aosLabel, trackX, 41);
 
             canvas->setTextDatum(TC_DATUM);
             canvas->setTextColor(TFT_YELLOW);
             canvas->drawString("TCA", tcaX, 41);
 
+            char losLabel[32];
+            if (track.aosAz > 0.0f || track.losAz > 0.0f) {
+                snprintf(losLabel, sizeof(losLabel), "%03.0f° LOS", track.losAz);
+            } else {
+                snprintf(losLabel, sizeof(losLabel), "LOS");
+            }
             canvas->setTextDatum(TR_DATUM);
             canvas->setTextColor(0x7BEF);
-            canvas->drawString("LOS", trackX + trackW, 41);
+            canvas->drawString(losLabel, trackX + trackW, 41);
 
             // 真实时间线进度：由当前仿真时间严格线性驱动，按 , / 增减补偿时图标毫秒级实时响应
             float progressRatio = 0.0f;

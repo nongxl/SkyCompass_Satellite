@@ -6,6 +6,7 @@
 #include "ui/rf_console_view.h"
 #include "core/recent_launch_item.h"
 #include "core/observation_predictor.h"
+#include "core/encyclopedia.h"
 
 extern double baseUserLat;
 extern double baseUserLon;
@@ -137,23 +138,30 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
         trackInfo.currentEl = rEl;
         trackInfo.currentAz = rAz;
         trackInfo.baseFreqMHz = rFreq;
+        trackInfo.modulation = rMode;
+        if (trackInfo.modulation.length() == 0) {
+            const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(rNorad);
+            if (entry && entry->radioMode && strlen(entry->radioMode) > 0) {
+                trackInfo.modulation = entry->radioMode;
+            }
+        }
         trackInfo.currentSimTime = currentSimTime;
         trackInfo.satIconType = g_satellites[chosenRadioSat].iconType;
         trackInfo.satColor = g_satellites[chosenRadioSat].color;
 
-        // 1. 多普勒频移计算 (基于 1 秒微分离散差分)
-        if (rFreq > 0.0f) {
-            double x0 = 0, y0 = 0, z0 = 0;
-            double x1 = 0, y1 = 0, z1 = 0;
-            if (g_satellites[chosenRadioSat].calc.getTEME(currentSimTime, x0, y0, z0) &&
-                g_satellites[chosenRadioSat].calc.getTEME(currentSimTime + 1, x1, y1, z1)) {
-                double g0 = CoordTransform::getGMST(CoordTransform::unixToJulian(currentSimTime));
-                double g1 = CoordTransform::getGMST(CoordTransform::unixToJulian(currentSimTime + 1));
-                ECEFCoord satEcef0 = CoordTransform::temeToECEF(x0, y0, z0, g0);
-                ECEFCoord satEcef1 = CoordTransform::temeToECEF(x1, y1, z1, g1);
-                ECEFCoord obsEcef = CoordTransform::geodeticToECEF(obsRadio);
+        // 1. 实时对地斜距 (Slant Range) 与多普勒频移计算 (基于 1 秒微分离散差分)
+        double curX0 = 0, curY0 = 0, curZ0 = 0;
+        double curX1 = 0, curY1 = 0, curZ1 = 0;
+        if (g_satellites[chosenRadioSat].calc.getTEME(currentSimTime, curX0, curY0, curZ0)) {
+            double g0 = CoordTransform::getGMST(CoordTransform::unixToJulian(currentSimTime));
+            ECEFCoord satEcef0 = CoordTransform::temeToECEF(curX0, curY0, curZ0, g0);
+            ECEFCoord obsEcef = CoordTransform::geodeticToECEF(obsRadio);
+            double d0 = sqrt(sq(satEcef0.x - obsEcef.x) + sq(satEcef0.y - obsEcef.y) + sq(satEcef0.z - obsEcef.z));
+            trackInfo.distanceKm = (float)d0;
 
-                double d0 = sqrt(sq(satEcef0.x - obsEcef.x) + sq(satEcef0.y - obsEcef.y) + sq(satEcef0.z - obsEcef.z));
+            if (rFreq > 0.0f && g_satellites[chosenRadioSat].calc.getTEME(currentSimTime + 1, curX1, curY1, curZ1)) {
+                double g1 = CoordTransform::getGMST(CoordTransform::unixToJulian(currentSimTime + 1));
+                ECEFCoord satEcef1 = CoordTransform::temeToECEF(curX1, curY1, curZ1, g1);
                 double d1 = sqrt(sq(satEcef1.x - obsEcef.x) + sq(satEcef1.y - obsEcef.y) + sq(satEcef1.z - obsEcef.z));
                 double vr = d1 - d0; // km/s (负为接近/蓝移, 正为远离/红移)
                 double c_kms = 299792.458;
@@ -161,13 +169,15 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
             }
         }
 
-        // 2. 匹配或快速估算本次过境的 AOS, TCA, LOS, MaxEl
+        // 2. 匹配或快速估算本次过境的 AOS, TCA, LOS, MaxEl 及进出境方位角
         bool passFound = false;
         if (isUpcomingPass) {
             trackInfo.aosTime = upcomingEvent.aosTime;
             trackInfo.tcaTime = upcomingEvent.maxElevTime;
             trackInfo.losTime = upcomingEvent.losTime;
             trackInfo.maxEl = upcomingEvent.maxElevation;
+            trackInfo.aosAz = upcomingEvent.startAz;
+            trackInfo.losAz = upcomingEvent.endAz;
             passFound = true;
         } else {
             lockPassMutex();
@@ -179,6 +189,8 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
                     trackInfo.tcaTime = p.maxElevTime;
                     trackInfo.losTime = p.losTime;
                     trackInfo.maxEl = p.maxElevation;
+                    trackInfo.aosAz = p.startAz;
+                    trackInfo.losAz = p.endAz;
                     passFound = true;
                     break;
                 }
@@ -186,12 +198,14 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
             unlockPassMutex();
         }
 
-        // 静态缓存：在同一颗卫星同一次过境事件的生命周期内，锁定 AOS/TCA/LOS，彻底杜绝时间补偿时的漂移
+        // 静态缓存：在同一颗卫星同一次过境事件的生命周期内，锁定 AOS/TCA/LOS/Az，彻底杜绝时间补偿时的漂移
         static uint32_t s_cachedSatNorad = 0;
         static uint32_t s_cachedAos = 0;
         static uint32_t s_cachedLos = 0;
         static uint32_t s_cachedTca = 0;
         static float s_cachedMaxEl = 0.0f;
+        static float s_cachedAosAz = 0.0f;
+        static float s_cachedLosAz = 0.0f;
 
         if (!passFound) {
             // 缓存有效性判定：同一颗卫星、且当前模拟时间尚未超过过境结束+60秒、且过境点在未来合理窗口内（4小时内）
@@ -201,6 +215,8 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
                 trackInfo.tcaTime = s_cachedTca;
                 trackInfo.losTime = s_cachedLos;
                 trackInfo.maxEl = s_cachedMaxEl;
+                trackInfo.aosAz = s_cachedAosAz;
+                trackInfo.losAz = s_cachedLosAz;
                 passFound = true;
             }
         }
@@ -212,6 +228,8 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
                 trackInfo.tcaTime = s_cachedTca;
                 trackInfo.losTime = s_cachedLos;
                 trackInfo.maxEl = s_cachedMaxEl;
+                trackInfo.aosAz = s_cachedAosAz;
+                trackInfo.losAz = s_cachedLosAz;
             } else {
                 trackInfo.aosTime = currentSimTime + 3600;
                 trackInfo.tcaTime = currentSimTime + 3900;
@@ -231,6 +249,17 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
                     return tp.el;
                 }
                 return -90.0f;
+            };
+
+            auto getAz = [&](uint32_t t) -> float {
+                double x, y, z;
+                if (g_satellites[chosenRadioSat].calc.getTEME(t, x, y, z)) {
+                    double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
+                    ECEFCoord ec = CoordTransform::temeToECEF(x, y, z, gmst);
+                    TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
+                    return tp.az;
+                }
+                return 0.0f;
             };
 
             uint32_t stepAos = currentSimTime;
@@ -300,6 +329,8 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
             trackInfo.losTime = stepLos;
             trackInfo.tcaTime = peakTime;
             trackInfo.maxEl = (peakEl > 0.0f) ? peakEl : 0.0f;
+            trackInfo.aosAz = getAz(stepAos);
+            trackInfo.losAz = getAz(stepLos);
 
             // 写入静态缓存锁定状态
             s_cachedSatNorad = rNorad;
@@ -307,6 +338,8 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
             s_cachedLos = stepLos;
             s_cachedTca = peakTime;
             s_cachedMaxEl = trackInfo.maxEl;
+            s_cachedAosAz = trackInfo.aosAz;
+            s_cachedLosAz = trackInfo.losAz;
         }
 
         trackInfo.isRising = (currentSimTime < trackInfo.tcaTime);

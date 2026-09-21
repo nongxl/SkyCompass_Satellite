@@ -567,14 +567,15 @@ void predictorTask(void* parameter) {
         }
         
         // Wait 2 seconds to let the system finish recycling WiFi/TCP/SSL memory
+        predictionProgress = 0;
         vTaskDelay(pdMS_TO_TICKS(2000));
         
         if (g_networkActive) {
             continue;
         }
         
-        // Heap Protection: 检查剩余总内存和最大连续内存块
-        if (ESP.getFreeHeap() < 16000 || ESP.getMaxAllocHeap() < 3000) {
+        // Heap Protection: 检查剩余总内存和最大连续内存块（就地算法峰值开销仅需约 1.5KB，9000/2000 阈值兼具高安全裕度与流畅计算）
+        if (ESP.getFreeHeap() < 9000 || ESP.getMaxAllocHeap() < 2000) {
             LOG_I("APP", "Predictor task deferred: low heap safety guard triggered (free: %u, maxBlock: %u)", 
                   (unsigned int)ESP.getFreeHeap(), (unsigned int)ESP.getMaxAllocHeap());
             vTaskDelay(pdMS_TO_TICKS(1000));
@@ -650,7 +651,7 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (ESP.getFreeHeap() < 16000 || ESP.getMaxAllocHeap() < 3000) {
+                if (ESP.getFreeHeap() < 9000 || ESP.getMaxAllocHeap() < 2000) {
                     LOG_I("APP", "Predictor task Phase 1 safely limited: heap protection (free: %u, passes: %d)", 
                           (unsigned int)ESP.getFreeHeap(), (int)phase1Passes.size());
                     phase1AbortedByHeap = true;
@@ -700,7 +701,7 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (phase1Passes.size() >= 24 || ESP.getFreeHeap() < 16000 || ESP.getMaxAllocHeap() < 3000) {
+                if (phase1Passes.size() >= 24 || ESP.getFreeHeap() < 9000 || ESP.getMaxAllocHeap() < 2000) {
                     break;
                 }
                 
@@ -794,7 +795,7 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (ESP.getFreeHeap() < 16000 || ESP.getMaxAllocHeap() < 3000 || allPasses.size() >= 32) {
+                if (ESP.getFreeHeap() < 9000 || ESP.getMaxAllocHeap() < 2000 || allPasses.size() >= 32) {
                     LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
                           ESP.getFreeHeap(), (int)allPasses.size());
                     break;
@@ -845,7 +846,7 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (ESP.getFreeHeap() < 16000 || ESP.getMaxAllocHeap() < 3000 || allPasses.size() >= 32) {
+                if (ESP.getFreeHeap() < 9000 || ESP.getMaxAllocHeap() < 2000 || allPasses.size() >= 32) {
                     LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
                           ESP.getFreeHeap(), (int)allPasses.size());
                     break;
