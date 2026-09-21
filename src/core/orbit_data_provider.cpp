@@ -581,7 +581,7 @@ bool OrbitDataProvider::loadRecentLaunchesFromCache(std::vector<RecentLaunchItem
         }
         
         // 内存熔断保护：若剩余堆内存极低，提前终止加载并保留已有对象，防止系统 panic
-        if (ESP.getFreeHeap() < 24000) {
+        if (ESP.getFreeHeap() < 12000) {
             LOG_W("RECENT_LAUNCH", "Low heap memory during cache load (%u bytes), terminating parse early.", (unsigned int)ESP.getFreeHeap());
             break;
         }
