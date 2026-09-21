@@ -57,7 +57,7 @@ void HalWifi::begin(const char* ssid, const char* password) {
     int retries = 0;
     while (WiFi.status() != WL_CONNECTED && retries < 10) {
         delay(500);
-        log_i(".");
+        LOG_I("APP", "[WiFi] Connecting to '%s'... (%d/14)", ssid, retries + 1);
         retries++;
     }
     
@@ -75,7 +75,7 @@ void HalWifi::begin(const char* ssid, const char* password) {
             break;
         }
         delay(500);
-        log_i(".");
+        LOG_I("APP", "[WiFi] Connecting to '%s'... (%d/14)", ssid, retries + 1);
         retries++;
     }
     

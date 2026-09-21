@@ -106,29 +106,26 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
             bool localPredictionsReady = false;
             int localPredictionProgress = 0;
             bool localTimeSynced = false;
+            static uint32_t lastCopiedVersion = 0;
             static std::vector<PassEvent> localRecommendedPasses;
             static std::vector<TreeItem> localDisplayTree;
-            static uint32_t lastCopiedBaseTime = 0;
-            static int lastCopiedCount = -1;
 
             lockPassMutex();
             localPredictionsReady = predictionsReady;
             localPredictionProgress = predictionProgress;
             localTimeSynced = g_timeSynced;
             if (localPredictionsReady) {
-                if (lastCopiedCount != (int)recommendedPasses.size() || lastCopiedBaseTime != lastPredictionBaseTime) {
+                if (lastCopiedVersion != g_passTreeVersion) {
                     localRecommendedPasses = recommendedPasses;
                     localDisplayTree = displayTree;
-                    lastCopiedCount = (int)recommendedPasses.size();
-                    lastCopiedBaseTime = lastPredictionBaseTime;
+                    lastCopiedVersion = g_passTreeVersion;
                 }
             } else {
                 if (!localRecommendedPasses.empty()) {
                     localRecommendedPasses.clear();
                     localDisplayTree.clear();
                 }
-                lastCopiedCount = -1;
-                lastCopiedBaseTime = 0;
+                lastCopiedVersion = 0;
             }
             unlockPassMutex();
 
@@ -357,6 +354,9 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                             }
                             canvas->drawString(label.c_str(), 5, y);
                         } else {
+                            if (item.passIndex < 0 || item.passIndex >= (int)localRecommendedPasses.size()) {
+                                continue;
+                            }
                             const auto& p = localRecommendedPasses[item.passIndex];
                             canvas->setTextColor(idx == passScrollIndex ? TFT_WHITE : TFT_LIGHTGRAY);
                             String name = String(p.satName.c_str());

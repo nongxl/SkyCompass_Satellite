@@ -12,6 +12,7 @@ struct TreeItem {
 };
 
 extern bool catExpanded[4];
+extern volatile uint32_t g_passTreeVersion;
 void rebuildTreeLocal(std::vector<TreeItem>& tree, const std::vector<PassEvent>& passes, uint32_t current_unix);
 
 class RecommendationView {

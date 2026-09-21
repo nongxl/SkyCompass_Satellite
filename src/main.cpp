@@ -434,10 +434,12 @@ int passScrollIndex = 0;
 bool catExpanded[4] = {false, false, false, false};
 std::vector<TreeItem> displayTree;
 int selectedPassIndex = -1; // For detail view
+volatile uint32_t g_passTreeVersion = 1;
 
 void rebuildTree(uint32_t current_unix) {
     lockPassMutex();
     rebuildTreeLocal(displayTree, recommendedPasses, current_unix);
+    g_passTreeVersion++;
     unlockPassMutex();
 }
 
@@ -621,6 +623,7 @@ void predictorTask(void* parameter) {
                 predictionsReady = true;
                 lastPredictionBaseTime = startTime;
                 g_currentPredictingBaseTime = 0;
+                g_passTreeVersion++;
                 unlockPassMutex();
                 
                 g_orbitCalculating = false;
@@ -629,6 +632,10 @@ void predictorTask(void* parameter) {
                 continue;
             }
             
+            UBaseType_t stackHighWater = uxTaskGetStackHighWaterMark(NULL);
+            LOG_I("APP", "[PREDICTOR] Starting calculation: %d candidates (Stack min free: %u words, Free Heap: %u)", 
+                  totalCandidates, (unsigned int)stackHighWater, (unsigned int)ESP.getFreeHeap());
+
             predictionProgress = 0;
             int completedCount = 0;
             
@@ -764,6 +771,7 @@ void predictorTask(void* parameter) {
             displayTree.swap(tempDisplayTree1);
             predictionsReady = true;
             lastPredictionBaseTime = startTime;
+            g_passTreeVersion++;
             unlockPassMutex();
             
             // 释放临时树，但完整保留 phase1Passes 作为 Phase 2 坚实基础
@@ -947,6 +955,7 @@ void predictorTask(void* parameter) {
         predictionsReady = true;
         lastPredictionBaseTime = startTime; // 写入本次成功的基准时间缓存
         g_currentPredictingBaseTime = 0;
+        g_passTreeVersion++;
         unlockPassMutex();
         
         allPasses.clear();
@@ -1962,6 +1971,25 @@ void setup() {
     Serial.begin(115200);
     // Remove the 4 second delay to boot instantly
     LOG_I("APP", "\n\n--- SkyCompass Satellite: Phase 4 ---");
+
+    esp_reset_reason_t resetReason = esp_reset_reason();
+    const char* resetDesc = "UNKNOWN";
+    switch (resetReason) {
+        case ESP_RST_POWERON:   resetDesc = "POWERON (Normal Power On / Cold Boot)"; break;
+        case ESP_RST_EXT:       resetDesc = "EXT_PIN (Reset via USB DTR/RTS or external reset pin)"; break;
+        case ESP_RST_SW:        resetDesc = "SW_RESET (Software restart via esp_restart)"; break;
+        case ESP_RST_PANIC:     resetDesc = "PANIC (Guru Meditation Error / Software crash / Exception)"; break;
+        case ESP_RST_INT_WDT:   resetDesc = "INT_WDT (Interrupt watchdog timeout)"; break;
+        case ESP_RST_TASK_WDT:  resetDesc = "TASK_WDT (Task watchdog timeout)"; break;
+        case ESP_RST_WDT:       resetDesc = "OTHER_WDT (Watchdog timer reset)"; break;
+        case ESP_RST_DEEPSLEEP: resetDesc = "DEEPSLEEP (Woke up from deep sleep)"; break;
+        case ESP_RST_BROWNOUT:  resetDesc = "BROWNOUT (Power dip / Voltage drop detected)"; break;
+        case ESP_RST_SDIO:      resetDesc = "SDIO (Reset over SDIO)"; break;
+        default: break;
+    }
+    LOG_I("APP", "[SYSTEM] Boot Reset Reason: [%d] %s", (int)resetReason, resetDesc);
+    LOG_I("APP", "[SYSTEM] Initial Heap: Free %u bytes, MaxBlock %u bytes", 
+          (unsigned int)ESP.getFreeHeap(), (unsigned int)ESP.getMaxAllocHeap());
 
     auto cfg = M5.config();
     M5Cardputer.begin(cfg, true);
