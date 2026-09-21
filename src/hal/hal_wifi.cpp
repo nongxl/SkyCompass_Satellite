@@ -145,7 +145,7 @@ std::vector<WiFiNetwork> HalWifi::scanNetworks() {
         WiFi.mode(WIFI_STA);
     }
     esp_wifi_start();
-    delay(20);
+    delay(60);
     
     int n = WiFi.scanNetworks(false, true);
     LOG_I("APP", "Found %d networks", n);

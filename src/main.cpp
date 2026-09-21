@@ -1189,6 +1189,9 @@ void recentLaunchNetworkTaskImpl(bool shouldDisconnectWifi = true) {
             recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "未找到已知WiFi，请配置" : "WiFi not found, please configure";
             recentLaunchDownloading = false;
             recentLaunchDownloadFinishedMs = millis();
+            wifiGuard.enabled = false;
+            HalWifi::disconnect();
+            delay(50);
             g_wifiSetupReturnState = STATE_SAT_SELECT;
             appState = STATE_WIFI_SETUP;
             wifi_setup_view.startScan();
@@ -1495,6 +1498,8 @@ void downloadCustomSatTask(void* parameter) {
         }
         
         if (!wifiReady && !wifiWasConnected) {
+            HalWifi::disconnect();
+            delay(50);
             appState = STATE_WIFI_SETUP;
             wifi_setup_view.startScan();
         }
@@ -1528,6 +1533,9 @@ void networkTaskImpl(void* parameter) {
     if (ssid.length() == 0) {
         LOG_I("APP", "No WiFi credentials available. Offline mode active.");
         if (manualWifiToggle || appState == STATE_MAIN || appState == STATE_SAT_SELECT) {
+            wifiGuard.enabled = false;
+            HalWifi::disconnect();
+            delay(50);
             g_wifiSetupReturnState = appState;
             appState = STATE_WIFI_SETUP;
             wifi_setup_view.startScan();
@@ -1548,16 +1556,19 @@ void networkTaskImpl(void* parameter) {
             downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "未找到已知WiFi，请配置" : "WiFi not found, please configure";
             downloadFinishedMs = millis();
         }
-        // 当旧凭据在新网络环境中无法连接时，自动弹出 WiFi 扫描配置供用户选择当前网络
-        g_wifiSetupReturnState = appState;
-        appState = STATE_WIFI_SETUP;
-        wifi_setup_view.startScan();
-        
         g_wifiConnecting = false;
         g_dataUpdating = false;
         g_timeSynced = true;
         triggerPrediction = true;
-        HalWifi::disconnect(); // 失败后关闭驱动，让后续扫描重新初始化
+
+        wifiGuard.enabled = false;
+        HalWifi::disconnect(); // 失败后在此彻底关闭驱动，让后续扫描重新初始化
+        delay(50);
+
+        // 当旧凭据在新网络环境中无法连接时，自动弹出 WiFi 扫描配置供用户选择当前网络
+        g_wifiSetupReturnState = appState;
+        appState = STATE_WIFI_SETUP;
+        wifi_setup_view.startScan();
         return;
     }
     

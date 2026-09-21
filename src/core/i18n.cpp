@@ -213,7 +213,7 @@ static const char* const t_zh[TXT_MAX] = {
     
     // WiFi Setup Page
     "无线网络设置",
-    "正在扫描网络...",
+    "正在扫描可用无线网络...",
     "未找到任何无线网络。",
     "按 [R] 键重新扫描",
     "连接至:",
