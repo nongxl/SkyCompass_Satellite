@@ -186,11 +186,10 @@ bool HalWifi::loadCredentials(String& outSsid, String& outPassword) {
 
 void HalWifi::disconnect() {
     WiFi.setAutoReconnect(false);
-    WiFi.disconnect(true, true);
-    delay(30);
-    WiFi.mode(WIFI_OFF);
+    WiFi.disconnect(false, false);
+    delay(20);
     esp_wifi_stop();
-    delay(30);
-    LOG_I("APP", "WiFi disconnected, turned OFF and released ~35KB memory to heap.");
+    delay(20);
+    LOG_I("APP", "WiFi disconnected, RF stopped for power saving (STA retained).");
 }
 

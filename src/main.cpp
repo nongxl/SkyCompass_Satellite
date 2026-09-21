@@ -2828,7 +2828,40 @@ void loop() {
         bool justBracketR = currBracketR && !lastBracketR;
         bool justC = currC && !lastC;
         bool justR = currR && !lastR;
-        bool justW = currW && !lastW;
+        
+        // W 键支持短按与长按解耦：持续按住 800ms 触发长按开启 WiFi 并强制扫描
+        static unsigned long s_wPressStartTime = 0;
+        static bool s_wLongPressHandled = false;
+        bool justW = false;
+        bool justLongW = false;
+
+        bool allowLongPressW = !(appState == STATE_WIFI_SETUP && wifi_setup_view.isInputtingPassword())
+                               && !g_showCategoryFilterDialog;
+
+        if (!allowLongPressW) {
+            justW = currW && !lastW;
+            s_wPressStartTime = 0;
+            s_wLongPressHandled = false;
+        } else {
+            if (currW && !lastW) {
+                s_wPressStartTime = millis();
+                s_wLongPressHandled = false;
+            } else if (currW && !s_wLongPressHandled) {
+                if (s_wPressStartTime > 0 && (millis() - s_wPressStartTime >= 800)) {
+                    s_wLongPressHandled = true;
+                    justLongW = true;
+                }
+            }
+
+            if (!currW && lastW) {
+                if (!s_wLongPressHandled) {
+                    justW = true;
+                }
+                s_wPressStartTime = 0;
+                s_wLongPressHandled = false;
+            }
+        }
+
         bool justS = currS && !lastS;
         bool justH = currH && !lastH;
         bool justG = currG && !lastG;
@@ -2845,7 +2878,7 @@ void loop() {
         bool justCtrl = currCtrl && !lastCtrl;
         bool justT = currT && !lastT;
         bool justP = currP && !lastP;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl || justT || justP;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justLongW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl || justT || justP;
 
         // RF Console 全屏终端模式 (仅在主界面下按 Ctrl 开启，退出统一按 Esc 键)
         if (justCtrl && appState == STATE_MAIN && !RfConsoleView::getInstance().isActive()) {
@@ -2893,6 +2926,8 @@ void loop() {
                 currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = currTab = currShift = currL = currSpace = false;
                 justSemi = justDot = justComma = justSlash = justO = justV = justEnter = justBack = justEsc = justTick = justBracketL = justBracketR = justC = justR = justW = justS = justH = justG = justY = justN = justD = justTab = justShift = false;
                 hasAnyKeyJustPressed = false;
+                s_wPressStartTime = 0;
+                s_wLongPressHandled = false;
             }
         }
         
@@ -2904,6 +2939,25 @@ void loop() {
                 currSemi = currDot = currComma = currSlash = currO = currV = currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = currC = currR = currW = currS = currH = currG = currY = currN = currD = currTab = false;
                 justSemi = justDot = justComma = justSlash = justO = justV = justEnter = justBack = justEsc = justTick = justBracketL = justBracketR = justC = justR = justW = justS = justH = justG = justY = justN = justD = justTab = false;
                 hasAnyKeyJustPressed = false;
+                s_wPressStartTime = 0;
+                s_wLongPressHandled = false;
+            }
+        }
+
+        // 长按 W 开启 WiFi 并强制扫描 SSID 切换网络 (可在主界面、卫星列表或 WiFi 界面中长按)
+        if (justLongW) {
+            if (appState == STATE_MAIN || appState == STATE_SAT_SELECT || appState == STATE_WIFI_SETUP) {
+                LOG_I("APP", "[KEY] Long press 'W' detected -> entering WiFi setup & forced scan");
+                if (appState != STATE_WIFI_SETUP) {
+                    g_wifiSetupReturnState = appState;
+                }
+                HalWifi::disconnect();
+                delay(50);
+                wifi_setup_view.reset();
+                wifi_setup_view.startScan();
+                appState = STATE_WIFI_SETUP;
+                lastW = currW;
+                return;
             }
         }
 
@@ -3075,7 +3129,7 @@ void loop() {
         }
         
         // Handle discrete keyboard input
-        if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+        if ((M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) || justW) {
             if (appState == STATE_MAIN) {
                 if (justShift) {
                     appState = STATE_SERVO_TEST;
@@ -3267,6 +3321,7 @@ void loop() {
                         }
                     }
                 } else if (justW) {
+                    LOG_I("APP", "[KEY] Short press 'W' in STATE_MAIN. NetworkActive: %d, Connected: %d", g_networkActive, HalWifi::isConnected());
                     if (!g_networkActive) {
                         if (!HalWifi::isConnected()) {
                             if (!isSystemMemorySafeForNetwork()) {
@@ -3489,7 +3544,7 @@ void loop() {
                         params->pass = req.pass;
                         params->shouldSave = true;
                         
-                        if (currentSatTab == TAB_RECENT_LAUNCH) {
+                        if (g_wifiSetupReturnState == STATE_SAT_SELECT && currentSatTab == TAB_RECENT_LAUNCH) {
                             HalWifi::saveCredentials(params->ssid, params->pass);
                             delete params;
                             recentLaunchDownloading = true;
@@ -3543,16 +3598,16 @@ void loop() {
                         g_selectedCategoryMask = g_tempCategoryMask;
                         g_showCategoryFilterDialog = false;
                         updateEncyclopediaFilteredList();
-                    } else if (justSemi || justW) { // 上 (UP)
+                    } else if (justSemi) { // 上 (UP)
                         r = (r - 1 + 4) % 4;
                         g_categoryFocusIndex = r * 3 + c;
-                    } else if (justDot || justS) { // 下 (DOWN)
+                    } else if (justDot) { // 下 (DOWN)
                         r = (r + 1) % 4;
                         g_categoryFocusIndex = r * 3 + c;
-                    } else if (justComma || justA) { // 左 (LEFT)
+                    } else if (justComma) { // 左 (LEFT)
                         c = (c - 1 + 3) % 3;
                         g_categoryFocusIndex = r * 3 + c;
-                    } else if (justSlash || justD) { // 右 (RIGHT)
+                    } else if (justSlash) { // 右 (RIGHT)
                         c = (c + 1) % 3;
                         g_categoryFocusIndex = r * 3 + c;
                     }
