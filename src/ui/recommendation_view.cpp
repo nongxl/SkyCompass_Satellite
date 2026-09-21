@@ -44,6 +44,7 @@ extern void lockPassMutex();
 extern void unlockPassMutex();
 extern std::vector<PassEvent> recommendedPasses;
 extern std::vector<TreeItem> displayTree;
+extern uint32_t lastPredictionBaseTime;
 extern uint32_t current_unix;
 extern int32_t timeMachineOffset;
 extern int NUM_SATELLITES;
@@ -107,7 +108,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
             bool localTimeSynced = false;
             static std::vector<PassEvent> localRecommendedPasses;
             static std::vector<TreeItem> localDisplayTree;
-            static uint32_t lastCopiedTime = 0;
+            static uint32_t lastCopiedBaseTime = 0;
             static int lastCopiedCount = -1;
 
             lockPassMutex();
@@ -115,11 +116,11 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
             localPredictionProgress = predictionProgress;
             localTimeSynced = g_timeSynced;
             if (localPredictionsReady) {
-                if (lastCopiedCount != (int)recommendedPasses.size() || (millis() - lastCopiedTime > 1000)) {
+                if (lastCopiedCount != (int)recommendedPasses.size() || lastCopiedBaseTime != lastPredictionBaseTime) {
                     localRecommendedPasses = recommendedPasses;
                     localDisplayTree = displayTree;
                     lastCopiedCount = (int)recommendedPasses.size();
-                    lastCopiedTime = millis();
+                    lastCopiedBaseTime = lastPredictionBaseTime;
                 }
             } else {
                 if (!localRecommendedPasses.empty()) {
@@ -127,6 +128,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     localDisplayTree.clear();
                 }
                 lastCopiedCount = -1;
+                lastCopiedBaseTime = 0;
             }
             unlockPassMutex();
 

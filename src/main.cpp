@@ -640,6 +640,7 @@ void predictorTask(void* parameter) {
             // Phase 1 - 候选高亮度目视与业余无线电卫星
             for (int satIdx : candidateSatIndices) {
                 vTaskDelay(1);
+                esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
                 if (ESP.getFreeHeap() < 14000 || ESP.getMaxAllocHeap() < 2500) {
@@ -689,6 +690,7 @@ void predictorTask(void* parameter) {
             // Phase 1 - 近期发射已勾选项（只要勾选就参与计算）
             for (int rlIdx : candidateRLIndices) {
                 vTaskDelay(1);
+                esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
                 if (phase1Passes.size() >= 24 || ESP.getFreeHeap() < 14000 || ESP.getMaxAllocHeap() < 2500) {
@@ -758,7 +760,7 @@ void predictorTask(void* parameter) {
             
             // 立即以 swap 零拷贝安全发布至 UI，绝不执行 operator= 避免 bad_alloc 崩溃
             lockPassMutex();
-            recommendedPasses = upcomingPhase1;
+            recommendedPasses.swap(upcomingPhase1);
             displayTree.swap(tempDisplayTree1);
             predictionsReady = true;
             lastPredictionBaseTime = startTime;
@@ -788,6 +790,7 @@ void predictorTask(void* parameter) {
             // Phase 2 - 候选高亮度目视收录卫星
             for (int satIdx : candidateSatIndices) {
                 vTaskDelay(1);
+                esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
                 if (ESP.getFreeHeap() < 14000 || ESP.getMaxAllocHeap() < 2500 || allPasses.size() >= 48) {
@@ -814,7 +817,8 @@ void predictorTask(void* parameter) {
                     }
                 }
                 
-                auto passes = predictor->predictPasses(tle, stdMag, startTime, 7, isRadioTarget);
+                int daysToPredict = (candidateSatIndices.size() > 6) ? 3 : 7;
+                auto passes = predictor->predictPasses(tle, stdMag, startTime, daysToPredict, isRadioTarget);
                 // 质量优先排序
                 std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
                     if (a.score != b.score) return a.score > b.score;
@@ -837,6 +841,7 @@ void predictorTask(void* parameter) {
             // Phase 2 - 近期发射已勾选项
             for (int rlIdx : candidateRLIndices) {
                 vTaskDelay(1);
+                esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
                 if (ESP.getFreeHeap() < 14000 || ESP.getMaxAllocHeap() < 2500 || allPasses.size() >= 48) {
@@ -853,7 +858,8 @@ void predictorTask(void* parameter) {
                 unlockSatMutex();
                 
                 if (rlTle.line1.length() >= 14 && rlTle.line2.length() >= 14) {
-                    auto passes = predictor->predictPasses(rlTle, 3.0, startTime, 7);
+                    int rlDaysToPredict = (candidateRLIndices.size() > 6) ? 3 : 7;
+                    auto passes = predictor->predictPasses(rlTle, 3.0, startTime, rlDaysToPredict);
                     std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
                         if (a.score != b.score) return a.score > b.score;
                         return a.aosTime < b.aosTime;
@@ -2366,7 +2372,7 @@ void setup() {
             xTaskCreatePinnedToCore(
                 predictorTask,
                 "PredictorTask",
-                6144,
+                10240, // 提升至 10KB 任务栈，为多卫星 SGP4/SDP4 轨道递推及排序提供充足栈保护
                 NULL,
                 1,
                 &predictorTaskHandle,

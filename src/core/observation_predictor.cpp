@@ -4,6 +4,7 @@
 #include "moon_calculator.h"
 #include <math.h>
 #include <algorithm>
+#include <esp_task_wdt.h>
 
 namespace {
 uint32_t parseTleEpoch(const String& line1) {
@@ -196,6 +197,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
         // Reset Watchdog Timer periodically and yield to Idle Task to prevent starvation.
         // Note: pdMS_TO_TICKS(2) was 0 ticks (a no-op). Using 1 tick ensures IDLE0 runs and feeds the WDT.
         if ((iterations & 15) == 0) {
+            esp_task_wdt_reset();
             vTaskDelay(1);
         }
         
