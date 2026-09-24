@@ -105,6 +105,8 @@ enum AppState {
 AppState appState = STATE_MAIN;
 int langSelectedIndex = 0;
 void saveCustomSatellites();
+void saveSelectedSatellites();
+void loadSelectedSatellites();
 
 
 
@@ -1472,6 +1474,7 @@ void downloadCustomSatTask(void* parameter) {
                 
                 if (!exists) {
                     saveCustomSatellites();
+                    saveSelectedSatellites();
                 }
                 
                 // 1. 优先尝试拉取全系统静态频段库 frequencies.json
@@ -1930,6 +1933,78 @@ void saveCustomSatellites() {
     prefs.end();
 }
 
+void saveSelectedSatellites() {
+    Preferences prefs;
+    if (!prefs.begin("satellites", false)) {
+        LOG_W("APP", "[SAT_PREFS] Failed to open preferences for saving selections");
+        return;
+    }
+    String idList = "";
+    bool first = true;
+    for (int i = 0; i < NUM_SATELLITES; i++) {
+        if (g_satellites[i].selected) {
+            if (!first) idList += ",";
+            idList += String(g_satellites[i].noradId);
+            first = false;
+        }
+    }
+    prefs.putString("selIds", idList);
+    prefs.end();
+    LOG_I("APP", "[SAT_PREFS] Saved selected satellites to NVS: [%s]", idList.c_str());
+}
+
+void loadSelectedSatellites() {
+    Preferences prefs;
+    if (!prefs.begin("satellites", true)) {
+        return;
+    }
+    if (!prefs.isKey("selIds")) {
+        prefs.end();
+        LOG_I("APP", "[SAT_PREFS] No user selection found in NVS. Keeping built-in defaults.");
+        return;
+    }
+    String selIds = prefs.getString("selIds", "");
+    prefs.end();
+
+    if (selIds.length() == 0) {
+        LOG_I("APP", "[SAT_PREFS] Saved user selection is empty.");
+        for (int i = 0; i < NUM_SATELLITES; i++) {
+            g_satellites[i].selected = false;
+        }
+        return;
+    }
+
+    std::vector<int> targetIds;
+    int start = 0;
+    int end = selIds.indexOf(',');
+    while (start < selIds.length()) {
+        String idStr = (end == -1) ? selIds.substring(start) : selIds.substring(start, end);
+        int id = idStr.toInt();
+        if (id > 0) targetIds.push_back(id);
+        if (end == -1) break;
+        start = end + 1;
+        end = selIds.indexOf(',', start);
+    }
+
+    if (targetIds.empty()) return;
+
+    int matchedCount = 0;
+    for (int i = 0; i < NUM_SATELLITES; i++) {
+        bool found = false;
+        for (int targetId : targetIds) {
+            if (g_satellites[i].noradId == targetId) {
+                found = true;
+                break;
+            }
+        }
+        g_satellites[i].selected = found;
+        if (found) matchedCount++;
+    }
+
+    LOG_I("APP", "[SAT_PREFS] Loaded %d selected satellites from NVS (matched %d/%d).",
+          (int)targetIds.size(), matchedCount, NUM_SATELLITES);
+}
+
 volatile bool g_isFastForwarding = false;
 volatile bool g_imuSamplingEnabled = true; // 控制 IMU 是否采样，替代危险的 vTaskSuspend
 
@@ -2385,6 +2460,7 @@ void setup() {
                 LOG_I("APP", "Built-in satellites found in custom list. Performing Preferences cleanup.");
                 saveCustomSatellites();
             }
+            loadSelectedSatellites();
             updateEncyclopediaFilteredList();
             
             Language currL_boot = I18N::getLanguage();
@@ -3668,6 +3744,7 @@ void loop() {
                             else if (focusSatIndex > deleteConfirmIndex) focusSatIndex--;
                             if (satSelectedIndex >= NUM_SATELLITES) satSelectedIndex = NUM_SATELLITES;
                             saveCustomSatellites();
+                            saveSelectedSatellites();
                             updateEncyclopediaFilteredList();
                         }
                         deleteConfirmIndex = -1;
@@ -3809,6 +3886,7 @@ void loop() {
                             updateEncyclopediaFilteredList();
                             appState = STATE_MAIN;
                             validateSatViewFocusState();
+                            saveSelectedSatellites();
                         }
                     } else if (justO) {
                         if (recentLaunchInObjectsView) {
@@ -3989,6 +4067,7 @@ void loop() {
                                 }
                             }
                             if (selectionChanged) {
+                                saveSelectedSatellites();
                                 lockPassMutex();
                                 predictionsReady = false;
                                 lastPredictionBaseTime = 0;
