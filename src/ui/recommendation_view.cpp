@@ -99,9 +99,29 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
             canvas->fillRect(0, 0, 140, 135, canvas->color565(15, 20, 25));
             canvas->drawFastVLine(140, 0, 135, TFT_DARKGREY); // separator line
             
+            // 抽屉顶部 Header 背景 (0 ~ 17)
+            canvas->fillRect(0, 0, 140, 17, canvas->color565(22, 30, 40));
+
             canvas->setTextColor(TFT_WHITE);
             canvas->setTextSize(1);
-            canvas->drawString(I18N::get(TXT_RECOMMENDED_PASSES), 2, 5);
+            canvas->drawString(I18N::get(TXT_RECOMMENDED_PASSES), 4, 4);
+
+            // 抽屉顶部内存使用率进度条 (宽 140px, 高 2px, Y = 17)
+            {
+                uint32_t freeHeap = ESP.getFreeHeap();
+                uint32_t totalHeap = ESP.getHeapSize();
+                float memRatio = (totalHeap > 0) ? ((float)(totalHeap - freeHeap) / (float)totalHeap) : 0.0f;
+                int barW = 140;
+                int fillWidth = (int)(barW * memRatio);
+                if (fillWidth > barW) fillWidth = barW;
+                if (fillWidth < 0) fillWidth = 0;
+
+                uint16_t memColor = (memRatio < 0.65f) ? canvas->color565(0, 220, 255) : ((memRatio < 0.82f) ? TFT_YELLOW : TFT_RED);
+                canvas->fillRect(0, 17, barW, 2, canvas->color565(35, 45, 55));
+                if (fillWidth > 0) {
+                    canvas->fillRect(0, 17, fillWidth, 2, memColor);
+                }
+            }
             
             bool localPredictionsReady = false;
             int localPredictionProgress = 0;
