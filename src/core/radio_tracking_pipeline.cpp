@@ -169,6 +169,28 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
             }
         }
 
+        auto getEl = [&](uint32_t t) -> float {
+            double x, y, z;
+            if (g_satellites[chosenRadioSat].calc.getTEME(t, x, y, z)) {
+                double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
+                ECEFCoord ec = CoordTransform::temeToECEF(x, y, z, gmst);
+                TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
+                return tp.el;
+            }
+            return -90.0f;
+        };
+
+        auto getAz = [&](uint32_t t) -> float {
+            double x, y, z;
+            if (g_satellites[chosenRadioSat].calc.getTEME(t, x, y, z)) {
+                double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
+                ECEFCoord ec = CoordTransform::temeToECEF(x, y, z, gmst);
+                TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
+                return tp.az;
+            }
+            return 0.0f;
+        };
+
         // 2. 匹配或快速估算本次过境的 AOS, TCA, LOS, MaxEl 及进出境方位角
         bool passFound = false;
         if (isUpcomingPass) {
@@ -198,7 +220,7 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
             unlockPassMutex();
         }
 
-        // 静态缓存：在同一颗卫星同一次过境事件的生命周期内，锁定 AOS/TCA/LOS/Az，彻底杜绝时间补偿时的漂移
+        // 静态缓存：在同一颗卫星同一次过境事件的生命周期内，锁定 AOS/TCA/LOS/Az 及轨道弧线采样点，彻底杜绝时间补偿时的漂移
         static uint32_t s_cachedSatNorad = 0;
         static uint32_t s_cachedAos = 0;
         static uint32_t s_cachedLos = 0;
@@ -206,6 +228,9 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
         static float s_cachedMaxEl = 0.0f;
         static float s_cachedAosAz = 0.0f;
         static float s_cachedLosAz = 0.0f;
+        static float s_cachedTcaAz = 0.0f;
+        static RadioTrackingInfo::SkyPoint s_cachedPoints[RadioTrackingInfo::MAX_ORBIT_POINTS];
+        static uint8_t s_cachedPointCount = 0;
 
         if (!passFound) {
             // 缓存有效性判定：同一颗卫星、且当前模拟时间尚未超过过境结束+60秒、且过境点在未来合理窗口内（4小时内）
@@ -217,6 +242,11 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
                 trackInfo.maxEl = s_cachedMaxEl;
                 trackInfo.aosAz = s_cachedAosAz;
                 trackInfo.losAz = s_cachedLosAz;
+                trackInfo.tcaAz = s_cachedTcaAz;
+                trackInfo.orbitPointCount = s_cachedPointCount;
+                for (int k = 0; k < s_cachedPointCount; k++) {
+                    trackInfo.orbitPoints[k] = s_cachedPoints[k];
+                }
                 passFound = true;
             }
         }
@@ -230,6 +260,11 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
                 trackInfo.maxEl = s_cachedMaxEl;
                 trackInfo.aosAz = s_cachedAosAz;
                 trackInfo.losAz = s_cachedLosAz;
+                trackInfo.tcaAz = s_cachedTcaAz;
+                trackInfo.orbitPointCount = s_cachedPointCount;
+                for (int k = 0; k < s_cachedPointCount; k++) {
+                    trackInfo.orbitPoints[k] = s_cachedPoints[k];
+                }
             } else {
                 trackInfo.aosTime = currentSimTime + 3600;
                 trackInfo.tcaTime = currentSimTime + 3900;
@@ -240,28 +275,6 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
         }
 
         if (!passFound) {
-            auto getEl = [&](uint32_t t) -> float {
-                double x, y, z;
-                if (g_satellites[chosenRadioSat].calc.getTEME(t, x, y, z)) {
-                    double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
-                    ECEFCoord ec = CoordTransform::temeToECEF(x, y, z, gmst);
-                    TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
-                    return tp.el;
-                }
-                return -90.0f;
-            };
-
-            auto getAz = [&](uint32_t t) -> float {
-                double x, y, z;
-                if (g_satellites[chosenRadioSat].calc.getTEME(t, x, y, z)) {
-                    double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
-                    ECEFCoord ec = CoordTransform::temeToECEF(x, y, z, gmst);
-                    TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
-                    return tp.az;
-                }
-                return 0.0f;
-            };
-
             uint32_t stepAos = currentSimTime;
             uint32_t stepLos = currentSimTime + 600;
 
@@ -331,15 +344,50 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
             trackInfo.maxEl = (peakEl > 0.0f) ? peakEl : 0.0f;
             trackInfo.aosAz = getAz(stepAos);
             trackInfo.losAz = getAz(stepLos);
+            trackInfo.tcaAz = getAz(peakTime);
+        }
 
-            // 写入静态缓存锁定状态
-            s_cachedSatNorad = rNorad;
-            s_cachedAos = stepAos;
-            s_cachedLos = stepLos;
-            s_cachedTca = peakTime;
-            s_cachedMaxEl = trackInfo.maxEl;
-            s_cachedAosAz = trackInfo.aosAz;
-            s_cachedLosAz = trackInfo.losAz;
+        // 统一采样并缓存轨道弧线采样点 (无论本次过境来自 upcoming、推荐列表还是动态搜索，均预先采样 11 点)
+        if (trackInfo.aosTime > 0 && trackInfo.losTime > trackInfo.aosTime) {
+            if (s_cachedSatNorad == rNorad && s_cachedAos == trackInfo.aosTime && s_cachedPointCount >= 2) {
+                trackInfo.orbitPointCount = s_cachedPointCount;
+                for (int k = 0; k < s_cachedPointCount; k++) {
+                    trackInfo.orbitPoints[k] = s_cachedPoints[k];
+                }
+                if (trackInfo.tcaAz == 0.0f) trackInfo.tcaAz = s_cachedTcaAz;
+            } else {
+                uint32_t dur = trackInfo.losTime - trackInfo.aosTime;
+                trackInfo.orbitPointCount = 11;
+                float peakEl = -90.0f;
+                float peakAz = trackInfo.aosAz;
+                for (int k = 0; k <= 10; k++) {
+                    uint32_t tk = trackInfo.aosTime + (uint32_t)((float)dur * (float)k / 10.0f);
+                    float az = getAz(tk);
+                    float el = getEl(tk);
+                    if (el < 0.0f) el = 0.0f;
+                    trackInfo.orbitPoints[k].az = az;
+                    trackInfo.orbitPoints[k].el = el;
+                    if (el > peakEl) {
+                        peakEl = el;
+                        peakAz = az;
+                    }
+                }
+                if (trackInfo.tcaAz == 0.0f) trackInfo.tcaAz = peakAz;
+
+                // 写入静态缓存锁定状态
+                s_cachedSatNorad = rNorad;
+                s_cachedAos = trackInfo.aosTime;
+                s_cachedLos = trackInfo.losTime;
+                s_cachedTca = trackInfo.tcaTime;
+                s_cachedMaxEl = trackInfo.maxEl;
+                s_cachedAosAz = trackInfo.aosAz;
+                s_cachedLosAz = trackInfo.losAz;
+                s_cachedTcaAz = trackInfo.tcaAz;
+                s_cachedPointCount = trackInfo.orbitPointCount;
+                for (int k = 0; k < trackInfo.orbitPointCount; k++) {
+                    s_cachedPoints[k] = trackInfo.orbitPoints[k];
+                }
+            }
         }
 
         trackInfo.isRising = (currentSimTime < trackInfo.tcaTime);

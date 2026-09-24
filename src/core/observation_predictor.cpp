@@ -113,9 +113,10 @@ int ObservationPredictor::calculateRadioScore(float maxElevation, float duration
     return score;
 }
 
-std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, double stdMag, uint32_t startTime, int daysToPredict, bool isRadioTarget) {
+std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, double stdMag, uint32_t startTime, int daysToPredict, bool isRadioTarget, int maxPasses) {
     std::vector<PassEvent> passes;
-    passes.reserve(6);
+    if (maxPasses <= 0) maxPasses = 4;
+    passes.reserve(maxPasses + 1);
     
     // If the standard magnitude is very dim, it will never be visible to the naked eye (limit is 8.5)
     // We bypass calculation for visual satellites, but amateur radio satellites are allowed (day/night RF window)
@@ -199,6 +200,9 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
         if ((iterations & 15) == 0) {
             esp_task_wdt_reset();
             vTaskDelay(1);
+            if (ESP.getFreeHeap() < 8000 || ESP.getMaxAllocHeap() < 1800) {
+                break; // 堆内存安全熔断：及时刹车，防止底层 STL 申请内存失败抛出 bad_alloc 崩溃
+            }
         }
         
         double tx, ty, tz;
@@ -425,7 +429,8 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                     }
                     
                     // 推荐过境事件中，无光学亮度的事件减去 1 颗星（保底 1 颗星）
-                    if (!currentPass.isVisible || currentPass.maxBrightness >= 98.0f) {
+                    // 业余无线电卫星不受光学可见性影响，不进行无光学亮度惩罚扣星
+                    if (!currentPass.isRadioPass && (!currentPass.isVisible || currentPass.maxBrightness >= 98.0f)) {
                         if (currentPass.score > 1) {
                             currentPass.score -= 1;
                             currentPass.baseScore = currentPass.score;
@@ -433,7 +438,25 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                     }
                     
                     if (currentPass.losTime >= startTime) {
-                        passes.push_back(currentPass);
+                        // 仅记录有效的无线电通联过境，或者光学目视可见过境（白天与夜间地影不可见的纯目视过境予以丢弃，节约内存）
+                        if (currentPass.isRadioPass || currentPass.isVisible) {
+                            if ((int)passes.size() < maxPasses) {
+                                passes.push_back(currentPass);
+                            } else {
+                                // 已经达到单星收集上限：在已有过境中找到评分最低（或仰角最低）的项进行优质置换
+                                size_t minIdx = 0;
+                                for (size_t k = 1; k < passes.size(); ++k) {
+                                    if (passes[k].score < passes[minIdx].score || 
+                                       (passes[k].score == passes[minIdx].score && passes[k].maxElevation < passes[minIdx].maxElevation)) {
+                                        minIdx = k;
+                                    }
+                                }
+                                if (currentPass.score > passes[minIdx].score ||
+                                   (currentPass.score == passes[minIdx].score && currentPass.maxElevation > passes[minIdx].maxElevation)) {
+                                    passes[minIdx] = currentPass;
+                                }
+                            }
+                        }
                     }
                 }
                 
@@ -647,7 +670,8 @@ void ObservationPredictor::postProcessEvents(std::vector<PassEvent>& passes, uin
         p.score = p.baseScore + p.eventBonus;
         
         // 推荐过境事件中，无光学亮度的事件减去 1 颗星（保底 1 颗星）
-        if (!p.isVisible || p.maxBrightness >= 98.0f) {
+        // 业余无线电卫星不受光学可见性影响，不进行无光学亮度惩罚扣星
+        if (!p.isRadioPass && (!p.isVisible || p.maxBrightness >= 98.0f)) {
             if (p.score > 1) {
                 p.score -= 1;
             }

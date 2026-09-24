@@ -42,7 +42,7 @@ public:
     ObservationPredictor(double userLat, double userLon, double userAlt, class PositionManager* pm = nullptr);
     
     // Predict passes for a satellite over a given number of days starting from startTime
-    std::vector<PassEvent> predictPasses(const TLEData& tle, double stdMag, uint32_t startTime, int daysToPredict, bool isRadioTarget = false);
+    std::vector<PassEvent> predictPasses(const TLEData& tle, double stdMag, uint32_t startTime, int daysToPredict, bool isRadioTarget = false, int maxPasses = 6);
     
     // Post-process predicted passes to check for multi-satellite events (constellation trains, concurrent passes)
     static void postProcessEvents(std::vector<PassEvent>& passes, uint32_t startTime);

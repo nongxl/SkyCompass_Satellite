@@ -574,8 +574,8 @@ void predictorTask(void* parameter) {
             continue;
         }
         
-        // Heap Protection: 检查剩余总内存和最大连续内存块（就地算法峰值开销仅需约 1.5KB，9000/2000 阈值兼具高安全裕度与流畅计算）
-        if (ESP.getFreeHeap() < 9000 || ESP.getMaxAllocHeap() < 2000) {
+        // Heap Protection: 检查剩余总内存和最大连续内存块（单星受限计算峰值开销仅需约 500B，4500/1200 阈值拥有近 9 倍安全裕度）
+        if (ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
             LOG_I("APP", "Predictor task deferred: low heap safety guard triggered (free: %u, maxBlock: %u)", 
                   (unsigned int)ESP.getFreeHeap(), (unsigned int)ESP.getMaxAllocHeap());
             vTaskDelay(pdMS_TO_TICKS(1000));
@@ -588,7 +588,7 @@ void predictorTask(void* parameter) {
         g_orbitCalculating = true;
         
         try {
-            std::unique_ptr<ObservationPredictor> predictor(new ObservationPredictor(baseUserLat, baseUserLon, baseUserAlt / 1000.0, pos_manager));
+            ObservationPredictor predictor(baseUserLat, baseUserLon, baseUserAlt / 1000.0, pos_manager);
             
             // Use simulated time for predictions
             uint32_t startTime = current_unix + timeMachineOffset;
@@ -642,8 +642,11 @@ void predictorTask(void* parameter) {
             
             // === PHASE 1: Fast 24-Hour (Tonight) Pass Calculation (< 300ms) ===
             std::vector<PassEvent> phase1Passes;
-            phase1Passes.reserve(24);
+            phase1Passes.reserve(8); // 优化：从 24 缩减至 8，立省近 2KB 宝贵堆内存
             bool phase1AbortedByHeap = false;
+            
+            // 动态配额算法（Phase 1 今晚事件）：单星候选少时配额放大，多星时紧缩，同时受总数 24 限制
+            int p1PerSatQuota = (totalCandidates <= 1) ? 6 : ((totalCandidates <= 2) ? 4 : 2);
             
             // Phase 1 - 候选高亮度目视与业余无线电卫星
             for (int satIdx : candidateSatIndices) {
@@ -651,15 +654,14 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (ESP.getFreeHeap() < 9000 || ESP.getMaxAllocHeap() < 2000) {
+                if (ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
                     LOG_I("APP", "Predictor task Phase 1 safely limited: heap protection (free: %u, passes: %d)", 
                           (unsigned int)ESP.getFreeHeap(), (int)phase1Passes.size());
                     phase1AbortedByHeap = true;
                     break;
                 }
-                if (phase1Passes.size() >= 24) {
-                    break;
-                }
+                int p1Remaining = 24 - (int)phase1Passes.size();
+                if (p1Remaining <= 0) break;
                 
                 TLEData tle;
                 float stdMag = 3.0f;
@@ -679,13 +681,8 @@ void predictorTask(void* parameter) {
                     }
                 }
                 
-                auto passes1 = predictor->predictPasses(tle, stdMag, startTime, 1, isRadioTarget);
-                if (passes1.size() > 2) {
-                    std::sort(passes1.begin(), passes1.end(), [](const PassEvent& a, const PassEvent& b) {
-                        return a.score > b.score;
-                    });
-                    passes1.resize(2);
-                }
+                int p1Target = std::min(p1PerSatQuota, p1Remaining);
+                auto passes1 = predictor.predictPasses(tle, stdMag, startTime, 1, isRadioTarget, p1Target);
                 for (auto& p : passes1) {
                     p.satSelected = true;
                     p.satIndex = satIdx;
@@ -701,7 +698,8 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (phase1Passes.size() >= 24 || ESP.getFreeHeap() < 9000 || ESP.getMaxAllocHeap() < 2000) {
+                int p1Remaining = 24 - (int)phase1Passes.size();
+                if (p1Remaining <= 0 || ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
                     break;
                 }
                 
@@ -713,13 +711,8 @@ void predictorTask(void* parameter) {
                 unlockSatMutex();
                 
                 if (rlTle.line1.length() >= 14 && rlTle.line2.length() >= 14) {
-                    auto passes1 = predictor->predictPasses(rlTle, 3.0, startTime, 1);
-                    if (passes1.size() > 2) {
-                        std::sort(passes1.begin(), passes1.end(), [](const PassEvent& a, const PassEvent& b) {
-                            return a.score > b.score;
-                        });
-                        passes1.resize(2);
-                    }
+                    int p1Target = std::min(p1PerSatQuota, p1Remaining);
+                    auto passes1 = predictor.predictPasses(rlTle, 3.0, startTime, 1, false, p1Target);
                     for (auto& p : passes1) {
                         p.satSelected = true;
                         p.satIndex = -100;
@@ -739,13 +732,19 @@ void predictorTask(void* parameter) {
                 continue;
             }
             
-            // 若因低内存提前中断且未算到有效事件，绝不发布假空结果误导用户为“无事件”，保持等待并重试
+            // 若因低内存中断且未算到有效事件，尝试重试最多 2 次，超出后直接放行降级处理，杜绝死锁循环
             if (phase1AbortedByHeap && phase1Passes.empty() && totalCandidates > 0) {
-                LOG_W("APP", "Predictor task Phase 1 incomplete due to low heap. Retrying in 1.5s...");
-                g_orbitCalculating = false;
-                triggerPrediction = true;
-                vTaskDelay(pdMS_TO_TICKS(1500));
-                continue;
+                static int s_lowHeapRetryCount = 0;
+                if (++s_lowHeapRetryCount <= 2) {
+                    LOG_W("APP", "Predictor task Phase 1 incomplete due to low heap. Retrying in 1.5s (%d/2)...", s_lowHeapRetryCount);
+                    g_orbitCalculating = false;
+                    triggerPrediction = true;
+                    vTaskDelay(pdMS_TO_TICKS(1500));
+                    continue;
+                } else {
+                    LOG_W("APP", "Predictor task low heap retries exhausted. Proceeding with available memory.");
+                    s_lowHeapRetryCount = 0;
+                }
             }
             
             // === 零内存分配就地整理 Phase 1 今夜过境 ===
@@ -789,13 +788,28 @@ void predictorTask(void* parameter) {
                 return false;
             };
 
+            // 动态配额算法（Phase 2 全周事件）：
+            // 候选只有 1 颗星时单星配额放大至 16 次，预测满 7 天，让单星爱好者看满整周通联/目视窗口；
+            // 候选增多时单星配额逐步紧缩，同时受全局总容量 32 条硬性限制，彻底杜绝内存溢出
+            int perSatQuota = 4;
+            if (totalCandidates <= 1) {
+                perSatQuota = 16;
+            } else if (totalCandidates == 2) {
+                perSatQuota = 10;
+            } else if (totalCandidates <= 4) {
+                perSatQuota = 6;
+            } else {
+                perSatQuota = 4;
+            }
+
             // Phase 2 - 候选高亮度目视收录卫星
             for (int satIdx : candidateSatIndices) {
                 vTaskDelay(1);
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (ESP.getFreeHeap() < 9000 || ESP.getMaxAllocHeap() < 2000 || allPasses.size() >= 32) {
+                int remainingSlots = 32 - (int)allPasses.size();
+                if (remainingSlots <= 0 || ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
                     LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
                           ESP.getFreeHeap(), (int)allPasses.size());
                     break;
@@ -819,8 +833,10 @@ void predictorTask(void* parameter) {
                     }
                 }
                 
-                int daysToPredict = (candidateSatIndices.size() > 6) ? 3 : 7;
-                auto passes = predictor->predictPasses(tle, stdMag, startTime, daysToPredict, isRadioTarget);
+                int currentSatTarget = std::min(perSatQuota, remainingSlots);
+                // 仅 1~2 颗星时算力内存极充沛，预测满 7 天；卫星多于 6 颗时为保障流畅度预测 3 天
+                int daysToPredict = (totalCandidates <= 2) ? 7 : (isRadioTarget ? 3 : ((candidateSatIndices.size() > 6) ? 3 : 7));
+                auto passes = predictor.predictPasses(tle, stdMag, startTime, daysToPredict, isRadioTarget, currentSatTarget);
                 // 质量优先排序
                 std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
                     if (a.score != b.score) return a.score > b.score;
@@ -828,7 +844,7 @@ void predictorTask(void* parameter) {
                 });
                 int added = 0;
                 for (auto& p : passes) {
-                    if (added >= 4) break;
+                    if (added >= currentSatTarget || allPasses.size() >= 32) break;
                     if (!isAlreadyInAllPasses(p)) {
                         p.satSelected = true;
                         p.satIndex = satIdx;
@@ -846,7 +862,8 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                if (ESP.getFreeHeap() < 9000 || ESP.getMaxAllocHeap() < 2000 || allPasses.size() >= 32) {
+                int remainingSlots = 32 - (int)allPasses.size();
+                if (remainingSlots <= 0 || ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
                     LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
                           ESP.getFreeHeap(), (int)allPasses.size());
                     break;
@@ -860,15 +877,16 @@ void predictorTask(void* parameter) {
                 unlockSatMutex();
                 
                 if (rlTle.line1.length() >= 14 && rlTle.line2.length() >= 14) {
-                    int rlDaysToPredict = (candidateRLIndices.size() > 6) ? 3 : 7;
-                    auto passes = predictor->predictPasses(rlTle, 3.0, startTime, rlDaysToPredict);
+                    int currentRLTarget = std::min(perSatQuota, remainingSlots);
+                    int rlDaysToPredict = (totalCandidates <= 2) ? 7 : ((candidateRLIndices.size() > 6) ? 3 : 7);
+                    auto passes = predictor.predictPasses(rlTle, 3.0, startTime, rlDaysToPredict, false, currentRLTarget);
                     std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
                         if (a.score != b.score) return a.score > b.score;
                         return a.aosTime < b.aosTime;
                     });
                     int added = 0;
                     for (auto& p : passes) {
-                        if (added >= 4) break;
+                        if (added >= currentRLTarget || allPasses.size() >= 32) break;
                         if (!isAlreadyInAllPasses(p)) {
                             p.satSelected = true;
                             p.satIndex = -100;

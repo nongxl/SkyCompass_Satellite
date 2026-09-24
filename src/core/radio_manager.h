@@ -32,6 +32,16 @@ struct RadioTrackingInfo {
     float losAz = 0.0f;           // LOS 落山方位角 (度)
     float distanceKm = 0.0f;      // 实时对地斜距 (km)
     String modulation = "";       // 调制模式 (如 LoRa, GFSK, AFSK, SSTV 等)
+    float tcaAz = 0.0f;           // TCA 峰值方位角 (度)
+    
+    // 俯视天球图过境轨道轨迹采样点
+    struct SkyPoint {
+        float az;
+        float el;
+    };
+    static const int MAX_ORBIT_POINTS = 16;
+    SkyPoint orbitPoints[MAX_ORBIT_POINTS];
+    uint8_t orbitPointCount = 0;
 };
 
 class RadioManager {
