@@ -162,6 +162,9 @@ bool WifiSetupView::handleInput(bool justEsc, bool justTick, bool justBack, bool
                 outConnectReq.triggered = true;
                 outConnectReq.ssid = _networks[_selectedIndex].ssid;
                 outConnectReq.pass = String(_passwordBuffer);
+                outConnectReq.channel = _networks[_selectedIndex].channel;
+                memcpy(outConnectReq.bssid, _networks[_selectedIndex].bssid, 6);
+                outConnectReq.hasBssid = true;
                 reset();
                 return true;
             }
@@ -181,10 +184,15 @@ bool WifiSetupView::handleInput(bool justEsc, bool justTick, bool justBack, bool
         if (justR) {
             _isScanning = true;
         } else if (justEnter) {
-            if (!_networks.empty()) {
+            if (!_networks.empty() && _selectedIndex >= 0 && _selectedIndex < (int)_networks.size()) {
                 _isInputtingPassword = true;
                 memset(_passwordBuffer, 0, sizeof(_passwordBuffer));
                 _passwordLen = 0;
+                String savedSsid = "", savedPass = "";
+                if (HalWifi::loadCredentials(savedSsid, savedPass) && savedSsid == _networks[_selectedIndex].ssid) {
+                    strncpy(_passwordBuffer, savedPass.c_str(), sizeof(_passwordBuffer) - 1);
+                    _passwordLen = strlen(_passwordBuffer);
+                }
             }
         } else if (justSemi) { // UP arrow
             if (!_networks.empty()) {

@@ -37,20 +37,46 @@ extern std::vector<PassEvent> recommendedPasses;
 extern uint32_t current_unix;
 extern int32_t timeMachineOffset;
 
+extern volatile bool g_loadingFinished;
+extern void lockSatMutex();
+extern void unlockSatMutex();
+
 void ChainMonoView::update() {
     // Update Chain Mono Display (dynamic interval: 100ms normally)
     static unsigned long lastChainMonoTick = 0;
     if (isMonoInitialized && millis() - lastChainMonoTick >= 100) {
         lastChainMonoTick = millis();
         
+        static MonoState state = MONO_STATE_NONE;
+        static int lastDispMinutes = -1;
+        static int lastDispSeconds = -1;
+
+        // 若系统还在开机加载阶段，显示待机动画，避免在多任务加载阶段并发扫描未就绪的卫星数据引发竞争
+        if (!g_loadingFinished) {
+            if (state != MONO_STATE_IDLE) {
+                state = MONO_STATE_IDLE;
+                lastDispMinutes = -1;
+                lastDispSeconds = -1;
+                M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
+                M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_4, &operation_status);
+                M5Chain.setMonoClear(mono_id, &operation_status);
+            }
+            uint8_t temp[8];
+            drawMonoVisualAnimation(temp);
+            M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
+            return;
+        }
+
         bool anyVisibleNow = false;
         String visibleSatName = "";
         SatIconType visibleSatIconType = ICON_SATELLITE;
         
         if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES) {
             anyVisibleNow = true;
+            lockSatMutex();
             visibleSatName = g_satellites[focusSatIndex].name;
             visibleSatIconType = g_satellites[focusSatIndex].iconType;
+            unlockSatMutex();
         } else {
             if (g_recentLaunchFocusMode) {
                 if (g_repSatCache.lastGeoValid && g_repSatCache.isVisible) {
@@ -59,6 +85,7 @@ void ChainMonoView::update() {
                     visibleSatIconType = ICON_SATELLITE;
                 }
             } else {
+                lockSatMutex();
                 for (int i = 0; i < NUM_SATELLITES; i++) {
                     if (g_satellites[i].selected && g_satCaches[i].lastGeoValid && g_satCaches[i].isVisible) {
                         anyVisibleNow = true;
@@ -67,12 +94,9 @@ void ChainMonoView::update() {
                         break;
                     }
                 }
+                unlockSatMutex();
             }
         }
-        
-        static MonoState state = MONO_STATE_NONE;
-        static int lastDispMinutes = -1;
-        static int lastDispSeconds = -1;
         
         bool isUpcomingPass = false;
         int timeDiff = -1;
@@ -104,12 +128,14 @@ void ChainMonoView::update() {
                     isUpcomingPass = true;
                     visibleSatName = nextPass.satName;
                     // 遍历 g_satellites 寻找匹配的 iconType
+                    lockSatMutex();
                     for (int i = 0; i < NUM_SATELLITES; i++) {
                         if (g_satellites[i].name == nextPass.satName) {
                             visibleSatIconType = g_satellites[i].iconType;
                             break;
                         }
                     }
+                    unlockSatMutex();
                 }
             }
         }

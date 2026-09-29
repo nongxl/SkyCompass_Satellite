@@ -312,25 +312,29 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
     canvas->fillRect(width/2, 0, width/2, 20, tab2Bg);
     canvas->drawString(I18N::get(TXT_TAB_RECENT_LAUNCH), 166 - canvas->textWidth(I18N::get(TXT_TAB_RECENT_LAUNCH))/2, 6);
     
-    // Draw Memory Usage Progress Bar on Top Bar Divider Line (y = 19..20)
+    // Draw Memory Health Progress Bar on Top Bar Divider Line (y = 19..20)
     {
         uint32_t freeHeap = ESP.getFreeHeap();
-        uint32_t totalHeap = ESP.getHeapSize();
-        float memRatio = 0.0f;
-        if (totalHeap > 0) {
-            memRatio = (float)(totalHeap - freeHeap) / (float)totalHeap;
-        }
+        // 在无外部 PSRAM 的 ESP32-S3 上，应用级健康动态堆池范围约为 0 ~ 45KB
+        // 剩余 > 20KB 为极佳 (青蓝)，10KB~20KB 为良好 (绿)，6KB~10KB 为适度 (黄)，< 6KB 为紧张 (红)
+        const float MAX_APP_HEAP = 45000.0f;
+        float memRatio = 1.0f - ((float)freeHeap / MAX_APP_HEAP);
+        if (memRatio < 0.0f) memRatio = 0.0f;
+        if (memRatio > 1.0f) memRatio = 1.0f;
+
         int fillWidth = (int)(width * memRatio);
         if (fillWidth > width) fillWidth = width;
         if (fillWidth < 0) fillWidth = 0;
 
         uint16_t memColor;
-        if (memRatio < 0.70f) {
-            memColor = canvas->color565(0, 220, 255); // 青色/天蓝色 (正常健康 <70%, FreeHeap > 85KB)
-        } else if (memRatio < 0.82f) {
-            memColor = TFT_YELLOW;                   // 黄色 (预警 70%-82%)
+        if (freeHeap >= 20000) {
+            memColor = canvas->color565(0, 220, 255); // 青蓝色 (极为充裕，剩余 >= 20KB)
+        } else if (freeHeap >= 10000) {
+            memColor = TFT_GREEN;                     // 绿色 (健康正常，剩余 10KB~20KB)
+        } else if (freeHeap >= 6000) {
+            memColor = TFT_YELLOW;                    // 黄色 (适度，剩余 6KB~10KB)
         } else {
-            memColor = TFT_RED;                      // 红色 (高占用 >82%)
+            memColor = TFT_RED;                       // 红色 (紧张，剩余 < 6KB)
         }
 
         // 绘制 2px 内存进度条充当分割线

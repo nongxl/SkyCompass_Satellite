@@ -12,6 +12,9 @@ struct WifiConnectRequest {
     bool triggered = false;
     String ssid = "";
     String pass = "";
+    int32_t channel = 0;
+    uint8_t bssid[6] = {0};
+    bool hasBssid = false;
 };
 
 class WifiSetupView {

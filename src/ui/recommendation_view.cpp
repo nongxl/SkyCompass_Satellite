@@ -71,6 +71,8 @@ void rebuildTreeLocal(std::vector<TreeItem>& tree, const std::vector<PassEvent>&
     for (int c = 0; c < 4; c++) {
         tree.push_back({true, c, -1});
         if (catExpanded[c]) {
+            std::vector<int> matchingIndices;
+            matchingIndices.reserve(passes.size());
             for (size_t i = 0; i < passes.size(); i++) {
                 const auto& p = passes[i];
                 bool isPassValid = (p.isVisible || p.isRadioPass);
@@ -81,8 +83,67 @@ void rebuildTreeLocal(std::vector<TreeItem>& tree, const std::vector<PassEvent>&
                 else if (c == 3 && p.losTime >= current_unix) match = true;
                 
                 if (match) {
-                    tree.push_back({false, c, (int)i});
+                    matchingIndices.push_back((int)i);
                 }
+            }
+            // 排序规则：首先类型优先（肉眼可见在先，无线电在后），同类型按星级降序，同星级再按时间先后
+            std::sort(matchingIndices.begin(), matchingIndices.end(), [&passes](int idxA, int idxB) {
+                const auto& a = passes[idxA];
+                const auto& b = passes[idxB];
+                int typeA = (a.isRadioPass || a.eventType == 8) ? 1 : 0;
+                int typeB = (b.isRadioPass || b.eventType == 8) ? 1 : 0;
+                if (typeA != typeB) return typeA < typeB;
+                if (a.score != b.score) return a.score > b.score;
+                return a.aosTime < b.aosTime;
+            });
+            for (int idx : matchingIndices) {
+                tree.push_back({false, c, idx});
+            }
+        }
+    }
+}
+
+// 绘制推荐事件类型标志（眼睛：肉眼光学可见事件；无线电：业余电台通联事件）
+static void drawPassTypeIcon(LGFX_Sprite* canvas, int x, int y, bool isRadio, bool isSelected) {
+    if (!canvas) return;
+    
+    // 9x7 像素精修眼睛图标 (Eye Icon) - 饱满杏仁轮廓与中心瞳孔
+    static const uint16_t ICON_EYE[7] = {
+        0b001111100, // ..XXXXX.. (上眼眶)
+        0b010000010, // .X.....X. (眼眶开角)
+        0b100111001, // X..XXX..X (外角与眼珠上部)
+        0b101111101, // X.XXXXX.X (中心瞳孔光泽)
+        0b100111001, // X..XXX..X (眼珠下部)
+        0b010000010, // .X.....X. (眼眶收角)
+        0b001111100  // ..XXXXX.. (下眼眶)
+    };
+
+    // 9x7 像素精修无线电天线波纹图标 (Radio Waves Icon) - 中心天线柱与向外辐射的双层对称电波
+    static const uint16_t ICON_RADIO[7] = {
+        0b010010010, // .X..X..X. (内外波纹顶与天线顶端)
+        0b101010101, // X.X.X.X.X (双层发散射频电波)
+        0b101010101, // X.X.X.X.X (双层发散射频电波)
+        0b101010101, // X.X.X.X.X (双层发散射频电波)
+        0b101010101, // X.X.X.X.X (双层发散射频电波)
+        0b010010010, // .X..X..X. (电波向底座收拢)
+        0b000111000  // ...XXX... (天线接地底座基座)
+    };
+
+    uint16_t color;
+    if (isRadio) {
+        // 无线电事件：选中时为明黄，常规时为通联荧光绿
+        color = isSelected ? canvas->color565(255, 230, 80) : canvas->color565(80, 255, 120);
+    } else {
+        // 肉眼可见事件：选中时为纯白，常规时为光学深空亮青色
+        color = isSelected ? TFT_WHITE : canvas->color565(80, 220, 255);
+    }
+
+    const uint16_t* pattern = isRadio ? ICON_RADIO : ICON_EYE;
+    for (int r = 0; r < 7; r++) {
+        uint16_t row = pattern[r];
+        for (int c = 0; c < 9; c++) {
+            if ((row >> (8 - c)) & 1) {
+                canvas->drawPixel(x + c, y + r, color);
             }
         }
     }
@@ -109,45 +170,36 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
             // 抽屉顶部内存使用率进度条 (宽 140px, 高 2px, Y = 17)
             {
                 uint32_t freeHeap = ESP.getFreeHeap();
-                uint32_t totalHeap = ESP.getHeapSize();
-                float memRatio = (totalHeap > 0) ? ((float)(totalHeap - freeHeap) / (float)totalHeap) : 0.0f;
+                const float MAX_APP_HEAP = 45000.0f;
+                float memRatio = 1.0f - ((float)freeHeap / MAX_APP_HEAP);
+                if (memRatio < 0.0f) memRatio = 0.0f;
+                if (memRatio > 1.0f) memRatio = 1.0f;
+
                 int barW = 140;
                 int fillWidth = (int)(barW * memRatio);
                 if (fillWidth > barW) fillWidth = barW;
                 if (fillWidth < 0) fillWidth = 0;
 
-                uint16_t memColor = (memRatio < 0.65f) ? canvas->color565(0, 220, 255) : ((memRatio < 0.82f) ? TFT_YELLOW : TFT_RED);
+                uint16_t memColor;
+                if (freeHeap >= 20000) {
+                    memColor = canvas->color565(0, 220, 255); // 青蓝色 (极为充裕，剩余 >= 20KB)
+                } else if (freeHeap >= 10000) {
+                    memColor = TFT_GREEN;                     // 绿色 (健康正常，剩余 10KB~20KB)
+                } else if (freeHeap >= 6000) {
+                    memColor = TFT_YELLOW;                    // 黄色 (适度，剩余 6KB~10KB)
+                } else {
+                    memColor = TFT_RED;                       // 红色 (紧张，剩余 < 6KB)
+                }
                 canvas->fillRect(0, 17, barW, 2, canvas->color565(35, 45, 55));
                 if (fillWidth > 0) {
                     canvas->fillRect(0, 17, fillWidth, 2, memColor);
                 }
             }
             
-            bool localPredictionsReady = false;
-            int localPredictionProgress = 0;
-            bool localTimeSynced = false;
-            static uint32_t lastCopiedVersion = 0;
-            static std::vector<PassEvent> localRecommendedPasses;
-            static std::vector<TreeItem> localDisplayTree;
-
             lockPassMutex();
-            localPredictionsReady = predictionsReady;
-            localPredictionProgress = predictionProgress;
-            localTimeSynced = g_timeSynced;
-            if (localPredictionsReady) {
-                if (lastCopiedVersion != g_passTreeVersion) {
-                    localRecommendedPasses = recommendedPasses;
-                    localDisplayTree = displayTree;
-                    lastCopiedVersion = g_passTreeVersion;
-                }
-            } else {
-                if (!localRecommendedPasses.empty()) {
-                    localRecommendedPasses.clear();
-                    localDisplayTree.clear();
-                }
-                lastCopiedVersion = 0;
-            }
-            unlockPassMutex();
+            bool localPredictionsReady = predictionsReady;
+            int localPredictionProgress = predictionProgress;
+            bool localTimeSynced = g_timeSynced;
 
             if (!localPredictionsReady) {
                 canvas->setTextColor(TFT_YELLOW);
@@ -159,7 +211,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     canvas->drawString(buf, 5, 30);
                 }
             } else {
-                if (localRecommendedPasses.empty()) {
+                if (recommendedPasses.empty()) {
                     canvas->setTextColor(TFT_LIGHTGRAY);
                     canvas->drawString(I18N::get(TXT_NO_PASSES_7D), 5, 30);
                     
@@ -181,9 +233,9 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                         const char* staleMsg = (currL == LANG_ZH) ? "TLE过期,请连WiFi更新" : ((currL == LANG_JA) ? "TLE期限切れ,WiFi更新" : ((currL == LANG_ES) ? "TLE vencido, sinc WiFi" : "Stale TLE, sync WiFi"));
                         canvas->drawString(staleMsg, 5, 48);
                     }
-                } else if (selectedPassIndex >= 0 && selectedPassIndex < (int)localRecommendedPasses.size()) {
+                } else if (selectedPassIndex >= 0 && selectedPassIndex < (int)recommendedPasses.size()) {
                     // Draw Detail View
-                    const auto& p = localRecommendedPasses[selectedPassIndex];
+                    const auto& p = recommendedPasses[selectedPassIndex];
                     canvas->setTextColor(TFT_CYAN);
                     canvas->drawString(I18N::get(TXT_PASS_NAME), 5, 20);
                     canvas->setTextColor(TFT_WHITE);
@@ -325,7 +377,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     // Count passes per category for display in top-level items
                     int catCounts[4] = {0, 0, 0, 0};
                     uint32_t currentSimTime = current_unix + timeMachineOffset;
-                    for (const auto& p : localRecommendedPasses) {
+                    for (const auto& p : recommendedPasses) {
                         if (p.losTime >= currentSimTime) {
                             bool isPassValid = (p.isVisible || p.isRadioPass);
                             if (isPassValid && p.aosTime < currentSimTime + 24*3600) catCounts[0]++;
@@ -348,9 +400,9 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     int itemsPerPage = isCjk ? 6 : 7;
                     int startIndex = (passScrollIndex / itemsPerPage) * itemsPerPage;
                     
-                    for (int i = 0; i < itemsPerPage && (startIndex + i) < localDisplayTree.size(); i++) {
+                    for (int i = 0; i < itemsPerPage && (startIndex + i) < displayTree.size(); i++) {
                         int idx = startIndex + i;
-                        const auto& item = localDisplayTree[idx];
+                        const auto& item = displayTree[idx];
                         
                         if (idx == passScrollIndex) {
                             canvas->fillRect(2, y-1, 136, lineH, canvas->color565(0, 120, 255));
@@ -374,14 +426,20 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                             }
                             canvas->drawString(label.c_str(), 5, y);
                         } else {
-                            if (item.passIndex < 0 || item.passIndex >= (int)localRecommendedPasses.size()) {
+                            if (item.passIndex < 0 || item.passIndex >= (int)recommendedPasses.size()) {
                                 continue;
                             }
-                            const auto& p = localRecommendedPasses[item.passIndex];
-                            canvas->setTextColor(idx == passScrollIndex ? TFT_WHITE : TFT_LIGHTGRAY);
+                            const auto& p = recommendedPasses[item.passIndex];
+                            bool isSelected = (idx == passScrollIndex);
+                            bool isRadio = (p.isRadioPass || p.eventType == 8);
+                            
+                            int iconY = y + (isCjk ? 2 : 1);
+                            drawPassTypeIcon(canvas, 5, iconY, isRadio, isSelected);
+
+                            canvas->setTextColor(isSelected ? TFT_WHITE : TFT_LIGHTGRAY);
                             String name = String(p.satName.c_str());
                             if (name.length() > 8) name = name.substring(0, 7) + ".";
-                            canvas->drawString(name.c_str(), 15, y);
+                            canvas->drawString(name.c_str(), 16, y);
                             
                             // Draw stars
                             String stars = "";
@@ -406,12 +464,13 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                         y += lineH;
                     }
                     
-                    if (localDisplayTree.size() > itemsPerPage) {
+                    if (displayTree.size() > itemsPerPage) {
                         canvas->setTextColor(TFT_DARKGREY);
                         canvas->drawString("[^/v]", 110, 5);
                     }
                 }
             }
+            unlockPassMutex();
             
             // Draw 2-Row Status Bar at the bottom of the panel
             // Divider line at y=100

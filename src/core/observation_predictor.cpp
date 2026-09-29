@@ -200,7 +200,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
         if ((iterations & 15) == 0) {
             esp_task_wdt_reset();
             vTaskDelay(1);
-            if (ESP.getFreeHeap() < 8000 || ESP.getMaxAllocHeap() < 1800) {
+            if (ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
                 break; // 堆内存安全熔断：及时刹车，防止底层 STL 申请内存失败抛出 bad_alloc 崩溃
             }
         }

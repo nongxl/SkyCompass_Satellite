@@ -10,7 +10,7 @@ extern AttitudeEstimator* attitude;
 extern double baseUserLat;
 extern double baseUserLon;
 extern uint32_t current_unix;
-extern String g_loadingStatusText;
+extern void getLoadingStatusText(char* outBuf, size_t maxLen);
 
 void StartupView::draw(int progressPercentage, bool showLangSelect, int selectedLangIndex) {
     if (!earth_renderer) return;
@@ -62,8 +62,10 @@ void StartupView::draw(int progressPercentage, bool showLangSelect, int selected
     
     canvas->setTextColor(TFT_YELLOW);
     canvas->setTextSize(1);
-    String statusStr = (g_loadingStatusText.length() > 0) ? g_loadingStatusText : I18N::get(TXT_LOADING_MODELS);
-    canvas->drawString(statusStr.c_str(), 120 - canvas->textWidth(statusStr.c_str()) / 2, 50);
+    char statusBuf[64] = {0};
+    getLoadingStatusText(statusBuf, sizeof(statusBuf));
+    const char* statusStr = (statusBuf[0] != '\0') ? statusBuf : I18N::get(TXT_LOADING_MODELS);
+    canvas->drawString(statusStr, 120 - canvas->textWidth(statusStr) / 2, 50);
     
     // Draw progress bar
     canvas->drawRect(35, 108, 170, 8, TFT_DARKGREY);

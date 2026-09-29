@@ -26,9 +26,15 @@ SGP4Calc& SGP4Calc::operator=(const SGP4Calc& other) {
 }
 
 bool SGP4Calc::init(const TLEData& tle) {
+    if (tle.line1.length() < 68 || tle.line2.length() < 68) {
+        return false;
+    }
     char name[30];
-    char line1[80];
-    char line2[80];
+    char line1[130];
+    char line2[130];
+    memset(name, 0, sizeof(name));
+    memset(line1, 0, sizeof(line1));
+    memset(line2, 0, sizeof(line2));
     tle.name.toCharArray(name, sizeof(name));
     tle.line1.toCharArray(line1, sizeof(line1));
     tle.line2.toCharArray(line2, sizeof(line2));

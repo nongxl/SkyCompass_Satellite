@@ -198,15 +198,22 @@ void unlockPassMutex() {
 }
 
 volatile bool g_networkActive = false;
+static volatile int s_networkActiveCount = 0;
 struct NetworkActiveGuard {
-    NetworkActiveGuard() { g_networkActive = true; }
-    ~NetworkActiveGuard() { g_networkActive = false; }
+    NetworkActiveGuard() {
+        s_networkActiveCount++;
+        g_networkActive = true;
+    }
+    ~NetworkActiveGuard() {
+        if (s_networkActiveCount > 0) s_networkActiveCount--;
+        g_networkActive = (s_networkActiveCount > 0);
+    }
 };
 
-// 内存安全检查阈值：确保有足够内部 RAM 分配任务栈 (8-10KB) 与 Wi-Fi 驱动 RX buffer
-// 任务栈需要连续 8-10KB (MaxBlock >= 12KB)，总可用堆至少保持在 38KB 以上
-static const size_t MIN_SAFE_HEAP_FOR_NETWORK = 18000;
-static const size_t MIN_SAFE_BLOCK_FOR_NETWORK = 6000;
+// 内存安全检查阈值：确保有足够内部 RAM 分配网络任务栈 (4-5KB)
+// 任务栈需要连续 4-5KB (MaxBlock >= 3.5KB)，总可用堆保持在 9KB 以上即可安全运行
+static const size_t MIN_SAFE_HEAP_FOR_NETWORK = 9000;
+static const size_t MIN_SAFE_BLOCK_FOR_NETWORK = 3500;
 
 inline bool isSystemMemorySafeForNetwork() {
     size_t freeH = ESP.getFreeHeap();
@@ -662,22 +669,24 @@ void predictorTask(void* parameter) {
                     phase1AbortedByHeap = true;
                     break;
                 }
-                int p1Remaining = 24 - (int)phase1Passes.size();
+                int p1Remaining = 12 - (int)phase1Passes.size();
                 if (p1Remaining <= 0) break;
                 
                 TLEData tle;
                 float stdMag = 3.0f;
                 bool isRadioTarget = false;
+                uint32_t noradId = 0;
                 lockSatMutex();
                 tle = g_satellites[satIdx].tle;
                 stdMag = g_satellites[satIdx].stdMag;
                 if (g_satellites[satIdx].type == SAT_TYPE_HAM) {
                     isRadioTarget = true;
                 }
+                noradId = g_satellites[satIdx].noradId;
                 unlockSatMutex();
                 
                 if (satIdx < NUM_BUILTIN_SATELLITES) {
-                    const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(g_satellites[satIdx].noradId);
+                    const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(noradId);
                     if (entry && (entry->flags & FLAG_RADIO)) {
                         isRadioTarget = true;
                     }
@@ -700,7 +709,7 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                int p1Remaining = 24 - (int)phase1Passes.size();
+                int p1Remaining = 12 - (int)phase1Passes.size();
                 if (p1Remaining <= 0 || ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
                     break;
                 }
@@ -755,11 +764,16 @@ void predictorTask(void* parameter) {
                 return p.losTime < nowTs1;
             }), phase1Passes.end());
 
+            // 排序规则：首先类型优先（肉眼可见在先，无线电在后），同类型按星级降序，同星级再按时间先后
             std::sort(phase1Passes.begin(), phase1Passes.end(), [](const PassEvent& a, const PassEvent& b) {
+                int typeA = (a.isRadioPass || a.eventType == 8) ? 1 : 0;
+                int typeB = (b.isRadioPass || b.eventType == 8) ? 1 : 0;
+                if (typeA != typeB) return typeA < typeB;
+                if (a.score != b.score) return a.score > b.score;
                 return a.aosTime < b.aosTime;
             });
-            if (phase1Passes.size() > 24) {
-                phase1Passes.resize(24);
+            if (phase1Passes.size() > 12) {
+                phase1Passes.resize(12);
             }
             
             std::vector<TreeItem> tempDisplayTree1;
@@ -810,7 +824,7 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                int remainingSlots = 32 - (int)allPasses.size();
+                int remainingSlots = 16 - (int)allPasses.size();
                 if (remainingSlots <= 0 || ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
                     LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
                           ESP.getFreeHeap(), (int)allPasses.size());
@@ -820,16 +834,18 @@ void predictorTask(void* parameter) {
                 TLEData tle;
                 float stdMag = 3.0f;
                 bool isRadioTarget = false;
+                uint32_t noradId = 0;
                 lockSatMutex();
                 tle = g_satellites[satIdx].tle;
                 stdMag = g_satellites[satIdx].stdMag;
                 if (g_satellites[satIdx].type == SAT_TYPE_HAM) {
                     isRadioTarget = true;
                 }
+                noradId = g_satellites[satIdx].noradId;
                 unlockSatMutex();
                 
                 if (satIdx < NUM_BUILTIN_SATELLITES) {
-                    const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(g_satellites[satIdx].noradId);
+                    const EncyclopediaEntry* entry = Encyclopedia::getEntryByNorad(noradId);
                     if (entry && (entry->flags & FLAG_RADIO)) {
                         isRadioTarget = true;
                     }
@@ -846,7 +862,7 @@ void predictorTask(void* parameter) {
                 });
                 int added = 0;
                 for (auto& p : passes) {
-                    if (added >= currentSatTarget || allPasses.size() >= 32) break;
+                    if (added >= currentSatTarget || allPasses.size() >= 16) break;
                     if (!isAlreadyInAllPasses(p)) {
                         p.satSelected = true;
                         p.satIndex = satIdx;
@@ -864,7 +880,7 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                int remainingSlots = 32 - (int)allPasses.size();
+                int remainingSlots = 16 - (int)allPasses.size();
                 if (remainingSlots <= 0 || ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
                     LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
                           ESP.getFreeHeap(), (int)allPasses.size());
@@ -888,7 +904,7 @@ void predictorTask(void* parameter) {
                     });
                     int added = 0;
                     for (auto& p : passes) {
-                        if (added >= currentRLTarget || allPasses.size() >= 32) break;
+                        if (added >= currentRLTarget || allPasses.size() >= 16) break;
                         if (!isAlreadyInAllPasses(p)) {
                             p.satSelected = true;
                             p.satIndex = -100;
@@ -933,17 +949,21 @@ void predictorTask(void* parameter) {
             return a.aosTime < b.aosTime;
         });
 
-        // 4. 就地截断未来事件，总常驻容量控制在 32 个以内 (释放尾部内存，0 字节分配)
+        // 4. 就地截断未来事件，总常驻容量控制在 16 个以内 (释放尾部内存，0 字节分配)
         size_t tonightCount = std::distance(allPasses.begin(), futureBegin);
-        const size_t TOTAL_MAX_PASSES = 32;
+        const size_t TOTAL_MAX_PASSES = 16;
         size_t allowedFuture = (TOTAL_MAX_PASSES > tonightCount) ? (TOTAL_MAX_PASSES - tonightCount) : 0;
         size_t actualFuture = std::distance(futureBegin, allPasses.end());
         if (actualFuture > allowedFuture) {
             allPasses.erase(futureBegin + allowedFuture, allPasses.end());
         }
 
-        // 5. 最终列表整体按时间升序排列 (0 字节内存分配)
+        // 5. 最终列表整体排序：首先类型优先（肉眼可见在先，无线电在后），同类型按星级降序，同星级再按时间先后
         std::sort(allPasses.begin(), allPasses.end(), [](const PassEvent& a, const PassEvent& b) {
+            int typeA = (a.isRadioPass || a.eventType == 8) ? 1 : 0;
+            int typeB = (b.isRadioPass || b.eventType == 8) ? 1 : 0;
+            if (typeA != typeB) return typeA < typeB;
+            if (a.score != b.score) return a.score > b.score;
             return a.aosTime < b.aosTime;
         });
 
@@ -987,7 +1007,10 @@ void predictorTask(void* parameter) {
 struct NetworkParams {
     String ssid;
     String pass;
-    bool shouldSave;
+    int32_t channel = 0;
+    uint8_t bssid[6] = {0};
+    bool hasBssid = false;
+    bool shouldSave = false;
 };
 
 // 自动向 SatNOGS 开放数据库 (db.satnogs.org API) 联机查询任意 NORAD ID 的下行/上行无线电频率与调制模式
@@ -1053,13 +1076,13 @@ void fetchFrequencies() {
     delay(50);
     std::unique_ptr<WiFiClient> client(new WiFiClient());
     if (!client) return;
-    client->setTimeout(4000);
+    client->setTimeout(2000);
     
     std::unique_ptr<HTTPClient> http(new HTTPClient());
     if (!http) return;
     
-    http->setTimeout(4000);
-    http->setConnectTimeout(4000);
+    http->setTimeout(2000);
+    http->setConnectTimeout(2000);
     http->begin(*client, "http://raw.staticdn.net/nongxl/SkyCompass_Satellite/main/data/frequencies.json");
     int httpCode = http->GET();
     if (httpCode != HTTP_CODE_OK) {
@@ -1196,6 +1219,37 @@ struct WiFiDisconnectGuard {
     }
 };
 
+void tryLoadRecentLaunchCache();
+
+// NVS 辅助：记录/检查/清除近期发射因内存碎片导致的待重启更新状态
+static void markRecentLaunchPendingReboot() {
+    Preferences prefs;
+    if (prefs.begin("sat_app", false)) {
+        prefs.putBool("pending_rl", true);
+        prefs.end();
+        LOG_I("APP", "[NVS] Flagged pending_rl=true for next boot.");
+    }
+}
+
+static void clearRecentLaunchPendingReboot() {
+    Preferences prefs;
+    if (prefs.begin("sat_app", false)) {
+        prefs.remove("pending_rl");
+        prefs.end();
+        LOG_I("APP", "[NVS] Cleared pending_rl flag.");
+    }
+}
+
+static bool hasRecentLaunchPendingReboot() {
+    Preferences prefs;
+    if (prefs.begin("sat_app", true)) {
+        bool val = prefs.getBool("pending_rl", false);
+        prefs.end();
+        return val;
+    }
+    return false;
+}
+
 void recentLaunchNetworkTaskImpl(bool shouldDisconnectWifi = true) {
     NetworkActiveGuard guard;
     PredictorTaskSuspendGuard predGuard;
@@ -1208,25 +1262,34 @@ void recentLaunchNetworkTaskImpl(bool shouldDisconnectWifi = true) {
     if (!HalWifi::isConnected()) {
         String ssid = "";
         String pass = "";
-        HalWifi::loadCredentials(ssid, pass);
+        int32_t channel = 0;
+        HalWifi::loadCredentials(ssid, pass, &channel);
         
         if (ssid.length() > 0) {
             recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
-            HalWifi::begin(ssid.c_str(), pass.c_str());
+            HalWifi::begin(ssid.c_str(), pass.c_str(), channel);
         }
         
         // If auto-connect with saved credentials failed or no credentials saved -> pop up WiFi setup screen
         if (!HalWifi::isConnected()) {
-            recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "未找到已知WiFi，请配置" : "WiFi not found, please configure";
-            recentLaunchDownloading = false;
-            recentLaunchDownloadFinishedMs = millis();
-            wifiGuard.enabled = false;
-            HalWifi::disconnect();
-            delay(50);
-            g_wifiSetupReturnState = STATE_SAT_SELECT;
-            appState = STATE_WIFI_SETUP;
-            wifi_setup_view.startScan();
-            return;
+            if (ssid.length() == 0) {
+                recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "未找到已知WiFi，请配置" : "WiFi not found, please configure";
+                recentLaunchDownloading = false;
+                recentLaunchDownloadFinishedMs = millis();
+                wifiGuard.enabled = false;
+                HalWifi::disconnect();
+                delay(50);
+                g_wifiSetupReturnState = STATE_SAT_SELECT;
+                appState = STATE_WIFI_SETUP;
+                wifi_setup_view.startScan();
+                return;
+            } else {
+                markRecentLaunchPendingReboot();
+                recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "内存碎片，请重启设备" : "Low memory, please restart";
+                recentLaunchDownloading = false;
+                recentLaunchDownloadFinishedMs = millis();
+                return;
+            }
         }
     }
     
@@ -1304,13 +1367,17 @@ void recentLaunchNetworkTaskImpl(bool shouldDisconnectWifi = true) {
     }
     
     if (success) {
+        clearRecentLaunchPendingReboot();
         recentLaunchDownloadSuccess = true;
         recentLaunchDownloading = false;
         recentLaunchDownloadFinishedMs = millis();
         recentLaunchErrorMsg = I18N::get(TXT_UPDATE_SUCCESS_CACHE);
         g_recentLaunchRefreshPending = true;
     } else {
-        if (recentLaunchErrorMsg.length() == 0 || recentLaunchErrorMsg == I18N::get(TXT_REFRESHING_GP)) {
+        if (ESP.getMaxAllocHeap() < 3500 || ESP.getFreeHeap() < 9000) {
+            markRecentLaunchPendingReboot();
+            recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "内存碎片，请重启设备" : "Low memory, please restart";
+        } else if (recentLaunchErrorMsg.length() == 0 || recentLaunchErrorMsg == I18N::get(TXT_REFRESHING_GP)) {
             recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "下载失败，请重试" : "Download Failed!";
         }
         LOG_I("RECENT_LAUNCH", "Celestrak JSON fetch failed");
@@ -1532,8 +1599,10 @@ void downloadCustomSatTask(void* parameter) {
         if (!wifiReady && !wifiWasConnected) {
             HalWifi::disconnect();
             delay(50);
-            appState = STATE_WIFI_SETUP;
-            wifi_setup_view.startScan();
+            if (manualWifiToggle) {
+                appState = STATE_WIFI_SETUP;
+                wifi_setup_view.startScan();
+            }
         }
     }
     
@@ -1550,28 +1619,34 @@ void networkTaskImpl(void* parameter) {
     
     String ssid = "";
     String pass = "";
+    int32_t channel = 0;
+    uint8_t bssid[6] = {0};
+    bool hasBssid = false;
     bool shouldSave = false;
     
     if (parameter != NULL) {
         NetworkParams* params = (NetworkParams*)parameter;
         ssid = params->ssid;
         pass = params->pass;
+        channel = params->channel;
+        hasBssid = params->hasBssid;
+        if (hasBssid) {
+            memcpy(bssid, params->bssid, 6);
+        }
         shouldSave = params->shouldSave;
         delete params;
     } else {
-        HalWifi::loadCredentials(ssid, pass);
+        HalWifi::loadCredentials(ssid, pass, &channel);
     }
     
     if (ssid.length() == 0) {
-        LOG_I("APP", "No WiFi credentials available. Offline mode active.");
-        if (manualWifiToggle || appState == STATE_MAIN || appState == STATE_SAT_SELECT) {
-            wifiGuard.enabled = false;
-            HalWifi::disconnect();
-            delay(50);
-            g_wifiSetupReturnState = appState;
-            appState = STATE_WIFI_SETUP;
-            wifi_setup_view.startScan();
-        }
+        LOG_I("APP", "No WiFi credentials found (first boot / new user). Entering setup mode for user configuration.");
+        wifiGuard.enabled = false;
+        HalWifi::disconnect();
+        delay(50);
+        g_wifiSetupReturnState = appState;
+        appState = STATE_WIFI_SETUP;
+        wifi_setup_view.startScan();
         g_wifiConnecting = false;
         g_dataUpdating = false;
         g_timeSynced = true;
@@ -1580,10 +1655,10 @@ void networkTaskImpl(void* parameter) {
     }
 
     // 1. Connect WiFi
-    HalWifi::begin(ssid.c_str(), pass.c_str());
+    HalWifi::begin(ssid.c_str(), pass.c_str(), channel, hasBssid ? bssid : nullptr);
     
     if (!HalWifi::isConnected()) {
-        LOG_I("APP", "WiFi connection failed. Entering setup or offline mode.");
+        LOG_I("APP", "WiFi connection failed. Entering setup mode for user configuration.");
         if (appState == STATE_SAT_SELECT) {
             downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "未找到已知WiFi，请配置" : "WiFi not found, please configure";
             downloadFinishedMs = millis();
@@ -1594,10 +1669,10 @@ void networkTaskImpl(void* parameter) {
         triggerPrediction = true;
 
         wifiGuard.enabled = false;
-        HalWifi::disconnect(); // 失败后在此彻底关闭驱动，让后续扫描重新初始化
+        HalWifi::disconnect(); // 失败后在此彻底关闭驱动并进入 WIFI_OFF，释放射频与协议栈内存
         delay(50);
 
-        // 当旧凭据在新网络环境中无法连接时，自动弹出 WiFi 扫描配置供用户选择当前网络
+        // 检测不到可连接的 WiFi 时自动弹出网络配置界面供用户选择是否连接
         g_wifiSetupReturnState = appState;
         appState = STATE_WIFI_SETUP;
         wifi_setup_view.startScan();
@@ -1605,7 +1680,7 @@ void networkTaskImpl(void* parameter) {
     }
     
     if (HalWifi::isConnected() && shouldSave) {
-        HalWifi::saveCredentials(ssid, pass);
+        HalWifi::saveCredentials(ssid, pass, channel);
     }
     
     if (HalWifi::isConnected()) {
@@ -1616,9 +1691,35 @@ void networkTaskImpl(void* parameter) {
             downloadErrorMsg = "WiFi Connected! Syncing time...";
         }
         
-        // Auto-trigger recent launches download sequentially if active tab is Recent Launch
-        if (currentSatTab == TAB_RECENT_LAUNCH || recentLaunchDownloading) {
-            recentLaunchNetworkTaskImpl(false); // Do not disconnect WiFi; networkTaskImpl still needs it
+        // 检查是否是首次成功联网
+        Preferences syncPrefs;
+        syncPrefs.begin("sat_app", true);
+        bool firstSyncDone = syncPrefs.getBool("first_sync_done", false);
+        syncPrefs.end();
+
+        // 检查是否是首次成功联网，或者是否有未完成的近期发射更新请求（因重启恢复）
+        bool pendingRl = hasRecentLaunchPendingReboot();
+
+        // 仅在首次成功联网（新用户初始化），或者重启自动续传，或者用户在近期发射页手动点击更新时，才更新近期发射列表
+        if (!firstSyncDone || pendingRl || recentLaunchDownloading) {
+            LOG_I("APP", "[RECENT_LAUNCH] %s: syncing recent launches...", 
+                  pendingRl ? "Reboot auto-resume pending update" : (!firstSyncDone ? "First-time network boot" : "Manual user refresh"));
+            if (appState == STATE_SAT_SELECT) {
+                downloadErrorMsg = pendingRl ? 
+                    ((I18N::getLanguage() == LANG_ZH) ? "重启恢复: 正在更新近期发射..." : "Reboot recovery: updating recent launches...") :
+                    (!firstSyncDone ? 
+                        ((I18N::getLanguage() == LANG_ZH) ? "初次配置: 正在同步近期发射..." : "First sync: downloading recent launches...") :
+                        ((I18N::getLanguage() == LANG_ZH) ? "正在同步近期发射..." : "Downloading recent launches..."));
+            }
+            recentLaunchNetworkTaskImpl(false); // 不断开 WiFi，优先在最纯净内存下完成 Recent Launch 流式解析
+            if (recentLaunchDownloadSuccess) {
+                clearRecentLaunchPendingReboot();
+                // 成功后重新加载最新缓存到全局变量并刷新UI
+                tryLoadRecentLaunchCache();
+                LOG_I("APP", "[RECENT_LAUNCH] Pending reboot update completed successfully!");
+            }
+        } else {
+            LOG_I("APP", "[RECENT_LAUNCH] Subsequent boot: skipped auto-sync (manual refresh required).");
         }
         
         // 2. Fetch NTP (UTC, gmtOffset_sec=0 ensures time() returns UTC)
@@ -1634,7 +1735,7 @@ void networkTaskImpl(void* parameter) {
             lastPredictionBaseTime = 0;
             predictionsReady = false;
             unlockPassMutex();
-            triggerPrediction = true;
+            // 注意：不要在此处触发过境推算，待后续 TLE 更新全部完成且 WiFi 断开后（第1855行）再统一触发
         }
 
         if (appState == STATE_SAT_SELECT) {
@@ -1784,8 +1885,8 @@ void networkTaskImpl(void* parameter) {
             sharedClient.stop();
         }
 
-        // 3.5 仅在有卫星数据更新且未发生拒连时，才同步频率数据；若原本新鲜则跳过网络请求
-        if (updated || !LittleFS.exists("/frequencies.json")) {
+        // 3.5 仅在本地无频率缓存或首次全量同步时拉取，杜绝每次刷新被国外 DNS 阻塞卡死 28 秒
+        if (!LittleFS.exists("/frequencies.json") || !firstSyncDone) {
             if (appState == STATE_SAT_SELECT) {
                 downloadErrorMsg = "Syncing frequencies...";
             }
@@ -1817,6 +1918,13 @@ void networkTaskImpl(void* parameter) {
                     downloadErrorMsg = "Frequencies Updated! GP Data is fresh.";
                 }
             }
+        }
+        if (!firstSyncDone) {
+            Preferences pWrite;
+            pWrite.begin("sat_app", false);
+            pWrite.putBool("first_sync_done", true);
+            pWrite.end();
+            LOG_I("APP", "[FIRST_BOOT] First network sync completed and marked in NVS.");
         }
         // 无论何种模式，数据同步任务执行完毕后均关闭 WiFi，彻底释放硬件驱动与内存给系统堆
         LOG_I("APP", "Network tasks complete. Turning off WiFi to save power and free memory.");
@@ -1941,6 +2049,7 @@ void saveSelectedSatellites() {
     }
     String idList = "";
     bool first = true;
+    lockSatMutex();
     for (int i = 0; i < NUM_SATELLITES; i++) {
         if (g_satellites[i].selected) {
             if (!first) idList += ",";
@@ -1948,6 +2057,7 @@ void saveSelectedSatellites() {
             first = false;
         }
     }
+    unlockSatMutex();
     prefs.putString("selIds", idList);
     prefs.end();
     LOG_I("APP", "[SAT_PREFS] Saved selected satellites to NVS: [%s]", idList.c_str());
@@ -1968,9 +2078,11 @@ void loadSelectedSatellites() {
 
     if (selIds.length() == 0) {
         LOG_I("APP", "[SAT_PREFS] Saved user selection is empty.");
+        lockSatMutex();
         for (int i = 0; i < NUM_SATELLITES; i++) {
             g_satellites[i].selected = false;
         }
+        unlockSatMutex();
         return;
     }
 
@@ -1989,6 +2101,7 @@ void loadSelectedSatellites() {
     if (targetIds.empty()) return;
 
     int matchedCount = 0;
+    lockSatMutex();
     for (int i = 0; i < NUM_SATELLITES; i++) {
         bool found = false;
         for (int targetId : targetIds) {
@@ -2000,6 +2113,7 @@ void loadSelectedSatellites() {
         g_satellites[i].selected = found;
         if (found) matchedCount++;
     }
+    unlockSatMutex();
 
     LOG_I("APP", "[SAT_PREFS] Loaded %d selected satellites from NVS (matched %d/%d).",
           (int)targetIds.size(), matchedCount, NUM_SATELLITES);
@@ -2021,7 +2135,28 @@ void imuTask(void* pvParameters) {
 
 volatile bool g_loadingFinished = false;
 volatile int g_loadingProgress = 18;
-String g_loadingStatusText = "";
+
+// 彻底解决多核无锁操作 Arduino String 导致的野指针/堆破坏 (Heap Corruption / Panic [4])
+static portMUX_TYPE s_loadingStatusMux = portMUX_INITIALIZER_UNLOCKED;
+static char s_loadingStatusBuf[64] = "";
+
+void setLoadingStatusText(const char* txt) {
+    if (!txt) return;
+    portENTER_CRITICAL(&s_loadingStatusMux);
+    strlcpy(s_loadingStatusBuf, txt, sizeof(s_loadingStatusBuf));
+    portEXIT_CRITICAL(&s_loadingStatusMux);
+}
+
+void setLoadingStatusText(const String& txt) {
+    setLoadingStatusText(txt.c_str());
+}
+
+void getLoadingStatusText(char* outBuf, size_t maxLen) {
+    if (!outBuf || maxLen == 0) return;
+    portENTER_CRITICAL(&s_loadingStatusMux);
+    strlcpy(outBuf, s_loadingStatusBuf, maxLen);
+    portEXIT_CRITICAL(&s_loadingStatusMux);
+}
 
 void drawStartupScreen(int progressPercentage, bool showLangSelect = false, int selectedLangIndex = 0) {
     StartupView::draw(progressPercentage, showLangSelect, selectedLangIndex);
@@ -2072,6 +2207,9 @@ void setup() {
     
     earth_renderer = new EarthRenderer(&M5Cardputer.Display);
     earth_renderer->begin();
+
+    // 在系统刚开机、SRAM 最整齐无碎片的黄金时刻，预分配 WiFi STA 驱动与 DMA 缓冲区并立即休眠
+    HalWifi::preinit();
 
     // 检查是否为首次开机（无硬件配置记录）
     HardwareConfig::getInstance().load();
@@ -2262,7 +2400,7 @@ void setup() {
             }  
             
             Language currL = I18N::getLanguage();
-            g_loadingStatusText = (currL == LANG_ZH) ? "初始化传感器与外设..." : ((currL == LANG_JA) ? "センサー・外来機器の初期化中..." : ((currL == LANG_ES) ? "Inicializando sensores..." : "Initializing Hardware..."));
+            setLoadingStatusText((currL == LANG_ZH) ? "初始化传感器与外设..." : ((currL == LANG_JA) ? "センサー・外来機器の初期化中..." : ((currL == LANG_ES) ? "Inicializando sensores..." : "Initializing Hardware...")));
             g_loadingProgress = 10;
             
             // Load cached position from Preferences
@@ -2299,7 +2437,7 @@ void setup() {
             }
             
             Language currL_pos = I18N::getLanguage();
-            g_loadingStatusText = (currL_pos == LANG_ZH) ? "载入观测坐标与太阳模型..." : ((currL_pos == LANG_JA) ? "観測座標・太陽モデルの読み込み中..." : ((currL_pos == LANG_ES) ? "Cargando ubicación y Sol..." : "Loading Location & Sun Data..."));
+            setLoadingStatusText((currL_pos == LANG_ZH) ? "载入观测坐标与太阳模型..." : ((currL_pos == LANG_JA) ? "観測座標・太陽モデルの読み込み中..." : ((currL_pos == LANG_ES) ? "Cargando ubicación y Sol..." : "Loading Location & Sun Data...")));
             g_loadingProgress = 25;
             
             sun_calc = new SunCalculator(pos_manager);
@@ -2329,10 +2467,11 @@ void setup() {
             // Offline TLE Cache Loading
             Language currL_parse = I18N::getLanguage();
             for (int i = 0; i < NUM_SATELLITES; i++) {
+                vTaskDelay(pdMS_TO_TICKS(1)); // 出让调度片，避免多核心密集竞争及保证看门狗稳定
                 if (g_satellites[i].type == SAT_TYPE_GEO_TV || g_satellites[i].type == SAT_TYPE_DEEP_SPACE) {
                     continue;
                 }
-                g_loadingStatusText = (currL_parse == LANG_ZH) ? ("解析轨道: " + g_satellites[i].name) : ((currL_parse == LANG_JA) ? ("軌道解析中: " + g_satellites[i].name) : ((currL_parse == LANG_ES) ? ("Analizando órbita: " + g_satellites[i].name) : ("Parsing Orbit: " + g_satellites[i].name)));
+                setLoadingStatusText((currL_parse == LANG_ZH) ? ("解析轨道: " + g_satellites[i].name) : ((currL_parse == LANG_JA) ? ("軌道解析中: " + g_satellites[i].name) : ((currL_parse == LANG_ES) ? ("Analizando órbita: " + g_satellites[i].name) : ("Parsing Orbit: " + g_satellites[i].name))));
                 TLEData loaded_tle;
                 if (TLEUpdater::getTLE(g_satellites[i].noradId, loaded_tle)) {
                     loaded_tle.baseScore = g_satellites[i].baseScore;
@@ -2354,7 +2493,7 @@ void setup() {
                     }
                 }
                 
-                if (g_satellites[i].tle.line1.length() > 0) {
+                if (g_satellites[i].tle.line1.length() >= 68 && g_satellites[i].tle.line2.length() >= 68) {
                     lockSatMutex();
                     g_satellites[i].calc.init(g_satellites[i].tle);
                     unlockSatMutex();
@@ -2380,7 +2519,7 @@ void setup() {
             g_timeSynced = true;
             LOG_I("APP", "Offline boot: Loaded cached TLEs. System time anchor set to: %u", current_unix);
             
-            g_loadingStatusText = (currL_parse == LANG_ZH) ? "解算自定义目标与频段数据..." : ((currL_parse == LANG_JA) ? "カスタム目標・周波数の計算中..." : ((currL_parse == LANG_ES) ? "Cargando satélites personalizados..." : "Loading Custom Satellites..."));
+            setLoadingStatusText((currL_parse == LANG_ZH) ? "解算自定义目标与频段数据..." : ((currL_parse == LANG_JA) ? "カスタム目標・周波数の計算中..." : ((currL_parse == LANG_ES) ? "Cargando satélites personalizados..." : "Loading Custom Satellites...")));
             g_loadingProgress = 75;
             
             // Load Custom Satellites from Preferences
@@ -2430,7 +2569,9 @@ void setup() {
                             p.iconType = ICON_SATELLITE;
                             p.description = "Custom added satellite.\n\n";
                             p.tle = loaded_tle;
-                            p.calc.init(p.tle);
+                            if (p.tle.line1.length() >= 68 && p.tle.line2.length() >= 68) {
+                                p.calc.init(p.tle);
+                            }
                             p.type = SAT_TYPE_VISUAL;
                             if (p.noradId == 57172 || p.name.indexOf("UMKA") != -1 || p.name.indexOf("RS40S") != -1) {
                                 p.downlinkFreq = "437.625";
@@ -2464,18 +2605,18 @@ void setup() {
             updateEncyclopediaFilteredList();
             
             Language currL_boot = I18N::getLanguage();
-            g_loadingStatusText = (currL_boot == LANG_ZH) ? "构建火箭与群编队数据..." : ((currL_boot == LANG_JA) ? "ロケット・編隊データの構築中..." : ((currL_boot == LANG_ES) ? "Construyendo formaciones..." : "Building Launch Formations..."));
+            setLoadingStatusText((currL_boot == LANG_ZH) ? "构建火箭与群编队数据..." : ((currL_boot == LANG_JA) ? "ロケット・編隊データの構築中..." : ((currL_boot == LANG_ES) ? "Construyendo formaciones..." : "Building Launch Formations...")));
             g_loadingProgress = 85;
             tryLoadRecentLaunchCache();
             
-            g_loadingStatusText = (currL_boot == LANG_ZH) ? "启动核心推算引擎..." : ((currL_boot == LANG_JA) ? "推算エンジンの起動中..." : ((currL_boot == LANG_ES) ? "Iniciando motor de predicción..." : "Starting Predictor Engine..."));
+            setLoadingStatusText((currL_boot == LANG_ZH) ? "启动核心推算引擎..." : ((currL_boot == LANG_JA) ? "推算エンジンの起動中..." : ((currL_boot == LANG_ES) ? "Iniciando motor de predicción..." : "Starting Predictor Engine...")));
             g_loadingProgress = 95;
             
             // Start predictor task on Core 0 for offline data (UI runs on Core 1)
             xTaskCreatePinnedToCore(
                 predictorTask,
                 "PredictorTask",
-                10240, // 提升至 10KB 任务栈，为多卫星 SGP4/SDP4 轨道递推及排序提供充足栈保护
+                8192, // 8KB 任务栈，为多卫星 SGP4/SDP4 轨道积分、地影解算与排序提供稳定安全的栈深度
                 NULL,
                 1,
                 &predictorTaskHandle,
@@ -2484,16 +2625,25 @@ void setup() {
             
             // Start network task on Core 0 to handle WiFi and TLE fetching in background
             manualWifiToggle = false; // 开机默认自动模式：数据新鲜则跳过更新，完成同步后自动关闭 WiFi
+            
+            bool hasPendingRl = hasRecentLaunchPendingReboot();
+            if (hasPendingRl) {
+                currentSatTab = TAB_RECENT_LAUNCH;
+                recentLaunchDownloading = true;
+                recentLaunchErrorMsg = (currL_boot == LANG_ZH) ? "重启恢复: 正在更新近期发射..." : "Reboot recovery: updating recent launches...";
+                LOG_I("APP", "[BOOT] Pending recent launch update detected. Defaulting to TAB_RECENT_LAUNCH.");
+            }
+            
             xTaskCreatePinnedToCore(networkTask, "NetworkTask", 5120, NULL, 1, NULL, 0);
 
-            g_loadingStatusText = (currL_boot == LANG_ZH) ? "加载完成，准备就绪！" : ((currL_boot == LANG_JA) ? "ロード完了、準備完了！" : ((currL_boot == LANG_ES) ? "¡Listo!" : "Ready!"));
+            setLoadingStatusText((currL_boot == LANG_ZH) ? "加载完成，准备就绪！" : ((currL_boot == LANG_JA) ? "ロード完了、準備完了！" : ((currL_boot == LANG_ES) ? "¡Listo!" : "Ready!")));
             g_loadingProgress = 100;
             delay(100);
             g_loadingFinished = true;
             vTaskDelete(NULL);
         },
         "SetupLoader",
-        7168,
+        6144, // 6KB 栈足以支撑启动加载，避免一次性挤占 10KB 连续大块内存
         NULL,
         2, // Slightly lower than IMU but higher than predictor
         NULL,
@@ -2664,12 +2814,12 @@ void loop() {
         g_recentLaunchRefreshPending = false;
         recentLaunchDownloading = false; // Reset downloading flag early to unlock file reads for loading
         
-        std::vector<RecentLaunchItem>* tempLaunches = new std::vector<RecentLaunchItem>();
+        std::vector<RecentLaunchItem> tempLaunches;
         std::vector<std::vector<float>> rawPhases;
-        if (tempLaunches && OrbitDataProvider::loadRecentLaunchesFromCache(*tempLaunches, &rawPhases) && !tempLaunches->empty()) {
-            calculateFormationsForItems(*tempLaunches, &rawPhases);
+        if (OrbitDataProvider::loadRecentLaunchesFromCache(tempLaunches, &rawPhases) && !tempLaunches.empty()) {
+            calculateFormationsForItems(tempLaunches, &rawPhases);
             
-            std::sort(tempLaunches->begin(), tempLaunches->end(), [](const RecentLaunchItem& a, const RecentLaunchItem& b) {
+            std::sort(tempLaunches.begin(), tempLaunches.end(), [](const RecentLaunchItem& a, const RecentLaunchItem& b) {
                 auto getTrueYearAndNum = [](const String& id) -> std::pair<int, int> {
                     if (id.length() < 5) return {0, 0};
                     int yr = id.substring(0, 2).toInt();
@@ -2686,10 +2836,10 @@ void loop() {
             });
             
             // 后台下载后同步写入最新快照，供下次开机毫秒级启动
-            OrbitDataProvider::saveRecentLaunchesMeta(*tempLaunches);
+            OrbitDataProvider::saveRecentLaunchesMeta(tempLaunches);
             
             lockSatMutex();
-            g_recentLaunches = std::move(*tempLaunches);
+            g_recentLaunches = std::move(tempLaunches);
             
             bool hasSelected = false;
             for (auto& item : g_recentLaunches) {
@@ -2727,7 +2877,6 @@ void loop() {
         } else {
             recentLaunchErrorMsg = I18N::get(TXT_PARSE_CACHE_FAILED);
         }
-        delete tempLaunches;
         recentLaunchDownloadFinishedMs = millis();
     }
 
@@ -3441,7 +3590,7 @@ void loop() {
                                 LOG_W("APP", "Cannot start NetworkTask from main view: insufficient memory");
                             } else {
                                 manualWifiToggle = true;
-                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 6144, NULL, 1, NULL, 0);
+                                BaseType_t res = xTaskCreatePinnedToCore(networkTask, "NetworkTask", 5120, NULL, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
                                     downloadErrorMsg = I18N::get(TXT_LOW_MEMORY);
@@ -3655,16 +3804,24 @@ void loop() {
                         NetworkParams* params = new NetworkParams();
                         params->ssid = req.ssid;
                         params->pass = req.pass;
+                        params->channel = req.channel;
+                        params->hasBssid = req.hasBssid;
+                        if (req.hasBssid) {
+                            memcpy(params->bssid, req.bssid, 6);
+                        }
                         params->shouldSave = true;
                         
+                        wifi_setup_view.reset(); // 释放扫描列表对象，瞬间归还大片连续堆内存
+                        vTaskDelay(pdMS_TO_TICKS(30));
+                        
                         if (g_wifiSetupReturnState == STATE_SAT_SELECT && currentSatTab == TAB_RECENT_LAUNCH) {
-                            HalWifi::saveCredentials(params->ssid, params->pass);
+                            HalWifi::saveCredentials(params->ssid, params->pass, params->channel);
                             delete params;
                             recentLaunchDownloading = true;
                             recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
                             drawSatSelectPage();
                             pushCanvasWithFilter();
-                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 5120, NULL, 1, NULL, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 4096, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 LOG_I("APP", "Failed to create RecentLaunchNetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
                                 recentLaunchDownloading = false;
@@ -3676,7 +3833,7 @@ void loop() {
                             }
                         } else {
                             BaseType_t res = xTaskCreatePinnedToCore(
-                                networkTask, "NetworkTask", 6144, params, 1, NULL, 0
+                                networkTask, "NetworkTask", 5120, params, 1, NULL, 0
                             );
                             if (res != pdPASS) {
                                 LOG_I("APP", "Failed to create NetworkTask! Free Heap: %u", (unsigned int)ESP.getFreeHeap());
@@ -3797,7 +3954,8 @@ void loop() {
                             drawSatSelectPage();
                             pushCanvasWithFilter();
                         } else if (!isSystemMemorySafeForNetwork()) {
-                            recentLaunchErrorMsg = I18N::get(TXT_LOW_MEMORY);
+                            markRecentLaunchPendingReboot();
+                            recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "内存碎片，请重启设备" : "Low memory, please restart";
                             recentLaunchDownloadSuccess = false;
                             recentLaunchDownloadFinishedMs = millis();
                             drawSatSelectPage();
@@ -3814,7 +3972,7 @@ void loop() {
                             recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
                             drawSatSelectPage();
                             pushCanvasWithFilter();
-                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 5120, NULL, 1, NULL, 0);
+                            BaseType_t res = xTaskCreatePinnedToCore(recentLaunchNetworkTask, "RecentLaunchNetworkTask", 4096, NULL, 1, NULL, 0);
                             if (res != pdPASS) {
                                 recentLaunchDownloading = false;
                                 recentLaunchErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
@@ -3840,7 +3998,7 @@ void loop() {
                                 downloadErrorMsg = I18N::get(TXT_REFRESHING_GP);
                                 drawSatSelectPage();
                                 pushCanvasWithFilter();
-                                BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 6144, (void*)(intptr_t)realIdx, 1, NULL, 0);
+                                BaseType_t res = xTaskCreatePinnedToCore(forceRefreshSingleSatTask, "ForceRefreshSingleSatTask", 5120, (void*)(intptr_t)realIdx, 1, NULL, 0);
                                 if (res != pdPASS) {
                                     downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
                                     downloadFinishedMs = millis();
@@ -4018,7 +4176,7 @@ void loop() {
                                     pushCanvasWithFilter();
                                     
                                     int id = noradInput.toInt();
-                                    BaseType_t res = xTaskCreatePinnedToCore(downloadCustomSatTask, "DownloadCustomSatTask", 6144, (void*)(intptr_t)id, 1, NULL, 0);
+                                    BaseType_t res = xTaskCreatePinnedToCore(downloadCustomSatTask, "DownloadCustomSatTask", 5120, (void*)(intptr_t)id, 1, NULL, 0);
                                     if (res != pdPASS) {
                                         isDownloadingCustom = false;
                                         downloadErrorMsg = I18N::get(TXT_TASK_INIT_FAILED);
@@ -5156,7 +5314,7 @@ void loop() {
             drawLangSelectDialog(earth_renderer->getCanvas());
         }
 
-        // 居中顶部 Toast 弹窗渲染 (收到数据包时弹出，5秒自动淡出)
+        // 居中顶部 Toast 弹窗渲染 (仅在收到卫星无线电数据包时弹出，5秒自动淡出)
         if (RadioManager::getInstance().hasActiveToast()) {
             auto c = earth_renderer->getCanvas();
             if (c) {
