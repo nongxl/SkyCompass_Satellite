@@ -70,6 +70,7 @@ public:
     // 查询当前工作状态
     bool isHardwareReady() const;
     bool isListening() const { return _isListening; }
+    bool isTargetFreqSupported() const { return _isTargetFreqSupported; }
     uint32_t getActiveSatNorad() const { return _activeSatNorad; }
     String getActiveSatName() const { return _activeSatName; }
     float getActiveFreq() const { return _activeFreq; }
@@ -109,6 +110,7 @@ private:
     uint32_t _activeSatNorad = 0;
     String _activeSatName = "";
     float _activeFreq = 0.0f;
+    bool _isTargetFreqSupported = true;
     uint32_t _passEndedTime = 0;
 
     RadioTrackingInfo _trackingInfo;

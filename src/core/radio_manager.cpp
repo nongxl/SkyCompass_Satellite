@@ -130,12 +130,17 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
     String targetMode = "";
 
     // 优先监听用户当前在天空罗盘上选中的卫星
-    if (focalNoradId > 0 && hasFocalRadio && focalElevation > -3.0f && focalFreqMHz > 100.0f) {
-        shouldListen = true;
-        targetNorad = focalNoradId;
-        targetName = focalName;
-        targetFreq = focalFreqMHz;
-        targetMode = focalMode;
+    if (focalNoradId > 0 && hasFocalRadio && focalFreqMHz > 0.0f) {
+        _isTargetFreqSupported = HalRadio::isFrequencySupported(focalFreqMHz);
+        if (_isTargetFreqSupported && focalElevation > -3.0f) {
+            shouldListen = true;
+            targetNorad = focalNoradId;
+            targetName = focalName;
+            targetFreq = focalFreqMHz;
+            targetMode = focalMode;
+        }
+    } else {
+        _isTargetFreqSupported = true;
     }
 
     // 2. 状态机切换
@@ -146,12 +151,13 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
             _activeSatName = targetName;
             _activeFreq = targetFreq;
 
+            bool configOk = false;
             // 判断调制方式 (LoRa 还是 FSK)
             String mUpper = targetMode;
             mUpper.toUpperCase();
             if (mUpper.indexOf("FSK") != -1 || mUpper.indexOf("GFSK") != -1) {
                 // 默认 4.8kbps, dev 5kHz, bw 50kHz
-                HalRadio::getInstance().configFSK(targetFreq, 4.8f, 5.0f, 50.0f);
+                configOk = HalRadio::getInstance().configFSK(targetFreq, 4.8f, 5.0f, 50.0f);
             } else {
                 // 自适应解析 LoRa 调制参数 (BW, SF, CR, SyncWord)
                 float bw = 125.0f;
@@ -160,26 +166,32 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
                 uint8_t syncWord = 0x12;
                 parseLoRaParams(targetMode, targetNorad, bw, sf, cr, syncWord);
 
-                HalRadio::getInstance().configLoRa(targetFreq, bw, sf, cr, syncWord);
+                configOk = HalRadio::getInstance().configLoRa(targetFreq, bw, sf, cr, syncWord);
             }
 
-            _isListening = true;
-            _passEndedTime = 0;
-            Serial.printf("[RadioManager] Auto-started listening to %s (NORAD %u) at %.3f MHz\n",
-                          targetName.c_str(), targetNorad, targetFreq);
+            if (configOk) {
+                _isListening = true;
+                _passEndedTime = 0;
+                Serial.printf("[RadioManager] Auto-started listening to %s (NORAD %u) at %.3f MHz\n",
+                              targetName.c_str(), targetNorad, targetFreq);
+            } else {
+                _isListening = false;
+                Serial.printf("[RadioManager] Failed to configure radio for %s at %.3f MHz\n",
+                              targetName.c_str(), targetFreq);
+            }
         }
     } else {
-        // 无过境卫星
+        // 无过境卫星 或 频段不支持
         if (_isListening) {
             if (_passEndedTime == 0) {
                 _passEndedTime = now;
-            } else if (now - _passEndedTime > 120000) { // 2 分钟无过境信号，休眠
+            } else if (!_isTargetFreqSupported || (now - _passEndedTime > 120000)) { // 若频段不支持立即休眠，或2分钟无过境休眠
                 HalRadio::getInstance().sleep();
                 _isListening = false;
                 _activeSatNorad = 0;
                 _activeSatName = "";
                 _passEndedTime = 0;
-                Serial.println("[RadioManager] Pass ended. Radio entered sleep.");
+                Serial.println("[RadioManager] Pass ended or freq unsupported. Radio entered sleep.");
             }
         }
     }

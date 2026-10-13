@@ -47,6 +47,11 @@ public:
     // 检查硬件是否已成功检测并就绪
     bool isHardwareDetected() const { return _isDetected; }
 
+    // 检查射频频率是否在 SX1262 硬件物理支持范围内 (150.0 ~ 960.0 MHz)
+    static bool isFrequencySupported(float freqMHz) {
+        return (freqMHz >= 150.0f && freqMHz <= 960.0f);
+    }
+
     // 配置为 LoRa 模式并进入接收
     bool configLoRa(float freqMHz, float bwKHz = 125.0f, uint8_t sf = 10, uint8_t cr = 5, uint8_t syncWord = 0x12, int8_t power = 10);
 

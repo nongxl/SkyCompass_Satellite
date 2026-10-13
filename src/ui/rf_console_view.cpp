@@ -440,6 +440,9 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
     if (!rm.isHardwareReady()) {
         canvas->setTextColor(0xF800, 0x10A2);
         canvas->drawString(I18N::get(TXT_RF_HW_NOT_DETECTED), statX, 3);
+    } else if (!rm.isTargetFreqSupported()) {
+        canvas->setTextColor(TFT_ORANGE, 0x10A2);
+        canvas->drawString(I18N::get(TXT_RF_FREQ_OUT_OF_RANGE), statX, 3);
     } else if (hasPassNow && (rm.isListening() || track.hasPass)) {
         canvas->setTextColor(0x07E0, 0x10A2);
         canvas->drawString(I18N::get(TXT_RF_RX_ACTIVE), statX, 3);
@@ -750,7 +753,10 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
             // 无抓包数据时：中央完全通透留给 130px 天球俯视雷达与热力图，仅在底部显示单行暗调状态
             canvas->setTextDatum(BC_DATUM);
             canvas->setTextColor(canvas->color565(70, 95, 125));
-            if (hasPassNow) {
+            if (!rm.isTargetFreqSupported()) {
+                canvas->setTextColor(TFT_ORANGE);
+                canvas->drawString(I18N::getLanguage() == LANG_ZH ? "[ 卫星频段超出 Cap LoRa-1262 接收范围 ]" : "[ Frequency Out of Hardware Range ]", width / 2, height - 2);
+            } else if (hasPassNow) {
                 canvas->drawString(I18N::getLanguage() == LANG_ZH ? "[ 监听中 · 按 T 注入测试包 ]" : "[ LISTENING · Press T to test ]", width / 2, height - 2);
             } else if (isUpcoming) {
                 int secToAos = (track.aosTime > track.currentSimTime) ? (int)(track.aosTime - track.currentSimTime) : 0;
