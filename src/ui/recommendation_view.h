@@ -18,6 +18,9 @@ void rebuildTreeLocal(std::vector<TreeItem>& tree, const std::vector<PassEvent>&
 class RecommendationView {
 public:
     RecommendationView();
+    void open();
+    void close();
+    bool isVisible() const;
     void draw(LGFX_Sprite* canvas);
 };
 

@@ -3518,6 +3518,7 @@ void loop() {
                             selectedPassIndex = -1; // Back to tree
                         } else {
                             showRecommendations = false; // Close panel
+                            recommendation_view.close();
                             if (predictorTaskHandle != NULL) {
                                 vTaskPrioritySet(predictorTaskHandle, 1);
                             }
@@ -3550,6 +3551,7 @@ void loop() {
                 } else if (justEnter) {
                     if (appState == STATE_MAIN && !showRecommendations) {
                         showRecommendations = true;
+                        recommendation_view.open();
                         passScrollIndex = 0;
                         
                         // 首次打开面板时，默认展开“今晚”分类，并折叠其它分类
@@ -3607,6 +3609,7 @@ void loop() {
                                 
                                 // 关闭推荐面板，直接退回 3D 地球视角观察，不改动任何追焦/视角模式
                                 showRecommendations = false;
+                                recommendation_view.close();
                             }
                             selectedPassIndex = -1; // 重置详情索引
                             unlockPassMutex();
@@ -5160,7 +5163,7 @@ void loop() {
         earth_renderer->getCanvas()->clearClipRect();
         
         // Draw coordinate overlay
-        if (!showRecommendations && !showHelp && (appState == STATE_MAIN || appState == STATE_LANG_SELECT) && showHud) {
+        if (!showRecommendations && !recommendation_view.isVisible() && !showHelp && (appState == STATE_MAIN || appState == STATE_LANG_SELECT) && showHud) {
             earth_renderer->getCanvas()->setTextSize(1);
             
             char latDir = baseUserLat >= 0 ? 'N' : 'S';
@@ -5200,7 +5203,7 @@ void loop() {
             DialogViews::drawHelpDialog(earth_renderer->getCanvas());
         }
         
-        if (showRecommendations) {
+        if (showRecommendations || recommendation_view.isVisible()) {
             recommendation_view.draw(earth_renderer->getCanvas());
         }
         
