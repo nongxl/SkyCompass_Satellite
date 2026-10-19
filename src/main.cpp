@@ -403,8 +403,8 @@ SatProfile g_satellites[MAX_SATELLITES];
 // We use a simulated time starting near the TLE epoch for Phase 3 offline testing
 volatile uint32_t current_unix = 0; // Will be set in setup()
 int32_t timeMachineOffset = 0;
-// 弹簧平滑时间机器: 消除时间调整跳跃与整秒顿挫
-SpringValue g_smoothTimeMachineOffset(0.0f, SpringConfig(0.22f, 0.85f, false));
+// 弹簧平滑时间机器: 采用临界阻尼 (damping=1.0) 消除时间超调回弹与抽动
+SpringValue g_smoothTimeMachineOffset(0.0f, SpringConfig(0.18f, 1.0f, false));
 unsigned long last_update = 0;
 unsigned long gnssStartTime = 0;
 bool gnssManualMode = false;
@@ -4382,6 +4382,12 @@ void loop() {
             return;
         }
         
+        // 亚秒级连续模拟时间与弹簧时间平滑引擎 (消除每秒跳帧顿挫与时间机器跳跃)
+        double subsecondFraction = (double)(millis() % 1000) / 1000.0;
+        double continuousSimTime = (double)current_unix + subsecondFraction + (double)g_smoothTimeMachineOffset.get();
+        uint32_t simTime = (uint32_t)round(continuousSimTime);
+        double current_gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(continuousSimTime));
+
         // Target camera values for smooth transitions
         double targetViewLat = 0.0;
         double targetViewLon = 0.0;
@@ -4398,9 +4404,8 @@ void loop() {
             GeodeticCoord focalGeo;
             if (g_recentLaunchFocusMode && focusSatIndex == -1) {
                 double tx, ty, tz;
-                if (g_repSatCalc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
-                    double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
-                    ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                if (g_repSatCalc.getTEME(continuousSimTime, tx, ty, tz)) {
+                    ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                     focalGeo = CoordTransform::ecefToGeodetic(ecef);
                     hasFocalPos = true;
                 }
@@ -4412,9 +4417,8 @@ void loop() {
                     hasFocalPos = true;
                 } else {
                     double tx, ty, tz;
-                    if (g_satellites[focusSatIndex].calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
-                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
-                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                    if (g_satellites[focusSatIndex].calc.getTEME(continuousSimTime, tx, ty, tz)) {
+                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                         focalGeo = CoordTransform::ecefToGeodetic(ecef);
                         hasFocalPos = true;
                     }
@@ -4596,17 +4600,12 @@ void loop() {
 
         // Update Sun Position
         if (sun_calc) {
-            SunPositionData sunPos = sun_calc->calculatePosition(current_unix + timeMachineOffset, viewLat, viewLon);
+            SunPositionData sunPos = sun_calc->calculatePosition(simTime, viewLat, viewLon);
             earth_renderer->setSunPosition(sunPos.subsolarLat, sunPos.subsolarLon);
         }
 
         static uint32_t lastLogTime = 0;
         static bool lastWasFastForwarding = false;
-        
-        // 亚秒级连续模拟时间与弹簧时间平滑引擎 (消除每秒跳帧顿挫与时间机器跳跃)
-        double subsecondFraction = (double)(millis() % 1000) / 1000.0;
-        double continuousSimTime = (double)current_unix + subsecondFraction + (double)g_smoothTimeMachineOffset.get();
-        uint32_t simTime = (uint32_t)round(continuousSimTime);
         
         // 捕获刚刚停止快进的瞬间
         bool stopFastForwarding = (lastWasFastForwarding && !isFastForwarding);
@@ -4637,7 +4636,6 @@ void loop() {
             lastContinuousSimTime = continuousSimTime;
         }
 
-        double current_gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(continuousSimTime));
         SunPositionData view_sun_pos;
         SunPositionData observer_sun_pos;
         if (sun_calc) {

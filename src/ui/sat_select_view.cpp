@@ -155,10 +155,25 @@ void SatSelectView::updateFilteredList() {
 }
 
 void SatSelectView::drawCategoryFilterDialog(LGFX_Sprite* canvas) {
-    if (!g_showCategoryFilterDialog) return;
+    // 弹窗弹出弹性动画
+    static SpringValue s_dialogScale(0.85f, SpringConfig::Bouncy);
+    static bool s_lastDialogShow = false;
+    if (!g_showCategoryFilterDialog) {
+        s_lastDialogShow = false;
+        return;
+    }
     
-    int w = 224;
-    int h = 86;
+    if (!s_lastDialogShow) {
+        s_lastDialogShow = true;
+        s_dialogScale.jump(0.88f);
+        s_dialogScale.set(1.0f);
+    }
+    float scale = s_dialogScale.get();
+    if (scale < 0.5f) scale = 0.5f;
+    if (scale > 1.05f) scale = 1.05f;
+
+    int w = (int)(224 * scale);
+    int h = (int)(86 * scale);
     int x = (canvas->width() - w) / 2;
     int y = (canvas->height() - h) / 2;
     
@@ -169,20 +184,19 @@ void SatSelectView::drawCategoryFilterDialog(LGFX_Sprite* canvas) {
     Language currL = I18N::getLanguage();
     
     // 4 行 × 3 列 胶囊徽章标签 (每行 3 个，共 12 个项)
-    int startY = y + 5;
+    int baseStartX = (canvas->width() - 224) / 2 + 8;
+    int baseStartY = (canvas->height() - 86) / 2 + 5;
     int rowH = 19;
     int colW = 66;
-    int startX = x + 8;
     int colGap = 5;
     
     for (int i = 0; i < 12; i++) {
         int r = i / 3;
         int c = i % 3;
-        int bx = startX + c * (colW + colGap);
-        int by = startY + r * rowH;
+        int bx = baseStartX + c * (colW + colGap);
+        int by = baseStartY + r * rowH;
         
         bool isChecked = (i == 11) ? (g_tempCategoryMask == 0) : ((g_tempCategoryMask & (1 << i)) != 0);
-        bool isFocused = (i == g_categoryFocusIndex);
         
         const char* label = (currL == LANG_ZH) ? g_filterCategories[i].name_zh :
                             ((currL == LANG_JA) ? g_filterCategories[i].name_ja :
@@ -215,16 +229,33 @@ void SatSelectView::drawCategoryFilterDialog(LGFX_Sprite* canvas) {
         canvas->fillRoundRect(bx, by, colW, 16, 3, bgColor);
         canvas->drawRoundRect(bx, by, colW, 16, 3, borderColor);
         
-        // 如果被聚焦，绘制醒目的黄色双层外边框
-        if (isFocused) {
-            canvas->drawRoundRect(bx - 1, by - 1, colW + 2, 18, 3, TFT_YELLOW);
-            canvas->drawRoundRect(bx - 2, by - 2, colW + 4, 20, 4, TFT_WHITE);
-        }
-        
         canvas->setTextColor(textColor);
         int tw = canvas->textWidth(label);
         canvas->drawString(label, bx + (colW - tw) / 2, by + 2);
     }
+
+    // 2D 物理弹簧磁吸焦点框
+    int focR = g_categoryFocusIndex / 3;
+    int focC = g_categoryFocusIndex % 3;
+    float targetFx = (float)(baseStartX + focC * (colW + colGap) - 1);
+    float targetFy = (float)(baseStartY + focR * rowH - 1);
+
+    static SpringValue s_focusX(100.0f, SpringConfig::Default);
+    static SpringValue s_focusY(50.0f, SpringConfig::Default);
+    static bool s_focusInit = false;
+    if (!s_focusInit) {
+        s_focusX.jump(targetFx);
+        s_focusY.jump(targetFy);
+        s_focusInit = true;
+    } else {
+        s_focusX.set(targetFx);
+        s_focusY.set(targetFy);
+    }
+
+    float fx = s_focusX.get();
+    float fy = s_focusY.get();
+    canvas->drawRoundRect((int)roundf(fx), (int)roundf(fy), colW + 2, 18, 3, TFT_YELLOW);
+    canvas->drawRoundRect((int)roundf(fx) - 1, (int)roundf(fy) - 1, colW + 4, 20, 4, TFT_WHITE);
 }
 
 void SatSelectView::draw(LGFX_Sprite* canvas) {
@@ -1025,11 +1056,20 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                     int totalHeight = totalLines * 13 + g_descLabelAreaHeight;
                     g_descMaxScroll = (totalHeight > descAreaHeight) ? (totalHeight - descAreaHeight + 13) : 0;
                     
+                    // 弹簧物理平滑翻页驱动器
+                    static SpringValue s_smoothDescY(0.0f, SpringConfig::Default);
+                    static int s_lastTrackedSatIdx = -1;
+                    if (s_lastTrackedSatIdx != realIdx) {
+                        s_lastTrackedSatIdx = realIdx;
+                        s_smoothDescY.jump(0.0f);
+                    }
+                    
                     int yOffset = 0;
                     if (totalHeight > descAreaHeight && descAreaHeight > 13) {
                         if (g_descManualScrolled) {
-                            // 手动按中括号翻页模式下，暂停自动滚动功能
-                            yOffset = g_descManualYOffset;
+                            // 手动按中括号翻页模式下，平滑滑动到目标偏移
+                            s_smoothDescY.set((float)g_descManualYOffset);
+                            yOffset = (int)roundf(s_smoothDescY.get());
                         } else {
                             // 默认自动循环滚动
                             int scrollSpeedMs = 66;
@@ -1040,6 +1080,7 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                             if (t < holdTimeMs) yOffset = 0;
                             else if (t < cycleTime - holdTimeMs) yOffset = (t - holdTimeMs) / scrollSpeedMs;
                             else yOffset = scrollRange;
+                            s_smoothDescY.jump((float)yOffset);
                         }
                     }
                     
@@ -1412,7 +1453,20 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                     char pageBuf[32];
                     sprintf(pageBuf, "Page %d (%d-%d)", recentLaunchObjectPage + 1, startNum, endNum);
                     canvas->drawString(pageBuf, rightX, 35);
+
+                    // 翻页水平弹簧滑入动效
+                    static SpringValue s_objPageOffsetX(0.0f, SpringConfig::Default);
+                    static int s_lastObjPage = -1;
+                    if (s_lastObjPage != recentLaunchObjectPage) {
+                        if (s_lastObjPage != -1) {
+                            s_objPageOffsetX.jump(recentLaunchObjectPage > s_lastObjPage ? 20.0f : -20.0f);
+                            s_objPageOffsetX.set(0.0f);
+                        }
+                        s_lastObjPage = recentLaunchObjectPage;
+                    }
+                    int slideX = (int)roundf(s_objPageOffsetX.get());
                     
+                    canvas->setClipRect(rightX, 46, width - rightX, height - 46);
                     int memY = 48;
                     for (size_t s = 0; s < g_level3Objects.size(); s++) {
                         auto& obj = g_level3Objects[s];
@@ -1430,12 +1484,13 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                             sprintf(hBuf, "%dkm", (int)obj.lastGeo.alt);
                             altW = canvas->textWidth(hBuf);
                             canvas->setTextColor(TFT_GREEN);
-                            canvas->drawString(hBuf, width - altW - 2, memY + s * 13);
+                            canvas->drawString(hBuf, width - altW - 2 + slideX, memY + s * 13);
                         }
                         
                         int maxW = obj.lastGeoValid ? (width - rightX - altW - 4) : (width - rightX - 4);
-                        TextUtils::drawScrollingText(canvas, lineText.c_str(), rightX, memY + s * 13, maxW, TFT_LIGHTGRAY);
+                        TextUtils::drawScrollingText(canvas, lineText.c_str(), rightX + slideX, memY + s * 13, maxW, TFT_LIGHTGRAY);
                     }
+                    canvas->clearClipRect();
                     
                     if (g_level3Objects.empty()) {
                         if (recentLaunchDownloading) {
@@ -1584,9 +1639,7 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
     }
     
     // 绘制分类筛选弹窗
-    if (g_showCategoryFilterDialog) {
-        drawCategoryFilterDialog(canvas);
-    }
+    drawCategoryFilterDialog(canvas);
 }
 
 

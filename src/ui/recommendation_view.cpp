@@ -10,6 +10,7 @@
 #include "hal/hal_gnss.h"
 #include "hal/hal_wifi.h"
 #include "gimbal/gimbal_controller.h"
+#include "core/spring_animator.h"
 
 static uint32_t parseTleEpoch(const String& line1) {
     if (line1.length() < 32) return 0;
@@ -400,13 +401,29 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     int itemsPerPage = isCjk ? 6 : 7;
                     int startIndex = (passScrollIndex / itemsPerPage) * itemsPerPage;
                     
+                    // 物理弹簧磁吸光标
+                    static SpringValue s_cursorY_rec(19.0f, SpringConfig::Default);
+                    static int s_lastRecStartIndex = -1;
+                    int selInPage = passScrollIndex - startIndex;
+                    if (selInPage < 0) selInPage = 0;
+                    if (selInPage >= itemsPerPage) selInPage = itemsPerPage - 1;
+                    float targetCursorY = 20.0f - 1.0f + selInPage * lineH;
+
+                    if (s_lastRecStartIndex != startIndex) {
+                        s_lastRecStartIndex = startIndex;
+                        s_cursorY_rec.jump(targetCursorY);
+                    } else {
+                        s_cursorY_rec.set(targetCursorY);
+                    }
+
+                    if (!displayTree.empty() && passScrollIndex >= 0) {
+                        float smoothY = s_cursorY_rec.get();
+                        canvas->fillRoundRect(2, (int)roundf(smoothY), 136, lineH, 3, canvas->color565(0, 120, 255));
+                    }
+                    
                     for (int i = 0; i < itemsPerPage && (startIndex + i) < displayTree.size(); i++) {
                         int idx = startIndex + i;
                         const auto& item = displayTree[idx];
-                        
-                        if (idx == passScrollIndex) {
-                            canvas->fillRect(2, y-1, 136, lineH, canvas->color565(0, 120, 255));
-                        }
                         
                         if (item.isCategory) {
                             bool isCalculatingCat = g_orbitCalculating && (item.categoryIndex > 0);
