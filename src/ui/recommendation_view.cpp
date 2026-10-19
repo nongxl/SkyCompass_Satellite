@@ -202,6 +202,16 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
             int localPredictionProgress = predictionProgress;
             bool localTimeSynced = g_timeSynced;
 
+            // 列表安全边界保护：防止展开收起或后台数据置换导致越界
+            if (displayTree.empty()) {
+                passScrollIndex = 0;
+            } else {
+                if (passScrollIndex < 0) passScrollIndex = 0;
+                if (passScrollIndex >= (int)displayTree.size()) {
+                    passScrollIndex = (int)displayTree.size() - 1;
+                }
+            }
+
             if (!localPredictionsReady) {
                 canvas->setTextColor(TFT_YELLOW);
                 if (!localTimeSynced) {
@@ -388,6 +398,17 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                         }
                     }
 
+                    // 物理弹簧树形展开动效：驱动每个分类的展开/折叠平滑进度
+                    static SpringValue s_cat0(catExpanded[0] ? 1.0f : 0.0f, SpringConfig::Bouncy);
+                    static SpringValue s_cat1(catExpanded[1] ? 1.0f : 0.0f, SpringConfig::Bouncy);
+                    static SpringValue s_cat2(catExpanded[2] ? 1.0f : 0.0f, SpringConfig::Bouncy);
+                    static SpringValue s_cat3(catExpanded[3] ? 1.0f : 0.0f, SpringConfig::Bouncy);
+                    s_cat0.set(catExpanded[0] ? 1.0f : 0.0f);
+                    s_cat1.set(catExpanded[1] ? 1.0f : 0.0f);
+                    s_cat2.set(catExpanded[2] ? 1.0f : 0.0f);
+                    s_cat3.set(catExpanded[3] ? 1.0f : 0.0f);
+                    SpringValue* s_catProgress[4] = { &s_cat0, &s_cat1, &s_cat2, &s_cat3 };
+
                     // Draw Tree View
                     bool isCjk = (I18N::getLanguage() == LANG_ZH || I18N::getLanguage() == LANG_JA);
                     const char* catNames[] = {
@@ -449,14 +470,19 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                             const auto& p = recommendedPasses[item.passIndex];
                             bool isSelected = (idx == passScrollIndex);
                             bool isRadio = (p.isRadioPass || p.eventType == 8);
+
+                            // 树形展开弹性滑入动画 (从左侧 -18px 顺滑弹入)
+                            float catProg = s_catProgress[item.categoryIndex]->get();
+                            if (catProg < 0.0f) catProg = 0.0f;
+                            int itemSlideX = (int)roundf((1.0f - catProg) * -18.0f);
                             
                             int iconY = y + (isCjk ? 2 : 1);
-                            drawPassTypeIcon(canvas, 5, iconY, isRadio, isSelected);
+                            drawPassTypeIcon(canvas, 5 + itemSlideX, iconY, isRadio, isSelected);
 
                             canvas->setTextColor(isSelected ? TFT_WHITE : TFT_LIGHTGRAY);
                             String name = String(p.satName.c_str());
                             if (name.length() > 8) name = name.substring(0, 7) + ".";
-                            canvas->drawString(name.c_str(), 16, y);
+                            canvas->drawString(name.c_str(), 16 + itemSlideX, y);
                             
                             // Draw stars
                             String stars = "";
@@ -464,7 +490,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                             uint16_t starColor = (p.score==5) ? TFT_GOLD : (p.score>=3 ? TFT_GREEN : TFT_LIGHTGRAY);
                             if (idx == passScrollIndex) starColor = TFT_WHITE;
                             canvas->setTextColor(starColor);
-                            canvas->drawString(stars.c_str(), 70, y);
+                            canvas->drawString(stars.c_str(), 70 + itemSlideX, y);
                             
                             // Draw day if not tonight
                             if (item.categoryIndex != 0) {
@@ -475,15 +501,10 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                                 char dayStr[16];
                                 sprintf(dayStr, "%02d/%02d", aos_tm.tm_mon + 1, aos_tm.tm_mday);
                                 canvas->setTextColor(TFT_DARKGREY);
-                                canvas->drawString(dayStr, 105, y);
+                                canvas->drawString(dayStr, 105 + itemSlideX, y);
                             }
                         }
                         y += lineH;
-                    }
-                    
-                    if (displayTree.size() > itemsPerPage) {
-                        canvas->setTextColor(TFT_DARKGREY);
-                        canvas->drawString("[^/v]", 110, 5);
                     }
                 }
             }

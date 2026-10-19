@@ -788,6 +788,9 @@ void predictorTask(void* parameter) {
             lockPassMutex();
             recommendedPasses = phase1Passes; // 快速快照发布至 UI（此时受限至多 24 项，开销极低）
             displayTree.swap(tempDisplayTree1);
+            if (passScrollIndex >= (int)displayTree.size()) {
+                passScrollIndex = displayTree.empty() ? 0 : (int)displayTree.size() - 1;
+            }
             predictionsReady = true;
             lastPredictionBaseTime = startTime;
             g_passTreeVersion++;
@@ -980,6 +983,9 @@ void predictorTask(void* parameter) {
         lockPassMutex();
         recommendedPasses.swap(allPasses);
         displayTree.swap(tempDisplayTree);
+        if (passScrollIndex >= (int)displayTree.size()) {
+            passScrollIndex = displayTree.empty() ? 0 : (int)displayTree.size() - 1;
+        }
         predictionsReady = true;
         lastPredictionBaseTime = startTime; // 写入本次成功的基准时间缓存
         g_currentPredictingBaseTime = 0;
@@ -3374,6 +3380,16 @@ void loop() {
 
         // 推荐过境事件列表专属平滑导航控制 (防止点按误触发长按，舒适匀速平滑滚动)
         if (appState == STATE_MAIN && showRecommendations && selectedPassIndex == -1) {
+            // 安全边界收缩，防止因树节点收起发生越界
+            if (displayTree.empty()) {
+                passScrollIndex = 0;
+            } else {
+                if (passScrollIndex < 0) passScrollIndex = 0;
+                if (passScrollIndex >= (int)displayTree.size()) {
+                    passScrollIndex = (int)displayTree.size() - 1;
+                }
+            }
+
             static unsigned long s_passHoldStart = 0;
             static unsigned long s_passLastRepeat = 0;
             static char s_passActiveKey = 0;
@@ -3408,7 +3424,7 @@ void loop() {
         }
         
         // Handle discrete keyboard input
-        if ((M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) || justW) {
+        if (hasAnyKeyJustPressed || (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) || justW) {
             if (appState == STATE_MAIN) {
                 if (justShift) {
                     if (HardwareConfig::getInstance().isEnabled(HW_MOD_UNIT_8SERVOS)) {
@@ -3491,7 +3507,11 @@ void loop() {
                         }
                     }
                 } else if (justBack) {
-                    showHud = !showHud;
+                    if (showRecommendations && selectedPassIndex != -1) {
+                        selectedPassIndex = -1; // Back to tree
+                    } else {
+                        showHud = !showHud;
+                    }
                 } else if (justEsc || justTick) {
                     if (showRecommendations) {
                         if (selectedPassIndex != -1) {
@@ -3592,11 +3612,25 @@ void loop() {
                             unlockPassMutex();
                         } else {
                             // Toggle category or open detail
+                            if (displayTree.empty()) {
+                                passScrollIndex = 0;
+                            } else if (passScrollIndex >= (int)displayTree.size()) {
+                                passScrollIndex = (int)displayTree.size() - 1;
+                            } else if (passScrollIndex < 0) {
+                                passScrollIndex = 0;
+                            }
+
                             if (passScrollIndex >= 0 && passScrollIndex < (int)displayTree.size()) {
                                 auto& item = displayTree[passScrollIndex];
                                 if (item.isCategory) {
                                     catExpanded[item.categoryIndex] = !catExpanded[item.categoryIndex];
                                     rebuildTree(current_unix + timeMachineOffset);
+                                    // 展开/收起后立即安全校验边界
+                                    if (displayTree.empty()) {
+                                        passScrollIndex = 0;
+                                    } else if (passScrollIndex >= (int)displayTree.size()) {
+                                        passScrollIndex = (int)displayTree.size() - 1;
+                                    }
                                 } else {
                                     selectedPassIndex = item.passIndex;
                                 }
