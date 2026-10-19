@@ -177,6 +177,7 @@ pio run -t upload
 - **3D 陆地轮廓矢量数据**：感谢 [Natural Earth](https://www.naturalearthdata.com/) 提供的 50m 分辨率全球陆地边界矢量数据。
 - **全球夜景灯光点云**：感谢 [NASA GIBS](https://gibs.earthdata.nasa.gov/) 提供的 VIIRS Black Marble 全球夜景图源。
 - **空间遥测与地面站灵感**：感谢 [TinyGS](https://tinygs.com/) 开放硬件与全球分布式地面站网络在业余空间 LoRa 遥测接收与多普勒调谐方面的先驱探索与宝贵灵感。
+- **UI 动效与物理弹簧设计**：特别鸣谢 [lilt](https://github.com/nongxl/lilt) 在物理弹簧动力学模型与细腻交互动效方面的卓越探索与开源灵感，本项目借鉴其物理弹簧阻尼架构与连续微积分思想，在无 PSRAM 嵌入式设备上实现了流畅、自然的交互体验。
 - **模型校准与仿真参考**：感谢 [天文通](https://laysky.com/) 与 [Heavens-Above](https://www.heavens-above.com/) 提供的模拟比对支持。
 
 ---
