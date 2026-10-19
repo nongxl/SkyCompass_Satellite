@@ -145,11 +145,21 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
 
     // 2. 状态机切换
     if (shouldListen) {
+        // 计算当前带多普勒频移的目标实际调谐频率
+        float dopplerMHz = 0.0f;
+        if (_trackingInfo.satNorad == targetNorad && abs(_trackingInfo.dopplerHz) < 100000.0f) {
+            dopplerMHz = _trackingInfo.dopplerHz / 1e6f;
+        }
+        float targetTunedFreq = targetFreq + dopplerMHz;
+
         // 如果尚未监听，或者监听目标变更，重新配置射频
-        if (!_isListening || _activeSatNorad != targetNorad || fabs(_activeFreq - targetFreq) > 0.005f) {
+        if (!_isListening || _activeSatNorad != targetNorad || fabs(_activeBaseFreq - targetFreq) > 0.005f) {
             _activeSatNorad = targetNorad;
             _activeSatName = targetName;
+            _activeBaseFreq = targetFreq;
             _activeFreq = targetFreq;
+            _currentTunedFreq = targetTunedFreq;
+            _lastDopplerTuneTime = now;
 
             bool configOk = false;
             // 判断调制方式 (LoRa 还是 FSK)
@@ -157,7 +167,7 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
             mUpper.toUpperCase();
             if (mUpper.indexOf("FSK") != -1 || mUpper.indexOf("GFSK") != -1) {
                 // 默认 4.8kbps, dev 5kHz, bw 50kHz
-                configOk = HalRadio::getInstance().configFSK(targetFreq, 4.8f, 5.0f, 50.0f);
+                configOk = HalRadio::getInstance().configFSK(targetTunedFreq, 4.8f, 5.0f, 50.0f);
             } else {
                 // 自适应解析 LoRa 调制参数 (BW, SF, CR, SyncWord)
                 float bw = 125.0f;
@@ -166,18 +176,27 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
                 uint8_t syncWord = 0x12;
                 parseLoRaParams(targetMode, targetNorad, bw, sf, cr, syncWord);
 
-                configOk = HalRadio::getInstance().configLoRa(targetFreq, bw, sf, cr, syncWord);
+                configOk = HalRadio::getInstance().configLoRa(targetTunedFreq, bw, sf, cr, syncWord);
             }
 
             if (configOk) {
                 _isListening = true;
                 _passEndedTime = 0;
-                Serial.printf("[RadioManager] Auto-started listening to %s (NORAD %u) at %.3f MHz\n",
-                              targetName.c_str(), targetNorad, targetFreq);
+                Serial.printf("[RadioManager] Auto-started listening to %s (NORAD %u) at %.4f MHz (Base: %.3f MHz, Doppler: %+.1f kHz)\n",
+                              targetName.c_str(), targetNorad, targetTunedFreq, targetFreq, dopplerMHz * 1000.0f);
             } else {
                 _isListening = false;
-                Serial.printf("[RadioManager] Failed to configure radio for %s at %.3f MHz\n",
-                              targetName.c_str(), targetFreq);
+                Serial.printf("[RadioManager] Failed to configure radio for %s at %.4f MHz\n",
+                              targetName.c_str(), targetTunedFreq);
+            }
+        } else {
+            // 已处于持续监听状态：执行多普勒连续自动微调 (Doppler Continuous AFC Auto-Tuning)
+            // 采用 1.0 kHz 步进门限 + 500ms 最小调谐间隔，确保锁频紧密且不打断前导码接收
+            if (fabs(targetTunedFreq - _currentTunedFreq) >= 0.001f && (now - _lastDopplerTuneTime >= 500)) {
+                if (HalRadio::getInstance().setFrequency(targetTunedFreq)) {
+                    _currentTunedFreq = targetTunedFreq;
+                    _lastDopplerTuneTime = now;
+                }
             }
         }
     } else {
@@ -190,6 +209,8 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
                 _isListening = false;
                 _activeSatNorad = 0;
                 _activeSatName = "";
+                _activeBaseFreq = 0.0f;
+                _currentTunedFreq = 0.0f;
                 _passEndedTime = 0;
                 Serial.println("[RadioManager] Pass ended or freq unsupported. Radio entered sleep.");
             }

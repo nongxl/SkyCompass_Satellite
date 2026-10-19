@@ -74,6 +74,8 @@ public:
     uint32_t getActiveSatNorad() const { return _activeSatNorad; }
     String getActiveSatName() const { return _activeSatName; }
     float getActiveFreq() const { return _activeFreq; }
+    float getActiveTunedFreq() const { return _currentTunedFreq > 0.0f ? _currentTunedFreq : _activeFreq; }
+    float getCurrentDopplerHz() const { return _trackingInfo.dopplerHz; }
 
     // 历史接收数据包列表访问与管理
     const std::vector<ReceivedLogItem>& getRecentPackets() const { return _recentPackets; }
@@ -110,6 +112,9 @@ private:
     uint32_t _activeSatNorad = 0;
     String _activeSatName = "";
     float _activeFreq = 0.0f;
+    float _activeBaseFreq = 0.0f;
+    float _currentTunedFreq = 0.0f;
+    uint32_t _lastDopplerTuneTime = 0;
     bool _isTargetFreqSupported = true;
     uint32_t _passEndedTime = 0;
 

@@ -146,7 +146,14 @@ bool HalRadio::configFSK(float freqMHz, float brKbps, float freqDevKHz, float rx
 bool HalRadio::setFrequency(float freqMHz) {
     if (!_isDetected || !_radio) return false;
     _currentFreq = freqMHz;
-    return (_radio->setFrequency(freqMHz) == RADIOLIB_ERR_NONE);
+    int16_t state = _radio->setFrequency(freqMHz);
+    if (state == RADIOLIB_ERR_NONE) {
+        if (_isReceiving) {
+            _radio->startReceive();
+        }
+        return true;
+    }
+    return false;
 }
 
 bool HalRadio::startReceive() {
