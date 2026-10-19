@@ -267,6 +267,8 @@ float targetZoom = 0.95f;
 bool g_descManualScrolled = false;
 int g_descManualYOffset = 0;
 int g_descMaxScroll = 0;
+int g_descBounceTrigger = 0;
+int g_objPageBounceTrigger = 0;
 
 // Level 3 Objects 分页数据结构与状态
 bool recentLaunchInObjectsView = false;
@@ -4080,6 +4082,8 @@ void loop() {
                             if (recentLaunchObjectPage > 0) {
                                 recentLaunchObjectPage--;
                                 loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], recentLaunchObjectPage);
+                            } else {
+                                g_objPageBounceTrigger = -8; // 触顶边缘横向微弹
                             }
                         }
                     } else if (justBracketR) {
@@ -4088,6 +4092,8 @@ void loop() {
                             if (recentLaunchObjectPage < maxPage) {
                                 recentLaunchObjectPage++;
                                 loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], recentLaunchObjectPage);
+                            } else {
+                                g_objPageBounceTrigger = 8; // 触底边缘横向微弹
                             }
                         }
                     } else if (justEnter) {
@@ -4274,12 +4280,22 @@ void loop() {
                             satSelectedIndex = (satSelectedIndex + 1) % totalItems;
                         } else if (justBracketL) {
                             g_descManualScrolled = true;
-                            g_descManualYOffset -= 39;
-                            if (g_descManualYOffset < 0) g_descManualYOffset = 0;
+                            if (g_descManualYOffset <= 0) {
+                                g_descManualYOffset = 0;
+                                g_descBounceTrigger = -12; // 触顶边缘弹性下冲回弹
+                            } else {
+                                g_descManualYOffset -= 39;
+                                if (g_descManualYOffset < 0) g_descManualYOffset = 0;
+                            }
                         } else if (justBracketR) {
                             g_descManualScrolled = true;
-                            g_descManualYOffset += 39;
-                            if (g_descManualYOffset > g_descMaxScroll) g_descManualYOffset = g_descMaxScroll;
+                            if (g_descManualYOffset >= g_descMaxScroll) {
+                                g_descManualYOffset = g_descMaxScroll;
+                                g_descBounceTrigger = 12; // 触底边缘弹性上冲回弹
+                            } else {
+                                g_descManualYOffset += 39;
+                                if (g_descManualYOffset > g_descMaxScroll) g_descManualYOffset = g_descMaxScroll;
+                            }
                         }
                     }
                 }

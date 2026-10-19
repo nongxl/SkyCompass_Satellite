@@ -70,6 +70,8 @@ extern int g_descLabelAreaHeight;
 extern bool g_descManualScrolled;
 extern int g_descManualYOffset;
 extern int g_descMaxScroll;
+extern int g_descBounceTrigger;
+extern int g_objPageBounceTrigger;
 
 const FilterCategoryItem g_filterCategories[12] = {
     // Row 0: 特殊高频分类与可见星
@@ -1075,24 +1077,27 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                         s_smoothDescY.jump(0.0f);
                     }
                     
+                    if (g_descBounceTrigger != 0) {
+                        s_smoothDescY.shift((float)g_descBounceTrigger);
+                        g_descBounceTrigger = 0;
+                    }
+                    
                     int yOffset = 0;
-                    if (totalHeight > descAreaHeight && descAreaHeight > 13) {
-                        if (g_descManualScrolled) {
-                            // 手动按中括号翻页模式下，平滑滑动到目标偏移
-                            s_smoothDescY.set((float)g_descManualYOffset);
-                            yOffset = (int)roundf(s_smoothDescY.get());
-                        } else {
-                            // 默认自动循环滚动
-                            int scrollSpeedMs = 66;
-                            int holdTimeMs = 1500;
-                            int scrollRange = totalHeight - descAreaHeight + 13;
-                            int cycleTime = scrollRange * scrollSpeedMs + holdTimeMs * 2;
-                            int t = (millis() - g_lastSatSelectTime) % cycleTime;
-                            if (t < holdTimeMs) yOffset = 0;
-                            else if (t < cycleTime - holdTimeMs) yOffset = (t - holdTimeMs) / scrollSpeedMs;
-                            else yOffset = scrollRange;
-                            s_smoothDescY.jump((float)yOffset);
-                        }
+                    if (g_descManualScrolled) {
+                        // 手动按中括号翻页模式下，平滑滑动到目标偏移
+                        s_smoothDescY.set((float)g_descManualYOffset);
+                        yOffset = (int)roundf(s_smoothDescY.get());
+                    } else if (totalHeight > descAreaHeight && descAreaHeight > 13) {
+                        // 默认自动循环滚动
+                        int scrollSpeedMs = 66;
+                        int holdTimeMs = 1500;
+                        int scrollRange = totalHeight - descAreaHeight + 13;
+                        int cycleTime = scrollRange * scrollSpeedMs + holdTimeMs * 2;
+                        int t = (millis() - g_lastSatSelectTime) % cycleTime;
+                        if (t < holdTimeMs) yOffset = 0;
+                        else if (t < cycleTime - holdTimeMs) yOffset = (t - holdTimeMs) / scrollSpeedMs;
+                        else yOffset = scrollRange;
+                        s_smoothDescY.jump((float)yOffset);
                     }
                     
                     canvas->setClipRect(rightX, descY, width - rightX, descAreaHeight);
@@ -1474,6 +1479,10 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                             s_objPageOffsetX.set(0.0f);
                         }
                         s_lastObjPage = recentLaunchObjectPage;
+                    }
+                    if (g_objPageBounceTrigger != 0) {
+                        s_objPageOffsetX.shift((float)g_objPageBounceTrigger);
+                        g_objPageBounceTrigger = 0;
                     }
                     int slideX = (int)roundf(s_objPageOffsetX.get());
                     
