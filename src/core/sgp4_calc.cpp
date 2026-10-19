@@ -43,11 +43,19 @@ bool SGP4Calc::init(const TLEData& tle) {
 }
 
 bool SGP4Calc::getTEME(uint32_t unix_ts, double& x, double& y, double& z) {
+    return getTEME((double)unix_ts, x, y, z);
+}
+
+bool SGP4Calc::getTEME(uint32_t unix_ts, double& x, double& y, double& z, double& vx, double& vy, double& vz) {
+    return getTEME((double)unix_ts, x, y, z, vx, vy, vz);
+}
+
+bool SGP4Calc::getTEME(double unix_ts, double& x, double& y, double& z) {
     double vx, vy, vz;
     return getTEME(unix_ts, x, y, z, vx, vy, vz);
 }
 
-bool SGP4Calc::getTEME(uint32_t unix_ts, double& x, double& y, double& z, double& vx, double& vy, double& vz) {
+bool SGP4Calc::getTEME(double unix_ts, double& x, double& y, double& z, double& vx, double& vy, double& vz) {
     double jd = CoordTransform::unixToJulian(unix_ts);
     
     extern portMUX_TYPE satMutex;

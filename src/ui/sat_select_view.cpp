@@ -7,6 +7,7 @@
 #include "core/observation_predictor.h"
 #include "core/tle_updater.h"
 #include "hal/hal_wifi.h"
+#include "core/spring_animator.h"
 #include <LittleFS.h>
 
 extern volatile bool isDownloadingCustom;
@@ -429,10 +430,28 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
         int totalItems = filteredCount + 1;
         int startIndex = (satSelectedIndex / itemsPerPage) * itemsPerPage;
         
+        // 弹簧物理光标动画 (平滑磁吸过渡)
+        static SpringValue s_cursorY_encyclopedia(24.0f, SpringConfig::Default);
+        static int s_lastStartIndex = -1;
+        int selInPage = satSelectedIndex - startIndex;
+        if (selInPage < 0) selInPage = 0;
+        if (selInPage >= itemsPerPage) selInPage = itemsPerPage - 1;
+        float targetCursorY = 25.0f - 1.0f + selInPage * itemSpacing;
+        
+        if (s_lastStartIndex != startIndex) {
+            s_lastStartIndex = startIndex;
+            s_cursorY_encyclopedia.jump(targetCursorY); // 跨页时直接复位
+        } else {
+            s_cursorY_encyclopedia.set(targetCursorY);
+        }
+        
+        // 绘制平滑物理磁吸高亮框
+        float smoothY = s_cursorY_encyclopedia.get();
+        canvas->fillRoundRect(2, (int)roundf(smoothY), 82, 12, 3, canvas->color565(0, 120, 255));
+        
         for (int i = 0; i < itemsPerPage && (startIndex + i) < totalItems; i++) {
             int index = startIndex + i;
             if (index == satSelectedIndex) {
-                canvas->fillRect(2, yPos - 1, 82, 12, canvas->color565(0, 120, 255));
                 canvas->setTextColor(TFT_WHITE);
             } else {
                 canvas->setTextColor(TFT_LIGHTGRAY);
@@ -1166,10 +1185,28 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             int itemSpacing = 12;
             int startIndex = (recentLaunchSelectedIndex / itemsPerPage) * itemsPerPage;
             
+            // 弹簧物理光标动画 (平滑磁吸过渡)
+            static SpringValue s_cursorY_recentLaunch(24.0f, SpringConfig::Default);
+            static int s_lastRecentStartIndex = -1;
+            int selInPage = recentLaunchSelectedIndex - startIndex;
+            if (selInPage < 0) selInPage = 0;
+            if (selInPage >= itemsPerPage) selInPage = itemsPerPage - 1;
+            float targetCursorY = 25.0f - 1.0f + selInPage * itemSpacing;
+            
+            if (s_lastRecentStartIndex != startIndex) {
+                s_lastRecentStartIndex = startIndex;
+                s_cursorY_recentLaunch.jump(targetCursorY);
+            } else {
+                s_cursorY_recentLaunch.set(targetCursorY);
+            }
+            
+            // 绘制平滑物理磁吸高亮框
+            float smoothY = s_cursorY_recentLaunch.get();
+            canvas->fillRoundRect(2, (int)roundf(smoothY), 82, 12, 3, canvas->color565(0, 120, 255));
+            
             for (int i = 0; i < itemsPerPage && (startIndex + i) < totalItems; i++) {
                 int index = startIndex + i;
                 if (index == recentLaunchSelectedIndex) {
-                    canvas->fillRect(2, yPos - 1, 82, 12, canvas->color565(0, 120, 255));
                     canvas->setTextColor(TFT_WHITE);
                 } else {
                     canvas->setTextColor(TFT_LIGHTGRAY);

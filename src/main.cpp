@@ -12,6 +12,7 @@
 #include "core/i18n.h"
 #include "core/encyclopedia.h"
 #include "core/image_utils.h"
+#include "core/spring_animator.h"
 
 // Helper to convert UTC date/time to Unix timestamp
 uint32_t convertGNSSDateToUnix(int year, int month, int day, int hour, int min, int sec) {
@@ -402,6 +403,8 @@ SatProfile g_satellites[MAX_SATELLITES];
 // We use a simulated time starting near the TLE epoch for Phase 3 offline testing
 volatile uint32_t current_unix = 0; // Will be set in setup()
 int32_t timeMachineOffset = 0;
+// 弹簧平滑时间机器: 消除时间调整跳跃与整秒顿挫
+SpringValue g_smoothTimeMachineOffset(0.0f, SpringConfig(0.22f, 0.85f, false));
 unsigned long last_update = 0;
 unsigned long gnssStartTime = 0;
 bool gnssManualMode = false;
@@ -2881,6 +2884,15 @@ void loop() {
     }
 
     M5Cardputer.update();
+
+    // 推进物理弹簧动效引擎
+    static unsigned long s_lastAnimLoopMs = 0;
+    unsigned long animNowMs = millis();
+    if (s_lastAnimLoopMs == 0) s_lastAnimLoopMs = animNowMs;
+    float animDt = (animNowMs - s_lastAnimLoopMs) / 1000.0f;
+    s_lastAnimLoopMs = animNowMs;
+    SpringScheduler::update(animDt);
+
     bool isFastForwarding = (lastTimeAdjustMillis != 0) || showRecommendations;
     g_isFastForwarding = isFastForwarding;
 
@@ -3251,8 +3263,13 @@ void loop() {
                             // Suspended check removed in cooperative mode
                         }
                     }
-                    if (key == ',') timeMachineOffset -= 60;
-                    else if (key == '/') timeMachineOffset += 60;
+                    if (key == ',') {
+                        timeMachineOffset -= 60;
+                        g_smoothTimeMachineOffset.set((float)timeMachineOffset);
+                    } else if (key == '/') {
+                        timeMachineOffset += 60;
+                        g_smoothTimeMachineOffset.set((float)timeMachineOffset);
+                    }
                     else if (key == '[') {
                         if (currentBrightness >= 32) currentBrightness -= 16;
                         else currentBrightness = 16;
@@ -3437,6 +3454,7 @@ void loop() {
                         // 1. 检查是否存在时间机器偏移并重置对齐现实时间
                         bool hadOffset = (timeMachineOffset != 0);
                         timeMachineOffset = 0;
+                        g_smoothTimeMachineOffset.jump(0.0f);
                         lastTimeAdjustMillis = 0; // 立即退出快进保护
 
                         // 2. 检查手动位置是否偏离
@@ -3562,6 +3580,7 @@ void loop() {
                                 
                                 // 时间机器跳转到事件开始时间 (AOS)
                                 timeMachineOffset = (int32_t)pass.aosTime - (int32_t)current_unix;
+                                g_smoothTimeMachineOffset.set((float)timeMachineOffset);
                                 lastTimeAdjustMillis = millis(); // 触发时间防抖与挂起
                                 
                                 // 关闭推荐面板，直接退回 3D 地球视角观察，不改动任何追焦/视角模式
@@ -4584,7 +4603,10 @@ void loop() {
         static uint32_t lastLogTime = 0;
         static bool lastWasFastForwarding = false;
         
-        uint32_t simTime = current_unix + timeMachineOffset;
+        // 亚秒级连续模拟时间与弹簧时间平滑引擎 (消除每秒跳帧顿挫与时间机器跳跃)
+        double subsecondFraction = (double)(millis() % 1000) / 1000.0;
+        double continuousSimTime = (double)current_unix + subsecondFraction + (double)g_smoothTimeMachineOffset.get();
+        uint32_t simTime = (uint32_t)round(continuousSimTime);
         
         // 捕获刚刚停止快进的瞬间
         bool stopFastForwarding = (lastWasFastForwarding && !isFastForwarding);
@@ -4609,13 +4631,13 @@ void loop() {
                   ti->tm_year + 1900, ti->tm_mon + 1, ti->tm_mday, ti->tm_hour, ti->tm_min, ti->tm_sec);
         }
 
-        static uint32_t lastSimTime = 0;
-        bool timeChanged = (simTime != lastSimTime);
+        static double lastContinuousSimTime = 0.0;
+        bool timeChanged = (fabs(continuousSimTime - lastContinuousSimTime) > 0.005);
         if (timeChanged) {
-            lastSimTime = simTime;
+            lastContinuousSimTime = continuousSimTime;
         }
 
-        double current_gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(simTime));
+        double current_gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(continuousSimTime));
         SunPositionData view_sun_pos;
         SunPositionData observer_sun_pos;
         if (sun_calc) {
@@ -4635,7 +4657,7 @@ void loop() {
                         
                         if (runCalculation) {
                             double tx, ty, tz;
-                            if (g_repSatCalc.getTEME(simTime, tx, ty, tz)) {
+                            if (g_repSatCalc.getTEME(continuousSimTime, tx, ty, tz)) {
                                 ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                                 GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
                                 
@@ -4739,7 +4761,7 @@ void loop() {
                         
                         if (runCalculation) {
                             double tx, ty, tz;
-                            if (item.calc->getTEME(simTime, tx, ty, tz)) {
+                            if (item.calc->getTEME(continuousSimTime, tx, ty, tz)) {
                                 ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                                 GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
                                 
@@ -4844,7 +4866,7 @@ void loop() {
                     
                     if (runCalculation) {
                         double tx, ty, tz;
-                        if (obj.calc.getTEME(simTime, tx, ty, tz)) {
+                        if (obj.calc.getTEME(continuousSimTime, tx, ty, tz)) {
                             ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                             GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
                             obj.lastGeo = geo;
@@ -4943,7 +4965,7 @@ void loop() {
                         g_satCaches[i].lastGeoValid = true;
                     } else {
                         double tx, ty, tz;
-                        if (calcCopy.getTEME(simTime, tx, ty, tz)) {
+                        if (calcCopy.getTEME(continuousSimTime, tx, ty, tz)) {
                             ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                             GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
                             
