@@ -269,6 +269,7 @@ int g_descManualYOffset = 0;
 int g_descMaxScroll = 0;
 int g_descBounceTrigger = 0;
 int g_objPageBounceTrigger = 0;
+int g_recBounceTrigger = 0;
 
 // Level 3 Objects 分页数据结构与状态
 bool recentLaunchInObjectsView = false;
@@ -3398,12 +3399,20 @@ void loop() {
             bool isDotDown = M5Cardputer.Keyboard.isKeyPressed('.');
 
             if (justSemi) {
-                if (passScrollIndex > 0) passScrollIndex--;
+                if (passScrollIndex > 0) {
+                    passScrollIndex--;
+                } else if (!displayTree.empty()) {
+                    passScrollIndex = (int)displayTree.size() - 1; // 向上循环到最后一项
+                }
                 s_passActiveKey = ';';
                 s_passHoldStart = millis();
                 s_passLastRepeat = millis();
             } else if (justDot) {
-                if (passScrollIndex < (int)displayTree.size() - 1) passScrollIndex++;
+                if (passScrollIndex < (int)displayTree.size() - 1) {
+                    passScrollIndex++;
+                } else {
+                    g_recBounceTrigger = 7; // 向下触底弹性冲击回弹
+                }
                 s_passActiveKey = '.';
                 s_passHoldStart = millis();
                 s_passLastRepeat = millis();
@@ -3411,12 +3420,20 @@ void loop() {
                 // 长按判定：按住 450ms 以上才触发连发，连发间隔 160ms (每秒约 6 行，清晰匀速，绝无飞窜)
                 if (millis() - s_passHoldStart > 450 && millis() - s_passLastRepeat >= 160) {
                     s_passLastRepeat = millis();
-                    if (passScrollIndex > 0) passScrollIndex--;
+                    if (passScrollIndex > 0) {
+                        passScrollIndex--;
+                    } else if (!displayTree.empty()) {
+                        passScrollIndex = (int)displayTree.size() - 1;
+                    }
                 }
             } else if (s_passActiveKey == '.' && isDotDown) {
                 if (millis() - s_passHoldStart > 450 && millis() - s_passLastRepeat >= 160) {
                     s_passLastRepeat = millis();
-                    if (passScrollIndex < (int)displayTree.size() - 1) passScrollIndex++;
+                    if (passScrollIndex < (int)displayTree.size() - 1) {
+                        passScrollIndex++;
+                    } else {
+                        g_recBounceTrigger = 7;
+                    }
                 }
             } else if (!isSemiDown && !isDotDown) {
                 s_passActiveKey = 0;
@@ -3513,12 +3530,16 @@ void loop() {
                         showHud = !showHud;
                     }
                 } else if (justEsc || justTick) {
-                    if (showRecommendations) {
-                        if (selectedPassIndex != -1) {
+                    if (showRecommendations || recommendation_view.isVisible()) {
+                        if (showRecommendations && selectedPassIndex != -1) {
                             selectedPassIndex = -1; // Back to tree
                         } else {
-                            showRecommendations = false; // Close panel
-                            recommendation_view.close();
+                            if (!showRecommendations) {
+                                recommendation_view.forceClose(); // 若已在收缩中再次按 Esc 则直接跳回关闭
+                            } else {
+                                showRecommendations = false; // Close panel
+                                recommendation_view.close();
+                            }
                             if (predictorTaskHandle != NULL) {
                                 vTaskPrioritySet(predictorTaskHandle, 1);
                             }
@@ -3678,6 +3699,7 @@ void loop() {
                 } else if (justL) {
                     appState = STATE_LANG_SELECT;
                     langSelectedIndex = (int)I18N::getLanguage();
+                    DialogViews::resetLangSelectAnim(langSelectedIndex);
                 } else if (justM) {
                     appState = STATE_HW_WIZARD;
                     hardware_wizard.reset();
@@ -4346,6 +4368,14 @@ void loop() {
                     langSelectedIndex = (langSelectedIndex - 1 + 4) % 4;
                 } else if (justDot) { // DOWN
                     langSelectedIndex = (langSelectedIndex + 1) % 4;
+                } else if (M5Cardputer.Keyboard.isKeyPressed('1')) {
+                    langSelectedIndex = 0;
+                } else if (M5Cardputer.Keyboard.isKeyPressed('2')) {
+                    langSelectedIndex = 1;
+                } else if (M5Cardputer.Keyboard.isKeyPressed('3')) {
+                    langSelectedIndex = 2;
+                } else if (M5Cardputer.Keyboard.isKeyPressed('4')) {
+                    langSelectedIndex = 3;
                 }
             } else if (appState == STATE_SERVO_TEST) {
                 if (servo_test_view.handleDiscreteInput(justShift, justEsc, justTick, justBack,
@@ -5106,7 +5136,13 @@ void loop() {
                     
                     // Visual effects fields
                     data.isSelected = (isSatViewMode && (focusSatIndex == i));
-                    data.calc = nullptr; // Do not pass direct SGP4Calc pointer across threads
+                    static SGP4Calc s_focusCalcCopy;
+                    if (data.isSelected) {
+                        s_focusCalcCopy = calcCopy;
+                        data.calc = &s_focusCalcCopy;
+                    } else {
+                        data.calc = nullptr;
+                    }
                     data.simTime = simTime;
                     
                     if (appState == STATE_MAIN) {

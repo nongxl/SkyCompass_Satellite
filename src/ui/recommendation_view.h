@@ -20,6 +20,7 @@ public:
     RecommendationView();
     void open();
     void close();
+    void forceClose();
     bool isVisible() const;
     void draw(LGFX_Sprite* canvas);
 };

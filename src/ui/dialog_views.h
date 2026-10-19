@@ -7,6 +7,7 @@ class DialogViews {
 public:
     static void drawHelpDialog(LGFX_Sprite* canvas);
     static void drawLangSelectDialog(LGFX_Sprite* canvas, int selectedLangIndex);
+    static void resetLangSelectAnim(int initialIndex = 0);
 };
 
 #endif // DIALOG_VIEWS_H

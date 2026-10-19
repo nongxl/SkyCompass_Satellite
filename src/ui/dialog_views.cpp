@@ -1,7 +1,20 @@
 #include "ui/dialog_views.h"
 #include "core/i18n.h"
+#include "core/spring_animator.h"
 #include <ctype.h>
 #include <string.h>
+
+// 语言选择弹窗物理动效弹簧 (中心 Pop-up 缩放 0.0->1.0, 阻尼 0.80)
+static SpringValue s_langDialogScale(0.0f, SpringConfig(0.24f, 0.80f));
+// 语言选项高亮光标物理动效弹簧 (平滑磁吸过渡, 阻尼 0.78)
+static SpringValue s_langCursorY(0.0f, SpringConfig(0.22f, 0.78f));
+
+void DialogViews::resetLangSelectAnim(int initialIndex) {
+    s_langDialogScale.jump(0.15f);
+    s_langDialogScale.set(1.0f);
+    s_langCursorY.jump((float)(initialIndex * 15));
+    s_langCursorY.set((float)(initialIndex * 15));
+}
 
 void DialogViews::drawHelpDialog(LGFX_Sprite* canvas) {
     if (!canvas) return;
@@ -106,18 +119,39 @@ void DialogViews::drawHelpDialog(LGFX_Sprite* canvas) {
 void DialogViews::drawLangSelectDialog(LGFX_Sprite* canvas, int selectedLangIndex) {
     if (!canvas) return;
     
-    int w = 164, h = 96;
+    // 更新高亮光标物理弹簧目标
+    s_langCursorY.set((float)(selectedLangIndex * 15));
+
+    float scale = s_langDialogScale.get();
+    if (scale < 0.05f) return;
+
+    int baseW = 164, baseH = 82;
+    int w = (int)roundf(baseW * scale);
+    int h = (int)roundf(baseH * scale);
     int x = (canvas->width() - w) / 2;
     int y = (canvas->height() - h) / 2;
     
-    canvas->fillRect(x, y, w, h, canvas->color565(25, 35, 45));
-    canvas->drawRect(x, y, w, h, TFT_YELLOW);
+    // 弹窗本体采用深蓝暗色科技底与微圆角外框
+    canvas->fillRoundRect(x, y, w, h, 4, canvas->color565(16, 24, 34));
+    canvas->drawRoundRect(x, y, w, h, 4, canvas->color565(0, 180, 255));
     
+    if (scale < 0.65f) return; // 初始展开极小时仅绘制弹窗轮廓，防止文字过度挤压变形
+
+    // 弹窗标题
     canvas->setTextColor(TFT_WHITE);
     canvas->setTextSize(1);
     canvas->setFont(I18N::getFont());
     canvas->drawString(I18N::get(TXT_LANGUAGE_MENU), x + (w - canvas->textWidth(I18N::get(TXT_LANGUAGE_MENU))) / 2, y + 4);
+
+    // 细致的标题下部分割线
+    canvas->drawFastHLine(x + 8, y + 17, w - 16, canvas->color565(35, 50, 70));
     
+    // 弹性平滑吸附光标高亮条
+    int cursorRelY = (int)roundf(s_langCursorY.get());
+    int cursorY = y + 19 + cursorRelY;
+    canvas->fillRoundRect(x + 6, cursorY, w - 12, 14, 2, canvas->color565(0, 100, 200));
+    canvas->drawRoundRect(x + 6, cursorY, w - 12, 14, 2, canvas->color565(80, 200, 255));
+
     const char* options[4] = {"1. English", "2. 简体中文", "3. 日本語", "4. Español"};
     const lgfx::IFont* optFonts[4] = {
         &fonts::efontCN_12,
@@ -129,15 +163,12 @@ void DialogViews::drawLangSelectDialog(LGFX_Sprite* canvas, int selectedLangInde
     for (int i = 0; i < 4; i++) {
         canvas->setFont(optFonts[i]);
         if (selectedLangIndex == i) {
-            canvas->fillRect(x + 6, y + 18 + i * 15, w - 12, 14, canvas->color565(0, 100, 200));
             canvas->setTextColor(TFT_WHITE);
         } else {
-            canvas->setTextColor(TFT_LIGHTGRAY);
+            canvas->setTextColor(canvas->color565(170, 185, 200));
         }
-        canvas->drawString(options[i], x + 12, y + 19 + i * 15);
+        canvas->drawString(options[i], x + 12, y + 20 + i * 15);
     }
-    canvas->setFont(&fonts::Font0);
-    canvas->setTextColor(TFT_YELLOW);
-    canvas->drawString("[1-4] or [;/.] Move  [Enter] OK", x + 6, y + h - 12);
     canvas->setFont(I18N::getFont());
 }
+

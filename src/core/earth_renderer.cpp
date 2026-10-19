@@ -937,7 +937,7 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
     
     // Draw Fading Motion Trail for the selected satellite (rolling history of past frames)
     if (sat.isSelected && sat.calc) {
-        const size_t MAX_TRAIL_STEPS = 4; // reduced from 8 to make trail collapse faster
+        const size_t MAX_TRAIL_STEPS = 5; // 5步优雅渐隐拖尾
         struct TrailHistoryEntry {
             uint32_t simTime = 0;
             String name = "";
@@ -963,6 +963,7 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
         // Draw the trail using the historical simulated times of the past N frames
         for (size_t i = 1; i < history.size(); i++) {
             uint32_t t_past = history[i].simTime;
+            if (t_past == sat.simTime) continue; // 静止同秒时不重复重叠绘制
             double tx, ty, tz;
             if (sat.calc->getTEME(t_past, tx, ty, tz)) {
                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t_past));
@@ -976,7 +977,7 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
                         shadow = isSatelliteInShadow(geo.lat, geo.lon, geo.alt, _subsolarLat, _subsolarLon, _hasSunData);
                     }
                     
-                    float fadeFactor = (1.0f - (float)i / (float)MAX_TRAIL_STEPS) * 0.6f;
+                    float fadeFactor = (1.0f - (float)i / (float)MAX_TRAIL_STEPS) * 0.65f;
                     uint16_t trailCol = shadow ? _display->color565(60, 60, 70) : sat.color;
                     trailCol = scaleColor(trailCol, fadeFactor);
                     

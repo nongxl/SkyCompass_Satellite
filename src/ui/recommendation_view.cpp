@@ -66,6 +66,7 @@ extern bool gnssTimedOut;
 extern bool showRecommendations;
 extern bool isMonoInitialized;
 extern GimbalController gimbal;
+extern int g_recBounceTrigger;
 
 
 void rebuildTreeLocal(std::vector<TreeItem>& tree, const std::vector<PassEvent>& passes, uint32_t current_unix) {
@@ -151,8 +152,10 @@ static void drawPassTypeIcon(LGFX_Sprite* canvas, int x, int y, bool isRadio, bo
     }
 }
 
-// 推荐面板抽屉物理弹簧 (初始在屏幕外 -145px, 宽度 140px)
-static SpringValue s_drawerX(-145.0f, SpringConfig(340.0f, 0.88f));
+// 推荐面板抽屉物理弹簧 (初始在屏幕外 -145px, 宽度 140px, 0.38s 平滑细腻阻尼滑入/滑出，消除掉帧跳跃感)
+static SpringValue s_drawerX(-145.0f, SpringConfig(0.38f, 0.88f));
+// 计算进度弹簧数值 (实现百分比平滑插值过渡)
+static SpringValue s_calcProgSpring(0.0f, SpringConfig(0.28f, 0.85f));
 
 RecommendationView::RecommendationView() {
 }
@@ -163,6 +166,10 @@ void RecommendationView::open() {
 
 void RecommendationView::close() {
     s_drawerX.set(-145.0f);
+}
+
+void RecommendationView::forceClose() {
+    s_drawerX.jump(-145.0f);
 }
 
 bool RecommendationView::isVisible() const {
@@ -234,13 +241,62 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
             }
 
             if (!localPredictionsReady) {
-                canvas->setTextColor(TFT_YELLOW);
-                if (!localTimeSynced) {
-                    canvas->drawString(I18N::get(TXT_WAITING_TIME_SYNC), panelX + 5, 30);
+                // 文字与进度条采用统一的明亮黄色调
+                int textY = 28;
+                uint16_t themeColor = canvas->color565(255, 204, 77);
+                canvas->setFont(I18N::getFont());
+                canvas->setTextColor(themeColor);
+
+                const char* rawTitle = (!localTimeSynced) ? I18N::get(TXT_WAITING_TIME_SYNC) : I18N::get(TXT_PASS_CALCULATING);
+                String displayTitle = rawTitle;
+                while (displayTitle.endsWith(".")) {
+                    displayTitle.remove(displayTitle.length() - 1);
+                }
+                // 三个点横向依次出现 (0 -> 1 -> 2 -> 3 循环轮替，每 400ms 步进)
+                int dotCount = (int)((millis() / 400) % 4);
+                for (int i = 0; i < dotCount; i++) {
+                    displayTitle += ".";
+                }
+                canvas->drawString(displayTitle.c_str(), panelX + 8, textY);
+
+                if (localTimeSynced) {
+                    // 平滑进度条 (与文字配色统一、直角矩形)
+                    s_calcProgSpring.set((float)localPredictionProgress);
+                    float curProg = s_calcProgSpring.get();
+                    if (curProg < 0.0f) curProg = 0.0f;
+                    if (curProg > 100.0f) curProg = 100.0f;
+
+                    int barX = panelX + 10;
+                    int barY = 48;
+                    int barW = 120;
+                    int barH = 5;
+
+                    // 直角矩形底框与边框
+                    canvas->fillRect(barX, barY, barW, barH, canvas->color565(25, 30, 36));
+                    canvas->drawRect(barX, barY, barW, barH, canvas->color565(60, 65, 70));
+                    
+                    int fillW = (int)roundf((barW - 2) * (curProg / 100.0f));
+                    if (fillW > 0) {
+                        if (fillW > barW - 2) fillW = barW - 2;
+                        // 直角矩形进度填充，配色与“正在计算”文字完全一致
+                        canvas->fillRect(barX + 1, barY + 1, fillW, barH - 2, themeColor);
+                    }
+
+                    // 进度百分比文字 (配色与文字统一)
+                    canvas->setFont(&fonts::Font0);
+                    canvas->setTextSize(1);
+                    canvas->setTextColor(themeColor);
+                    char pctBuf[16];
+                    snprintf(pctBuf, sizeof(pctBuf), "%d%%", (int)roundf(curProg));
+                    canvas->drawString(pctBuf, panelX + (140 - canvas->textWidth(pctBuf)) / 2, barY + 9);
+                    canvas->setFont(I18N::getFont());
                 } else {
-                    char buf[32];
-                    sprintf(buf, "%s %d%%", I18N::get(TXT_PASS_CALCULATING), localPredictionProgress);
-                    canvas->drawString(buf, panelX + 5, 30);
+                    // 等待时间同步提示
+                    canvas->setFont(&fonts::Font0);
+                    canvas->setTextSize(1);
+                    canvas->setTextColor(canvas->color565(140, 150, 160));
+                    canvas->drawString("Syncing GPS / NTP...", panelX + 10, 48);
+                    canvas->setFont(I18N::getFont());
                 }
             } else {
                 if (recommendedPasses.empty()) {
@@ -474,6 +530,11 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                             float curY_f = (float)startY + (float)(normalY - startY) * catProg;
                             targetCursorY = curY_f - 1.0f;
                         }
+                    }
+
+                    if (g_recBounceTrigger != 0) {
+                        s_cursorY_rec.shift((float)g_recBounceTrigger);
+                        g_recBounceTrigger = 0;
                     }
 
                     if (s_lastRecStartIndex != startIndex) {
