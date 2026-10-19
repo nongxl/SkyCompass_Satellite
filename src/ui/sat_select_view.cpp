@@ -332,16 +332,27 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
     // Top Bar - Dual Tabs
     canvas->fillRect(0, 0, width, 20, canvas->color565(30, 40, 50));
     
+    // 物理弹簧滑动 Tab 高亮滑块
+    static SpringValue s_tabHighlightX(0.0f, SpringConfig::Default);
+    static bool s_tabInit = false;
+    float targetTabX = (currentSatTab == TAB_ENCYCLOPEDIA) ? 0.0f : (float)(width / 2);
+    if (!s_tabInit) {
+        s_tabHighlightX.jump(targetTabX);
+        s_tabInit = true;
+    } else {
+        s_tabHighlightX.set(targetTabX);
+    }
+    
+    float tabX = s_tabHighlightX.get();
+    canvas->fillRect((int)roundf(tabX), 0, width / 2, 20, canvas->color565(100, 50, 200));
+    
     // Tab 1: Encyclopedia
-    uint16_t tab1Bg = (currentSatTab == TAB_ENCYCLOPEDIA) ? canvas->color565(100, 50, 200) : canvas->color565(30, 40, 50);
-    canvas->fillRect(0, 0, width/2, 20, tab1Bg);
-    canvas->setTextColor(TFT_WHITE);
+    canvas->setTextColor((currentSatTab == TAB_ENCYCLOPEDIA) ? TFT_WHITE : TFT_LIGHTGRAY);
     canvas->setTextSize(1);
     canvas->drawString(I18N::get(TXT_TAB_ENCYCLOPEDIA), 70 - canvas->textWidth(I18N::get(TXT_TAB_ENCYCLOPEDIA))/2, 6);
     
     // Tab 2: Recent Launch
-    uint16_t tab2Bg = (currentSatTab == TAB_RECENT_LAUNCH) ? canvas->color565(100, 50, 200) : canvas->color565(30, 40, 50);
-    canvas->fillRect(width/2, 0, width/2, 20, tab2Bg);
+    canvas->setTextColor((currentSatTab == TAB_RECENT_LAUNCH) ? TFT_WHITE : TFT_LIGHTGRAY);
     canvas->drawString(I18N::get(TXT_TAB_RECENT_LAUNCH), 166 - canvas->textWidth(I18N::get(TXT_TAB_RECENT_LAUNCH))/2, 6);
     
     // Draw Memory Health Progress Bar on Top Bar Divider Line (y = 19..20)
