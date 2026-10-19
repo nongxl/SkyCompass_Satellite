@@ -169,7 +169,7 @@ int TextUtils::drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, i
 }
 
 void TextUtils::drawScrollingText(LGFX_Sprite* canvas, const char* text, int x, int y, int maxWidth, uint16_t color) {
-    if (!canvas) return;
+    if (!canvas || !text) return;
     canvas->setTextColor(color);
     int textWidth = canvas->textWidth(text);
     if (textWidth <= maxWidth) {
@@ -177,15 +177,47 @@ void TextUtils::drawScrollingText(LGFX_Sprite* canvas, const char* text, int x, 
         return;
     }
     
-    int gap = 30;
-    int cycleWidth = textWidth + gap;
-    int speed = 25; // pixels per second
-    int offset = (int)(millis() * speed / 1000) % cycleWidth;
+    // 选中文本变化检测：切换条目时立即复位动画，确保总是从原位（居左）开始
+    static String s_lastText = "";
+    static unsigned long s_lastChangeMs = 0;
+    static int s_lastY = -1;
+    unsigned long now = millis();
+    if (s_lastY != y || s_lastText != text) {
+        s_lastText = text;
+        s_lastY = y;
+        s_lastChangeMs = now;
+    }
+    
+    int maxScroll = textWidth - maxWidth;
+    int speed = 24; // 像素/秒，舒适阅读速度
+    int scrollDurationMs = (maxScroll * 1000) / speed;
+    int holdStartMs = 1200;     // 起始停留时间 (在原本左对齐位置静止，让用户先看清开头)
+    int holdEndMs = 1200;       // 末尾停留时间 (读完末尾)
+    int returnDurationMs = 500; // 平滑返回起点的动画时长
+    
+    int totalCycleMs = holdStartMs + scrollDurationMs + holdEndMs + returnDurationMs;
+    unsigned long elapsed = now - s_lastChangeMs;
+    int phase = elapsed % totalCycleMs;
+    
+    float offset = 0.0f;
+    if (phase < holdStartMs) {
+        // 阶段 1: 起始停留，完全在原位居左对齐显示
+        offset = 0.0f;
+    } else if (phase < holdStartMs + scrollDurationMs) {
+        // 阶段 2: 从原位平滑向左滑动，直至末尾完整露出
+        offset = (float)(phase - holdStartMs) * ((float)maxScroll / (float)scrollDurationMs);
+    } else if (phase < holdStartMs + scrollDurationMs + holdEndMs) {
+        // 阶段 3: 停留在末尾
+        offset = (float)maxScroll;
+    } else {
+        // 阶段 4: 平滑滑回起点
+        float t = (float)(phase - (holdStartMs + scrollDurationMs + holdEndMs)) / (float)returnDurationMs;
+        float ease = 0.5f * (1.0f + cosf(t * 3.14159265f));
+        offset = (float)maxScroll * ease;
+    }
     
     int fh = canvas->fontHeight();
-    
     canvas->setClipRect(x, y, maxWidth, fh);
-    canvas->drawString(text, x - offset, y);
-    canvas->drawString(text, x - offset + cycleWidth, y);
+    canvas->drawString(text, x - (int)roundf(offset), y);
     canvas->clearClipRect();
 }

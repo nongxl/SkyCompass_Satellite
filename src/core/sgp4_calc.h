@@ -24,6 +24,8 @@ public:
     // Returns true on success
     bool getTEME(uint32_t unix_ts, double& x, double& y, double& z);
     bool getTEME(uint32_t unix_ts, double& x, double& y, double& z, double& vx, double& vy, double& vz);
+    bool getTEME(double unix_ts, double& x, double& y, double& z);
+    bool getTEME(double unix_ts, double& x, double& y, double& z, double& vx, double& vy, double& vz);
 
     // Helper functions for Pseudo TLE generation inside the driver layer
     static void buildPseudoTle(const OrbitRecord& record, String& outL1, String& outL2);

@@ -9,6 +9,10 @@ double CoordTransform::unixToJulian(uint32_t unix_ts) {
     return (unix_ts / 86400.0) + 2440587.5;
 }
 
+double CoordTransform::unixToJulian(double unix_ts) {
+    return (unix_ts / 86400.0) + 2440587.5;
+}
+
 double CoordTransform::getGMST(double julian_date) {
     double jd0 = floor(julian_date + 0.5) - 0.5;
     double T0 = (jd0 - 2451545.0) / 36525.0;

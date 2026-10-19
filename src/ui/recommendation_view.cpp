@@ -10,6 +10,7 @@
 #include "hal/hal_gnss.h"
 #include "hal/hal_wifi.h"
 #include "gimbal/gimbal_controller.h"
+#include "core/spring_animator.h"
 
 static uint32_t parseTleEpoch(const String& line1) {
     if (line1.length() < 32) return 0;
@@ -62,6 +63,7 @@ extern volatile bool g_orbitCalculating;
 extern bool manualWifiToggle;
 extern HalGnss* gnss;
 extern bool gnssTimedOut;
+extern bool showRecommendations;
 extern bool isMonoInitialized;
 extern GimbalController gimbal;
 
@@ -149,71 +151,101 @@ static void drawPassTypeIcon(LGFX_Sprite* canvas, int x, int y, bool isRadio, bo
     }
 }
 
+// 推荐面板抽屉物理弹簧 (初始在屏幕外 -145px, 宽度 140px)
+static SpringValue s_drawerX(-145.0f, SpringConfig(340.0f, 0.88f));
+
 RecommendationView::RecommendationView() {
 }
 
+void RecommendationView::open() {
+    s_drawerX.set(0.0f);
+}
+
+void RecommendationView::close() {
+    s_drawerX.set(-145.0f);
+}
+
+bool RecommendationView::isVisible() const {
+    return s_drawerX.get() > -144.0f;
+}
 
 void RecommendationView::draw(LGFX_Sprite* canvas) {
     if (!canvas) return;
+    float drawerF = s_drawerX.get();
+    if (!showRecommendations && drawerF <= -144.0f) {
+        return; // 完全收起状态，零 CPU 消耗
+    }
+    int panelX = (int)roundf(drawerF);
+
     HardwareConfig& hw = HardwareConfig::getInstance();
-            // Draw semi-transparent dark overlay on the left side (width: 140)
-            canvas->fillRect(0, 0, 140, 135, canvas->color565(15, 20, 25));
-            canvas->drawFastVLine(140, 0, 135, TFT_DARKGREY); // separator line
-            
-            // 抽屉顶部 Header 背景 (0 ~ 17)
-            canvas->fillRect(0, 0, 140, 17, canvas->color565(22, 30, 40));
+    // 绘制半透明左侧暗底抽屉蒙版 (宽 140)
+    canvas->fillRect(panelX, 0, 140, 135, canvas->color565(15, 20, 25));
+    canvas->drawFastVLine(panelX + 140, 0, 135, TFT_DARKGREY); // 分隔线
+    
+    // 抽屉顶部 Header 背景 (0 ~ 17)
+    canvas->fillRect(panelX, 0, 140, 17, canvas->color565(22, 30, 40));
 
-            canvas->setTextColor(TFT_WHITE);
-            canvas->setTextSize(1);
-            canvas->drawString(I18N::get(TXT_RECOMMENDED_PASSES), 4, 4);
+    canvas->setTextColor(TFT_WHITE);
+    canvas->setTextSize(1);
+    canvas->drawString(I18N::get(TXT_RECOMMENDED_PASSES), panelX + 4, 4);
 
-            // 抽屉顶部内存使用率进度条 (宽 140px, 高 2px, Y = 17)
-            {
-                uint32_t freeHeap = ESP.getFreeHeap();
-                const float MAX_APP_HEAP = 45000.0f;
-                float memRatio = 1.0f - ((float)freeHeap / MAX_APP_HEAP);
-                if (memRatio < 0.0f) memRatio = 0.0f;
-                if (memRatio > 1.0f) memRatio = 1.0f;
+    // 抽屉顶部内存使用率进度条 (宽 140px, 高 2px, Y = 17)
+    {
+        uint32_t freeHeap = ESP.getFreeHeap();
+        const float MAX_APP_HEAP = 45000.0f;
+        float memRatio = 1.0f - ((float)freeHeap / MAX_APP_HEAP);
+        if (memRatio < 0.0f) memRatio = 0.0f;
+        if (memRatio > 1.0f) memRatio = 1.0f;
 
-                int barW = 140;
-                int fillWidth = (int)(barW * memRatio);
-                if (fillWidth > barW) fillWidth = barW;
-                if (fillWidth < 0) fillWidth = 0;
+        int barW = 140;
+        int fillWidth = (int)(barW * memRatio);
+        if (fillWidth > barW) fillWidth = barW;
+        if (fillWidth < 0) fillWidth = 0;
 
-                uint16_t memColor;
-                if (freeHeap >= 20000) {
-                    memColor = canvas->color565(0, 220, 255); // 青蓝色 (极为充裕，剩余 >= 20KB)
-                } else if (freeHeap >= 10000) {
-                    memColor = TFT_GREEN;                     // 绿色 (健康正常，剩余 10KB~20KB)
-                } else if (freeHeap >= 6000) {
-                    memColor = TFT_YELLOW;                    // 黄色 (适度，剩余 6KB~10KB)
-                } else {
-                    memColor = TFT_RED;                       // 红色 (紧张，剩余 < 6KB)
-                }
-                canvas->fillRect(0, 17, barW, 2, canvas->color565(35, 45, 55));
-                if (fillWidth > 0) {
-                    canvas->fillRect(0, 17, fillWidth, 2, memColor);
-                }
-            }
+        uint16_t memColor;
+        if (freeHeap >= 20000) {
+            memColor = canvas->color565(0, 220, 255); // 青蓝色 (极为充裕，剩余 >= 20KB)
+        } else if (freeHeap >= 10000) {
+            memColor = TFT_GREEN;                     // 绿色 (健康正常，剩余 10KB~20KB)
+        } else if (freeHeap >= 6000) {
+            memColor = TFT_YELLOW;                    // 黄色 (适度，剩余 6KB~10KB)
+        } else {
+            memColor = TFT_RED;                       // 红色 (紧张，剩余 < 6KB)
+        }
+        canvas->fillRect(panelX, 17, barW, 2, canvas->color565(35, 45, 55));
+        if (fillWidth > 0) {
+            canvas->fillRect(panelX, 17, fillWidth, 2, memColor);
+        }
+    }
             
             lockPassMutex();
             bool localPredictionsReady = predictionsReady;
             int localPredictionProgress = predictionProgress;
             bool localTimeSynced = g_timeSynced;
 
+            // 列表安全边界保护：防止展开收起或后台数据置换导致越界
+            if (displayTree.empty()) {
+                passScrollIndex = 0;
+            } else {
+                if (passScrollIndex < 0) passScrollIndex = 0;
+                if (passScrollIndex >= (int)displayTree.size()) {
+                    passScrollIndex = (int)displayTree.size() - 1;
+                }
+            }
+
             if (!localPredictionsReady) {
                 canvas->setTextColor(TFT_YELLOW);
                 if (!localTimeSynced) {
-                    canvas->drawString(I18N::get(TXT_WAITING_TIME_SYNC), 5, 30);
+                    canvas->drawString(I18N::get(TXT_WAITING_TIME_SYNC), panelX + 5, 30);
                 } else {
                     char buf[32];
                     sprintf(buf, "%s %d%%", I18N::get(TXT_PASS_CALCULATING), localPredictionProgress);
-                    canvas->drawString(buf, 5, 30);
+                    canvas->drawString(buf, panelX + 5, 30);
                 }
             } else {
                 if (recommendedPasses.empty()) {
                     canvas->setTextColor(TFT_LIGHTGRAY);
-                    canvas->drawString(I18N::get(TXT_NO_PASSES_7D), 5, 30);
+                    canvas->drawString(I18N::get(TXT_NO_PASSES_7D), panelX + 5, 30);
                     
                     // Detect if selected satellites have stale TLEs
                     bool hasStaleTle = false;
@@ -231,31 +263,31 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                         canvas->setTextColor(TFT_YELLOW);
                         Language currL = I18N::getLanguage();
                         const char* staleMsg = (currL == LANG_ZH) ? "TLE过期,请连WiFi更新" : ((currL == LANG_JA) ? "TLE期限切れ,WiFi更新" : ((currL == LANG_ES) ? "TLE vencido, sinc WiFi" : "Stale TLE, sync WiFi"));
-                        canvas->drawString(staleMsg, 5, 48);
+                        canvas->drawString(staleMsg, panelX + 5, 48);
                     }
                 } else if (selectedPassIndex >= 0 && selectedPassIndex < (int)recommendedPasses.size()) {
                     // Draw Detail View
                     const auto& p = recommendedPasses[selectedPassIndex];
                     canvas->setTextColor(TFT_CYAN);
-                    canvas->drawString(I18N::get(TXT_PASS_NAME), 5, 20);
+                    canvas->drawString(I18N::get(TXT_PASS_NAME), panelX + 5, 20);
                     canvas->setTextColor(TFT_WHITE);
-                    canvas->drawString(p.satName.c_str(), 40, 20);
+                    canvas->drawString(p.satName.c_str(), panelX + 40, 20);
                     
                     bool isCjk = (I18N::getLanguage() == LANG_ZH || I18N::getLanguage() == LANG_JA);
 
                     // Score: (y=32)
                     canvas->setTextColor(TFT_CYAN);
-                    canvas->drawString(I18N::get(TXT_PASS_SCORE), 5, 32);
+                    canvas->drawString(I18N::get(TXT_PASS_SCORE), panelX + 5, 32);
                     String stars = "";
                     for(int s=0;s<p.score;s++) stars += "*";
                     uint16_t starColor = (p.score==5) ? TFT_GOLD : (p.score>=3 ? TFT_GREEN : TFT_LIGHTGRAY);
                     canvas->setTextColor(starColor);
                     int scoreX = isCjk ? 60 : 45;
-                    canvas->drawString(stars.c_str(), scoreX, 32);
+                    canvas->drawString(stars.c_str(), panelX + scoreX, 32);
                     
                     // Orbit: MM/DD (y=45)
                     canvas->setTextColor(TFT_CYAN);
-                    canvas->drawString(I18N::get(TXT_RL_ORBIT), 5, 45);
+                    canvas->drawString(I18N::get(TXT_RL_ORBIT), panelX + 5, 45);
                     
                     int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : 8*3600;
                     time_t aos_t = (time_t)p.aosTime + tzOffsetSec;
@@ -268,7 +300,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     char dateStr[32];
                     sprintf(dateStr, "%02d/%02d", aos_tm.tm_mon + 1, aos_tm.tm_mday);
                     canvas->setTextColor(TFT_WHITE);
-                    canvas->drawString(dateStr, 45, 45);
+                    canvas->drawString(dateStr, panelX + 45, 45);
                     
                     // Time: HH:MM:SS - HH:MM:SS (y=57)
                     char timeStr[64];
@@ -276,11 +308,11 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                             aos_tm.tm_hour, aos_tm.tm_min, aos_tm.tm_sec, 
                             los_tm.tm_hour, los_tm.tm_min, los_tm.tm_sec);
                     canvas->setTextColor(TFT_LIGHTGRAY);
-                    canvas->drawString(timeStr, 5, 57);
+                    canvas->drawString(timeStr, panelX + 5, 57);
                     
                     // Mag & Peak (y=70)
                     canvas->setTextColor(TFT_CYAN);
-                    canvas->drawString(I18N::get(TXT_PASS_MAG), 5, 70);
+                    canvas->drawString(I18N::get(TXT_PASS_MAG), panelX + 5, 70);
                     canvas->setTextColor(TFT_WHITE);
                     char magBuf[16];
                     if (p.maxBrightness < 98.0) {
@@ -289,13 +321,13 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                         sprintf(magBuf, "%s", I18N::get(TXT_VIS_NA));
                     }
                     int magX = isCjk ? 40 : 35;
-                    canvas->drawString(magBuf, magX, 70);
+                    canvas->drawString(magBuf, panelX + magX, 70);
                     
                     canvas->setTextColor(TFT_CYAN);
-                    canvas->drawString(I18N::get(TXT_PASS_MAX_EL), 65, 70);
+                    canvas->drawString(I18N::get(TXT_PASS_MAX_EL), panelX + 65, 70);
                     canvas->setTextColor(TFT_WHITE);
                     int maxElX = isCjk ? 120 : 115;
-                    canvas->drawString((String((int)p.maxElevation) + "°").c_str(), maxElX, 70);
+                    canvas->drawString((String((int)p.maxElevation) + "°").c_str(), panelX + maxElX, 70);
                     
                     int sIdx = -1;
                     for (int i = 0; i < NUM_SATELLITES; i++) {
@@ -322,7 +354,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
 
                     // Reason: (y=82)
                     canvas->setTextColor(TFT_CYAN);
-                    canvas->drawString(I18N::get(TXT_PASS_REASON), 5, 82);
+                    canvas->drawString(I18N::get(TXT_PASS_REASON), panelX + 5, 82);
                     String reason = "";
                     if (p.isRadioPass || satType == SAT_TYPE_HAM) {
                         reason = I18N::get(TXT_PASS_REASON_RADIO);
@@ -337,7 +369,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     }
                     canvas->setTextColor(TFT_LIGHTGRAY);
                     int reasonX = isCjk ? 40 : 50;
-                    canvas->drawString(reason.c_str(), reasonX, 82);
+                    canvas->drawString(reason.c_str(), panelX + reasonX, 82);
                     
                     if (satCalc != nullptr) {
                         double tx, ty, tz;
@@ -369,7 +401,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                             } else {
                                 sprintf(azaltBuf, "Az:%03d° El:%02d°", (int)az, (int)el);
                             }
-                            canvas->drawString(azaltBuf, 5, 95);
+                            canvas->drawString(azaltBuf, panelX + 5, 95);
                         }
                     }
                 } else {
@@ -387,6 +419,17 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                         }
                     }
 
+                    // 物理弹簧树形展开动效：驱动每个分类的展开/折叠平滑进度
+                    static SpringValue s_cat0(catExpanded[0] ? 1.0f : 0.0f, SpringConfig::Bouncy);
+                    static SpringValue s_cat1(catExpanded[1] ? 1.0f : 0.0f, SpringConfig::Bouncy);
+                    static SpringValue s_cat2(catExpanded[2] ? 1.0f : 0.0f, SpringConfig::Bouncy);
+                    static SpringValue s_cat3(catExpanded[3] ? 1.0f : 0.0f, SpringConfig::Bouncy);
+                    s_cat0.set(catExpanded[0] ? 1.0f : 0.0f);
+                    s_cat1.set(catExpanded[1] ? 1.0f : 0.0f);
+                    s_cat2.set(catExpanded[2] ? 1.0f : 0.0f);
+                    s_cat3.set(catExpanded[3] ? 1.0f : 0.0f);
+                    SpringValue* s_catProgress[4] = { &s_cat0, &s_cat1, &s_cat2, &s_cat3 };
+
                     // Draw Tree View
                     bool isCjk = (I18N::getLanguage() == LANG_ZH || I18N::getLanguage() == LANG_JA);
                     const char* catNames[] = {
@@ -400,13 +443,54 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     int itemsPerPage = isCjk ? 6 : 7;
                     int startIndex = (passScrollIndex / itemsPerPage) * itemsPerPage;
                     
-                    for (int i = 0; i < itemsPerPage && (startIndex + i) < displayTree.size(); i++) {
+                    // 记录各一级分类在当前视口中的绝对基准 Y 坐标
+                    int catHeaderY[4] = {-1, -1, -1, -1};
+                    for (int i = 0; i < itemsPerPage && (startIndex + i) < (int)displayTree.size(); i++) {
+                        int idx = startIndex + i;
+                        const auto& it = displayTree[idx];
+                        if (it.isCategory) {
+                            catHeaderY[it.categoryIndex] = 20 + i * lineH;
+                        }
+                    }
+
+                    // 物理弹簧磁吸光标
+                    static SpringValue s_cursorY_rec(19.0f, SpringConfig::Default);
+                    static int s_lastRecStartIndex = -1;
+                    int selInPage = passScrollIndex - startIndex;
+                    if (selInPage < 0) selInPage = 0;
+                    if (selInPage >= itemsPerPage) selInPage = itemsPerPage - 1;
+                    float targetCursorY = 20.0f - 1.0f + selInPage * lineH;
+
+                    // 若当前选中的是子条目，光标动态追踪其向下展开时的实时物理 Y 位置
+                    if (passScrollIndex >= 0 && passScrollIndex < (int)displayTree.size()) {
+                        const auto& selItem = displayTree[passScrollIndex];
+                        if (!selItem.isCategory) {
+                            int parentY = catHeaderY[selItem.categoryIndex];
+                            if (parentY < 0) parentY = 20 - lineH;
+                            int startY = parentY + lineH;
+                            float catProg = s_catProgress[selItem.categoryIndex]->get();
+                            if (catProg < 0.0f) catProg = 0.0f;
+                            int normalY = 20 + selInPage * lineH;
+                            float curY_f = (float)startY + (float)(normalY - startY) * catProg;
+                            targetCursorY = curY_f - 1.0f;
+                        }
+                    }
+
+                    if (s_lastRecStartIndex != startIndex) {
+                        s_lastRecStartIndex = startIndex;
+                        s_cursorY_rec.jump(targetCursorY);
+                    } else {
+                        s_cursorY_rec.set(targetCursorY);
+                    }
+
+                    if (!displayTree.empty() && passScrollIndex >= 0) {
+                        float smoothY = s_cursorY_rec.get();
+                        canvas->fillRoundRect(panelX + 2, (int)roundf(smoothY), 136, lineH, 3, canvas->color565(0, 120, 255));
+                    }
+                    
+                    for (int i = 0; i < itemsPerPage && (startIndex + i) < (int)displayTree.size(); i++) {
                         int idx = startIndex + i;
                         const auto& item = displayTree[idx];
-                        
-                        if (idx == passScrollIndex) {
-                            canvas->fillRect(2, y-1, 136, lineH, canvas->color565(0, 120, 255));
-                        }
                         
                         if (item.isCategory) {
                             bool isCalculatingCat = g_orbitCalculating && (item.categoryIndex > 0);
@@ -424,49 +508,56 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                                 else if (dotState == 1) label += "..";
                                 else label += "...";
                             }
-                            canvas->drawString(label.c_str(), 5, y);
+                            canvas->drawString(label.c_str(), panelX + 5, y);
                         } else {
                             if (item.passIndex < 0 || item.passIndex >= (int)recommendedPasses.size()) {
+                                y += lineH;
                                 continue;
                             }
                             const auto& p = recommendedPasses[item.passIndex];
                             bool isSelected = (idx == passScrollIndex);
                             bool isRadio = (p.isRadioPass || p.eventType == 8);
-                            
-                            int iconY = y + (isCjk ? 2 : 1);
-                            drawPassTypeIcon(canvas, 5, iconY, isRadio, isSelected);
 
-                            canvas->setTextColor(isSelected ? TFT_WHITE : TFT_LIGHTGRAY);
-                            String name = String(p.satName.c_str());
-                            if (name.length() > 8) name = name.substring(0, 7) + ".";
-                            canvas->drawString(name.c_str(), 16, y);
-                            
-                            // Draw stars
-                            String stars = "";
-                            for(int s=0;s<p.score;s++) stars += "*";
-                            uint16_t starColor = (p.score==5) ? TFT_GOLD : (p.score>=3 ? TFT_GREEN : TFT_LIGHTGRAY);
-                            if (idx == passScrollIndex) starColor = TFT_WHITE;
-                            canvas->setTextColor(starColor);
-                            canvas->drawString(stars.c_str(), 70, y);
-                            
-                            // Draw day if not tonight
-                            if (item.categoryIndex != 0) {
-                                int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : 8*3600;
-                                time_t aos_t = (time_t)p.aosTime + tzOffsetSec;
-                                struct tm aos_tm;
-                                gmtime_r(&aos_t, &aos_tm);
-                                char dayStr[16];
-                                sprintf(dayStr, "%02d/%02d", aos_tm.tm_mon + 1, aos_tm.tm_mday);
-                                canvas->setTextColor(TFT_DARKGREY);
-                                canvas->drawString(dayStr, 105, y);
+                            // 从一级菜单处向下平滑弹出展开动效 (从 parentY + lineH 顺滑延展至 y)
+                            float catProg = s_catProgress[item.categoryIndex]->get();
+                            if (catProg < 0.0f) catProg = 0.0f;
+                            int parentY = catHeaderY[item.categoryIndex];
+                            if (parentY < 0) parentY = 20 - lineH;
+                            int startY = parentY + lineH;
+                            float itemY_f = (float)startY + (float)(y - startY) * catProg;
+                            int itemY = (int)roundf(itemY_f);
+
+                            if (itemY >= parentY + 2) {
+                                int iconY = itemY + (isCjk ? 2 : 1);
+                                drawPassTypeIcon(canvas, panelX + 5, iconY, isRadio, isSelected);
+
+                                canvas->setTextColor(isSelected ? TFT_WHITE : TFT_LIGHTGRAY);
+                                String name = String(p.satName.c_str());
+                                if (name.length() > 8) name = name.substring(0, 7) + ".";
+                                canvas->drawString(name.c_str(), panelX + 16, itemY);
+                                
+                                // Draw stars
+                                String stars = "";
+                                for(int s=0;s<p.score;s++) stars += "*";
+                                uint16_t starColor = (p.score==5) ? TFT_GOLD : (p.score>=3 ? TFT_GREEN : TFT_LIGHTGRAY);
+                                if (idx == passScrollIndex) starColor = TFT_WHITE;
+                                canvas->setTextColor(starColor);
+                                canvas->drawString(stars.c_str(), panelX + 70, itemY);
+                                
+                                // Draw day if not tonight
+                                if (item.categoryIndex != 0) {
+                                    int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : 8*3600;
+                                    time_t aos_t = (time_t)p.aosTime + tzOffsetSec;
+                                    struct tm aos_tm;
+                                    gmtime_r(&aos_t, &aos_tm);
+                                    char dayStr[16];
+                                    sprintf(dayStr, "%02d/%02d", aos_tm.tm_mon + 1, aos_tm.tm_mday);
+                                    canvas->setTextColor(TFT_DARKGREY);
+                                    canvas->drawString(dayStr, panelX + 105, itemY);
+                                }
                             }
                         }
                         y += lineH;
-                    }
-                    
-                    if (displayTree.size() > itemsPerPage) {
-                        canvas->setTextColor(TFT_DARKGREY);
-                        canvas->drawString("[^/v]", 110, 5);
                     }
                 }
             }
@@ -474,7 +565,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
             
             // Draw 2-Row Status Bar at the bottom of the panel
             // Divider line at y=100
-            canvas->drawFastHLine(0, 100, 140, TFT_DARKGREY);
+            canvas->drawFastHLine(panelX, 100, 140, TFT_DARKGREY);
             
             // hw already declared above
             
@@ -496,14 +587,14 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                 tleEpoch += I18N::get(TXT_VIS_NA);
             }
             canvas->setTextColor(TFT_LIGHTGRAY);
-            canvas->drawString(tleEpoch.c_str(), 3, 105);
+            canvas->drawString(tleEpoch.c_str(), panelX + 3, 105);
             
             if (HalWifi::isConnected()) {
                 canvas->setTextColor(TFT_GREEN);
-                canvas->drawString("WF:ON", 98, 105);
+                canvas->drawString("WF:ON", panelX + 98, 105);
             } else {
                 canvas->setTextColor(TFT_LIGHTGRAY);
-                canvas->drawString("WF:OFF", 98, 105);
+                canvas->drawString("WF:OFF", panelX + 98, 105);
             }
             
             // Row 2 (y=118): GP (x=4), MN (x=52), GB (x=98)
@@ -511,15 +602,15 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
             bool gnssConfigured = hw.isEnabled(HW_MOD_CAP_LORA1262) || hw.isEnabled(HW_MOD_UNIT_GPSV11);
             if (!gnssConfigured) {
                 canvas->setTextColor(TFT_DARKGREY);
-                canvas->drawString("GP:--", 4, 118);
+                canvas->drawString("GP:--", panelX + 4, 118);
             } else if (gnss && gnss->isModuleInitialized()) {
                 if (gnss->isInStandbyMode()) {
                     if (gnssTimedOut) {
                         canvas->setTextColor(TFT_RED);
-                        canvas->drawString("GP:TMO", 4, 118);
+                        canvas->drawString("GP:TMO", panelX + 4, 118);
                     } else {
                         canvas->setTextColor(TFT_LIGHTGRAY);
-                        canvas->drawString("GP:OFF", 4, 118);
+                        canvas->drawString("GP:OFF", panelX + 4, 118);
                     }
                 } else {
                     // 检查最近是否有 NMEA 串口数据（如果超过 3.5 秒完全没有数据字符，显示 ND）
@@ -528,7 +619,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     
                     if (!hasUartTraffic && gnss->getGpsChars() < 10) {
                         canvas->setTextColor(TFT_YELLOW);
-                        canvas->drawString("GP:ND", 4, 118);
+                        canvas->drawString("GP:ND", panelX + 4, 118);
                     } else {
                         int sats = gnss->getSatelliteCount();
                         char gpBuf[12];
@@ -554,11 +645,11 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                         }
 
                         canvas->setTextColor(txtColor);
-                        canvas->drawString(gpBuf, 4, 118);
+                        canvas->drawString(gpBuf, panelX + 4, 118);
 
-                        // 绘制心跳呼吸点：放置在文本右下角 (文字起始x=4，计算字符串宽度并在其右侧 y=124 处绘制 4x4 呼吸点)
+                        // 绘制心跳呼吸点：放置在文本右下角
                         int textWidth = canvas->textWidth(gpBuf);
-                        int dotX = 4 + textWidth + 2;
+                        int dotX = panelX + 4 + textWidth + 2;
                         int dotY = 124;
 
                         unsigned long lastNmea = gnss->getLastNmeaTime();
@@ -566,7 +657,6 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
 
                         // 只要在最近 2.0 秒内接收到串口 NMEA 物理数据，就保持与模组节奏严格同步的 1Hz 呼吸心跳
                         if (elapsed < 2000) {
-                            // 呼吸周期 1000ms：0~250ms 强劲起搏充盈，250~750ms 平滑呼出渐暗，750~1000ms 待机微光
                             uint32_t phase = elapsed % 1000;
                             float breath = 0.0f;
                             if (phase < 250) {
@@ -579,13 +669,11 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                             if (breath < 0.0f) breath = 0.0f;
                             if (breath > 1.0f) breath = 1.0f;
 
-                            // 呼吸色相：搜星阶段为亮青色(0, 255, 255)，定位锁定阶段为翡翠绿(0, 255, 120)
                             bool isLocked = (gnss->getStatus() == GNSS_STATUS_LOCKED);
                             uint8_t targetR = isLocked ? 20 : 0;
                             uint8_t targetG = 255;
                             uint8_t targetB = isLocked ? 120 : 255;
 
-                            // 待机暗底色 (深太空青灰)
                             uint8_t baseR = 25, baseG = 40, baseB = 55;
 
                             uint8_t curR = (uint8_t)(baseR + breath * (targetR - baseR));
@@ -593,42 +681,39 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                             uint8_t curB = (uint8_t)(baseB + breath * (targetB - baseB));
                             uint16_t coreColor = canvas->color565(curR, curG, curB);
 
-                            // 绘制 4x4 平滑呼吸核心
                             canvas->fillRect(dotX, dotY, 4, 4, coreColor);
 
-                            // 脉冲峰值区 (起搏充盈 breath > 0.55) 叠加亮白高光核，呈现强烈的心跳爆闪呼吸质感
                             if (breath > 0.55f) {
                                 canvas->fillRect(dotX + 1, dotY + 1, 2, 2, TFT_WHITE);
                             }
                         } else {
-                            // 硬件离线/未通信/待机：固定显示低调的暗灰色待机槽，无呼吸、无高光
                             canvas->fillRect(dotX, dotY, 4, 4, canvas->color565(40, 45, 50));
                         }
                     }
                 }
             } else {
                 canvas->setTextColor(TFT_YELLOW);
-                canvas->drawString("GP:ND", 4, 118);
+                canvas->drawString("GP:ND", panelX + 4, 118);
             }
             
             // 2. Chain Mono Sub-screen Status (x=52)
             bool monoConfigured = hw.isEnabled(HW_MOD_CHAIN_MONO);
             if (!monoConfigured) {
                 canvas->setTextColor(TFT_DARKGREY);
-                canvas->drawString("MN:--", 52, 118);
+                canvas->drawString("MN:--", panelX + 52, 118);
             } else if (isMonoInitialized) {
                 canvas->setTextColor(TFT_GREEN);
-                canvas->drawString("MN:OK", 52, 118);
+                canvas->drawString("MN:OK", panelX + 52, 118);
             } else {
                 canvas->setTextColor(TFT_YELLOW);
-                canvas->drawString("MN:ND", 52, 118);
+                canvas->drawString("MN:ND", panelX + 52, 118);
             }
             
             // 3. Gimbal Status (x=98)
             bool gimbalConfigured = hw.isEnabled(HW_MOD_UNIT_8SERVOS);
             if (!gimbalConfigured) {
                 canvas->setTextColor(TFT_DARKGREY);
-                canvas->drawString("GB:--", 98, 118);
+                canvas->drawString("GB:--", panelX + 98, 118);
             } else if (gimbal.isOnline()) {
                 uint16_t gbColor = TFT_GREEN;
                 const char* gbStatus = "GB:OK";
@@ -640,10 +725,10 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     default:                        gbColor = TFT_GREEN;  gbStatus = "GB:OK";  break;
                 }
                 canvas->setTextColor(gbColor);
-                canvas->drawString(gbStatus, 98, 118);
+                canvas->drawString(gbStatus, panelX + 98, 118);
             } else {
                 canvas->setTextColor(TFT_YELLOW);
-                canvas->drawString("GB:ND", 98, 118);
+                canvas->drawString("GB:ND", panelX + 98, 118);
             }
 
 }

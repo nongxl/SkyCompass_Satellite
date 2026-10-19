@@ -12,6 +12,7 @@
 #include "core/i18n.h"
 #include "core/encyclopedia.h"
 #include "core/image_utils.h"
+#include "core/spring_animator.h"
 
 // Helper to convert UTC date/time to Unix timestamp
 uint32_t convertGNSSDateToUnix(int year, int month, int day, int hour, int min, int sec) {
@@ -266,6 +267,8 @@ float targetZoom = 0.95f;
 bool g_descManualScrolled = false;
 int g_descManualYOffset = 0;
 int g_descMaxScroll = 0;
+int g_descBounceTrigger = 0;
+int g_objPageBounceTrigger = 0;
 
 // Level 3 Objects 分页数据结构与状态
 bool recentLaunchInObjectsView = false;
@@ -402,6 +405,8 @@ SatProfile g_satellites[MAX_SATELLITES];
 // We use a simulated time starting near the TLE epoch for Phase 3 offline testing
 volatile uint32_t current_unix = 0; // Will be set in setup()
 int32_t timeMachineOffset = 0;
+// 弹簧平滑时间机器: 采用临界阻尼 (damping=1.0) 消除时间超调回弹与抽动
+SpringValue g_smoothTimeMachineOffset(0.0f, SpringConfig(0.18f, 1.0f, false));
 unsigned long last_update = 0;
 unsigned long gnssStartTime = 0;
 bool gnssManualMode = false;
@@ -783,6 +788,9 @@ void predictorTask(void* parameter) {
             lockPassMutex();
             recommendedPasses = phase1Passes; // 快速快照发布至 UI（此时受限至多 24 项，开销极低）
             displayTree.swap(tempDisplayTree1);
+            if (passScrollIndex >= (int)displayTree.size()) {
+                passScrollIndex = displayTree.empty() ? 0 : (int)displayTree.size() - 1;
+            }
             predictionsReady = true;
             lastPredictionBaseTime = startTime;
             g_passTreeVersion++;
@@ -975,6 +983,9 @@ void predictorTask(void* parameter) {
         lockPassMutex();
         recommendedPasses.swap(allPasses);
         displayTree.swap(tempDisplayTree);
+        if (passScrollIndex >= (int)displayTree.size()) {
+            passScrollIndex = displayTree.empty() ? 0 : (int)displayTree.size() - 1;
+        }
         predictionsReady = true;
         lastPredictionBaseTime = startTime; // 写入本次成功的基准时间缓存
         g_currentPredictingBaseTime = 0;
@@ -2881,6 +2892,15 @@ void loop() {
     }
 
     M5Cardputer.update();
+
+    // 推进物理弹簧动效引擎
+    static unsigned long s_lastAnimLoopMs = 0;
+    unsigned long animNowMs = millis();
+    if (s_lastAnimLoopMs == 0) s_lastAnimLoopMs = animNowMs;
+    float animDt = (animNowMs - s_lastAnimLoopMs) / 1000.0f;
+    s_lastAnimLoopMs = animNowMs;
+    SpringScheduler::update(animDt);
+
     bool isFastForwarding = (lastTimeAdjustMillis != 0) || showRecommendations;
     g_isFastForwarding = isFastForwarding;
 
@@ -3251,8 +3271,13 @@ void loop() {
                             // Suspended check removed in cooperative mode
                         }
                     }
-                    if (key == ',') timeMachineOffset -= 60;
-                    else if (key == '/') timeMachineOffset += 60;
+                    if (key == ',') {
+                        timeMachineOffset -= 60;
+                        g_smoothTimeMachineOffset.set((float)timeMachineOffset);
+                    } else if (key == '/') {
+                        timeMachineOffset += 60;
+                        g_smoothTimeMachineOffset.set((float)timeMachineOffset);
+                    }
                     else if (key == '[') {
                         if (currentBrightness >= 32) currentBrightness -= 16;
                         else currentBrightness = 16;
@@ -3355,6 +3380,16 @@ void loop() {
 
         // 推荐过境事件列表专属平滑导航控制 (防止点按误触发长按，舒适匀速平滑滚动)
         if (appState == STATE_MAIN && showRecommendations && selectedPassIndex == -1) {
+            // 安全边界收缩，防止因树节点收起发生越界
+            if (displayTree.empty()) {
+                passScrollIndex = 0;
+            } else {
+                if (passScrollIndex < 0) passScrollIndex = 0;
+                if (passScrollIndex >= (int)displayTree.size()) {
+                    passScrollIndex = (int)displayTree.size() - 1;
+                }
+            }
+
             static unsigned long s_passHoldStart = 0;
             static unsigned long s_passLastRepeat = 0;
             static char s_passActiveKey = 0;
@@ -3389,7 +3424,7 @@ void loop() {
         }
         
         // Handle discrete keyboard input
-        if ((M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) || justW) {
+        if (hasAnyKeyJustPressed || (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) || justW) {
             if (appState == STATE_MAIN) {
                 if (justShift) {
                     if (HardwareConfig::getInstance().isEnabled(HW_MOD_UNIT_8SERVOS)) {
@@ -3437,6 +3472,7 @@ void loop() {
                         // 1. 检查是否存在时间机器偏移并重置对齐现实时间
                         bool hadOffset = (timeMachineOffset != 0);
                         timeMachineOffset = 0;
+                        g_smoothTimeMachineOffset.jump(0.0f);
                         lastTimeAdjustMillis = 0; // 立即退出快进保护
 
                         // 2. 检查手动位置是否偏离
@@ -3471,13 +3507,18 @@ void loop() {
                         }
                     }
                 } else if (justBack) {
-                    showHud = !showHud;
+                    if (showRecommendations && selectedPassIndex != -1) {
+                        selectedPassIndex = -1; // Back to tree
+                    } else {
+                        showHud = !showHud;
+                    }
                 } else if (justEsc || justTick) {
                     if (showRecommendations) {
                         if (selectedPassIndex != -1) {
                             selectedPassIndex = -1; // Back to tree
                         } else {
                             showRecommendations = false; // Close panel
+                            recommendation_view.close();
                             if (predictorTaskHandle != NULL) {
                                 vTaskPrioritySet(predictorTaskHandle, 1);
                             }
@@ -3510,6 +3551,7 @@ void loop() {
                 } else if (justEnter) {
                     if (appState == STATE_MAIN && !showRecommendations) {
                         showRecommendations = true;
+                        recommendation_view.open();
                         passScrollIndex = 0;
                         
                         // 首次打开面板时，默认展开“今晚”分类，并折叠其它分类
@@ -3562,20 +3604,36 @@ void loop() {
                                 
                                 // 时间机器跳转到事件开始时间 (AOS)
                                 timeMachineOffset = (int32_t)pass.aosTime - (int32_t)current_unix;
+                                g_smoothTimeMachineOffset.set((float)timeMachineOffset);
                                 lastTimeAdjustMillis = millis(); // 触发时间防抖与挂起
                                 
                                 // 关闭推荐面板，直接退回 3D 地球视角观察，不改动任何追焦/视角模式
                                 showRecommendations = false;
+                                recommendation_view.close();
                             }
                             selectedPassIndex = -1; // 重置详情索引
                             unlockPassMutex();
                         } else {
                             // Toggle category or open detail
+                            if (displayTree.empty()) {
+                                passScrollIndex = 0;
+                            } else if (passScrollIndex >= (int)displayTree.size()) {
+                                passScrollIndex = (int)displayTree.size() - 1;
+                            } else if (passScrollIndex < 0) {
+                                passScrollIndex = 0;
+                            }
+
                             if (passScrollIndex >= 0 && passScrollIndex < (int)displayTree.size()) {
                                 auto& item = displayTree[passScrollIndex];
                                 if (item.isCategory) {
                                     catExpanded[item.categoryIndex] = !catExpanded[item.categoryIndex];
                                     rebuildTree(current_unix + timeMachineOffset);
+                                    // 展开/收起后立即安全校验边界
+                                    if (displayTree.empty()) {
+                                        passScrollIndex = 0;
+                                    } else if (passScrollIndex >= (int)displayTree.size()) {
+                                        passScrollIndex = (int)displayTree.size() - 1;
+                                    }
                                 } else {
                                     selectedPassIndex = item.passIndex;
                                 }
@@ -4061,6 +4119,8 @@ void loop() {
                             if (recentLaunchObjectPage > 0) {
                                 recentLaunchObjectPage--;
                                 loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], recentLaunchObjectPage);
+                            } else {
+                                g_objPageBounceTrigger = -8; // 触顶边缘横向微弹
                             }
                         }
                     } else if (justBracketR) {
@@ -4069,6 +4129,8 @@ void loop() {
                             if (recentLaunchObjectPage < maxPage) {
                                 recentLaunchObjectPage++;
                                 loadLevel3ObjectsPage(g_recentLaunches[recentLaunchSelectedIndex], recentLaunchObjectPage);
+                            } else {
+                                g_objPageBounceTrigger = 8; // 触底边缘横向微弹
                             }
                         }
                     } else if (justEnter) {
@@ -4255,12 +4317,22 @@ void loop() {
                             satSelectedIndex = (satSelectedIndex + 1) % totalItems;
                         } else if (justBracketL) {
                             g_descManualScrolled = true;
-                            g_descManualYOffset -= 39;
-                            if (g_descManualYOffset < 0) g_descManualYOffset = 0;
+                            if (g_descManualYOffset <= 0) {
+                                g_descManualYOffset = 0;
+                                g_descBounceTrigger = -12; // 触顶边缘弹性下冲回弹
+                            } else {
+                                g_descManualYOffset -= 39;
+                                if (g_descManualYOffset < 0) g_descManualYOffset = 0;
+                            }
                         } else if (justBracketR) {
                             g_descManualScrolled = true;
-                            g_descManualYOffset += 39;
-                            if (g_descManualYOffset > g_descMaxScroll) g_descManualYOffset = g_descMaxScroll;
+                            if (g_descManualYOffset >= g_descMaxScroll) {
+                                g_descManualYOffset = g_descMaxScroll;
+                                g_descBounceTrigger = 12; // 触底边缘弹性上冲回弹
+                            } else {
+                                g_descManualYOffset += 39;
+                                if (g_descManualYOffset > g_descMaxScroll) g_descManualYOffset = g_descMaxScroll;
+                            }
                         }
                     }
                 }
@@ -4363,6 +4435,12 @@ void loop() {
             return;
         }
         
+        // 亚秒级连续模拟时间与弹簧时间平滑引擎 (消除每秒跳帧顿挫与时间机器跳跃)
+        double subsecondFraction = (double)(millis() % 1000) / 1000.0;
+        double continuousSimTime = (double)current_unix + subsecondFraction + (double)g_smoothTimeMachineOffset.get();
+        uint32_t simTime = (uint32_t)round(continuousSimTime);
+        double current_gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(continuousSimTime));
+
         // Target camera values for smooth transitions
         double targetViewLat = 0.0;
         double targetViewLon = 0.0;
@@ -4379,9 +4457,8 @@ void loop() {
             GeodeticCoord focalGeo;
             if (g_recentLaunchFocusMode && focusSatIndex == -1) {
                 double tx, ty, tz;
-                if (g_repSatCalc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
-                    double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
-                    ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                if (g_repSatCalc.getTEME(continuousSimTime, tx, ty, tz)) {
+                    ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                     focalGeo = CoordTransform::ecefToGeodetic(ecef);
                     hasFocalPos = true;
                 }
@@ -4393,9 +4470,8 @@ void loop() {
                     hasFocalPos = true;
                 } else {
                     double tx, ty, tz;
-                    if (g_satellites[focusSatIndex].calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
-                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
-                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                    if (g_satellites[focusSatIndex].calc.getTEME(continuousSimTime, tx, ty, tz)) {
+                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                         focalGeo = CoordTransform::ecefToGeodetic(ecef);
                         hasFocalPos = true;
                     }
@@ -4577,14 +4653,12 @@ void loop() {
 
         // Update Sun Position
         if (sun_calc) {
-            SunPositionData sunPos = sun_calc->calculatePosition(current_unix + timeMachineOffset, viewLat, viewLon);
+            SunPositionData sunPos = sun_calc->calculatePosition(simTime, viewLat, viewLon);
             earth_renderer->setSunPosition(sunPos.subsolarLat, sunPos.subsolarLon);
         }
 
         static uint32_t lastLogTime = 0;
         static bool lastWasFastForwarding = false;
-        
-        uint32_t simTime = current_unix + timeMachineOffset;
         
         // 捕获刚刚停止快进的瞬间
         bool stopFastForwarding = (lastWasFastForwarding && !isFastForwarding);
@@ -4609,13 +4683,12 @@ void loop() {
                   ti->tm_year + 1900, ti->tm_mon + 1, ti->tm_mday, ti->tm_hour, ti->tm_min, ti->tm_sec);
         }
 
-        static uint32_t lastSimTime = 0;
-        bool timeChanged = (simTime != lastSimTime);
+        static double lastContinuousSimTime = 0.0;
+        bool timeChanged = (fabs(continuousSimTime - lastContinuousSimTime) > 0.005);
         if (timeChanged) {
-            lastSimTime = simTime;
+            lastContinuousSimTime = continuousSimTime;
         }
 
-        double current_gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(simTime));
         SunPositionData view_sun_pos;
         SunPositionData observer_sun_pos;
         if (sun_calc) {
@@ -4635,7 +4708,7 @@ void loop() {
                         
                         if (runCalculation) {
                             double tx, ty, tz;
-                            if (g_repSatCalc.getTEME(simTime, tx, ty, tz)) {
+                            if (g_repSatCalc.getTEME(continuousSimTime, tx, ty, tz)) {
                                 ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                                 GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
                                 
@@ -4739,7 +4812,7 @@ void loop() {
                         
                         if (runCalculation) {
                             double tx, ty, tz;
-                            if (item.calc->getTEME(simTime, tx, ty, tz)) {
+                            if (item.calc->getTEME(continuousSimTime, tx, ty, tz)) {
                                 ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                                 GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
                                 
@@ -4844,7 +4917,7 @@ void loop() {
                     
                     if (runCalculation) {
                         double tx, ty, tz;
-                        if (obj.calc.getTEME(simTime, tx, ty, tz)) {
+                        if (obj.calc.getTEME(continuousSimTime, tx, ty, tz)) {
                             ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                             GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
                             obj.lastGeo = geo;
@@ -4943,7 +5016,7 @@ void loop() {
                         g_satCaches[i].lastGeoValid = true;
                     } else {
                         double tx, ty, tz;
-                        if (calcCopy.getTEME(simTime, tx, ty, tz)) {
+                        if (calcCopy.getTEME(continuousSimTime, tx, ty, tz)) {
                             ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                             GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
                             
@@ -5090,7 +5163,7 @@ void loop() {
         earth_renderer->getCanvas()->clearClipRect();
         
         // Draw coordinate overlay
-        if (!showRecommendations && !showHelp && (appState == STATE_MAIN || appState == STATE_LANG_SELECT) && showHud) {
+        if (!showRecommendations && !recommendation_view.isVisible() && !showHelp && (appState == STATE_MAIN || appState == STATE_LANG_SELECT) && showHud) {
             earth_renderer->getCanvas()->setTextSize(1);
             
             char latDir = baseUserLat >= 0 ? 'N' : 'S';
@@ -5130,7 +5203,7 @@ void loop() {
             DialogViews::drawHelpDialog(earth_renderer->getCanvas());
         }
         
-        if (showRecommendations) {
+        if (showRecommendations || recommendation_view.isVisible()) {
             recommendation_view.draw(earth_renderer->getCanvas());
         }
         

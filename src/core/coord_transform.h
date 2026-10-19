@@ -24,6 +24,7 @@ class CoordTransform {
 public:
     // Convert Unix timestamp to Julian Date
     static double unixToJulian(uint32_t unix_ts);
+    static double unixToJulian(double unix_ts);
 
     // Calculate Greenwich Mean Sidereal Time (GMST) in radians from Julian Date
     static double getGMST(double julian_date);
