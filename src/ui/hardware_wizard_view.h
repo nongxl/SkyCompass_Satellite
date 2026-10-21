@@ -6,6 +6,7 @@
 #include <M5GFX.h>
 #include "core/hardware_config.h"
 #include "core/i18n.h"
+#include "core/spring_animator.h"
 
 class HardwareWizardView {
 public:
@@ -14,7 +15,12 @@ public:
     // 绘制向导完整界面到指定的 Sprite/Canvas 上
     void draw(LGFX_Sprite* canvas);
 
-    // 键盘事件处理，返回 true 表示用户退出了向导（需切回主界面）
+    // 离散按键事件处理，彻底杜绝按键连击，返回 true 表示用户退出了向导（需切回主界面）
+    bool handleDiscreteInput(bool justSemi, bool justDot, bool justComma, bool justSlash,
+                             bool justSpace, bool justEnter, bool justEsc,
+                             bool justBracketL, bool justBracketR);
+
+    // 兼容原有的按键接口
     bool handleKey(const Keyboard_Class::KeysState& keys, char keyChar);
 
     // 重置向导状态（打开界面时调用）
@@ -51,6 +57,11 @@ private:
     bool _descManualScrolled;
     int _descManualYOffset;
     int _descMaxScroll;
+
+    // lilt 物理弹簧动效
+    SpringValue _hwCursorY;       // 模块列表磁吸高亮框动效
+    SpringValue _exitDialogScale; // 退出确认弹窗 Pop-up 缩放物理动效
+    SpringValue _guideBounce;     // 接线视口翻页触顶/触底弹性回弹动效
 };
 
 #endif // HARDWARE_WIZARD_VIEW_H

@@ -18,7 +18,10 @@ HardwareWizardView::HardwareWizardView() :
     _guideMaxScroll(0),
     _descManualScrolled(false),
     _descManualYOffset(0),
-    _descMaxScroll(0) {
+    _descMaxScroll(0),
+    _hwCursorY(0.0f, SpringConfig::Default),
+    _exitDialogScale(0.0f, SpringConfig(0.24f, 0.80f)),
+    _guideBounce(0.0f, SpringConfig::Default) {
 }
 
 void HardwareWizardView::reset() {
@@ -39,6 +42,11 @@ void HardwareWizardView::reset() {
     _descManualScrolled = false;
     _descManualYOffset = 0;
     _descMaxScroll = 0;
+
+    // 复位 lilt 物理弹簧动效
+    _hwCursorY.jump(0.0f);
+    _exitDialogScale.jump(0.0f);
+    _guideBounce.jump(0.0f);
     
     // 载入当前已保存的硬件配置
     HardwareConfig::getInstance().load();
@@ -189,14 +197,9 @@ void HardwareWizardView::draw(LGFX_Sprite* canvas) {
         canvas->setTextColor(TFT_YELLOW, headerBg);
     }
 
-    // 顶部右侧按键提示：统一为“按键在前，说明在后”格式：[[/] ]翻页
-    const char* pageHint = isZh ? "[[/] ]翻页" : "[[/] ]Page";
-    int pageHintW = canvas->textWidth(pageHint);
-    const int rightHintX = 236;
-
-    // 方案名称区域宽度与自动横向平滑跑马灯滚动
+    // 方案名称区域宽度与自动横向平滑跑马灯滚动 (去除右上角按键提示，拓展可用宽度至右边缘)
     const int headerTitleX = 4;
-    const int headerTitleMaxW = rightHintX - pageHintW - 6 - headerTitleX;
+    const int headerTitleMaxW = 236 - headerTitleX;
 
     int titleW = canvas->textWidth(planTitle.c_str());
     if (titleW <= headerTitleMaxW) {
@@ -212,11 +215,6 @@ void HardwareWizardView::draw(LGFX_Sprite* canvas) {
         canvas->drawString(planTitle, headerTitleX - offset + cycleW, 1);
         canvas->clearClipRect();
     }
-
-    // 绘制顶部右侧按键提示
-    canvas->setTextDatum(top_right);
-    canvas->setTextColor(hintTextColor, headerBg);
-    canvas->drawString(pageHint, rightHintX, 1);
 
     // 左右两栏中间垂直分割线
     canvas->drawFastVLine(93, 14, 121, borderColor);
@@ -301,24 +299,24 @@ void HardwareWizardView::draw(LGFX_Sprite* canvas) {
     uint16_t busBgColors[HW_MOD_COUNT]  = { 0x19E8,    0x4200,  0x0280, 0x28B0 };
     uint16_t busTxtColors[HW_MOD_COUNT] = { TFT_CYAN,  TFT_YELLOW, TFT_GREEN, 0xCE79 };
 
+    // lilt 磁吸高亮框物理平滑滑动
+    _hwCursorY.set(_cursorIndex * 14.0f);
+    int hlY = 17 + (int)roundf(_hwCursorY.get());
+    canvas->fillRect(listX, hlY, listW, 12, activeItemBg);
+    canvas->drawRect(listX, hlY, listW, 12, TFT_CYAN);
+
     for (int i = 0; i < HW_MOD_COUNT; i++) {
         HardwareModule mod = (HardwareModule)i;
         bool isHover = (_cursorIndex == i);
         bool isChecked = HardwareConfig::getInstance().isEnabled(mod);
 
-        // 高亮选中条背景与边框
-        if (isHover) {
-            canvas->fillRect(listX, curY, listW, 12, activeItemBg);
-            canvas->drawRect(listX, curY, listW, 12, TFT_CYAN);
-        }
-
         // 勾选框
         canvas->setTextDatum(top_left);
-        canvas->setTextColor(isChecked ? TFT_GREEN : canvas->color565(120, 140, 160), isHover ? activeItemBg : bgColor);
+        canvas->setTextColor(isChecked ? TFT_GREEN : (isHover ? TFT_WHITE : canvas->color565(120, 140, 160)));
         canvas->drawString(isChecked ? "[x]" : "[ ]", listX + 2, curY + 1);
 
         // 模块名称（使用紧凑无空格名称如 CapLoRa-1262，不溢出不截断）
-        canvas->setTextColor(isChecked ? TFT_WHITE : TFT_LIGHTGRAY, isHover ? activeItemBg : bgColor);
+        canvas->setTextColor(isHover ? TFT_WHITE : (isChecked ? TFT_WHITE : TFT_LIGHTGRAY));
         canvas->drawString(HardwareConfig::getInstance().getModuleName(mod, lang), listX + 20, curY + 1);
 
         // 右侧硬件总线胶囊徽章（Badge）
@@ -405,6 +403,9 @@ void HardwareWizardView::draw(LGFX_Sprite* canvas) {
         }
     }
 
+    // 叠加 lilt 弹性回弹动效
+    guideYOffset += (int)roundf(_guideBounce.get());
+
     // 视口区域裁剪渲染
     canvas->setClipRect(guideVx, guideVy, guideVw, guideVh);
     canvas->setTextDatum(top_left);
@@ -423,47 +424,62 @@ void HardwareWizardView::draw(LGFX_Sprite* canvas) {
         int trackH = guideVh - 4;
         int thumbH = (guideVh * trackH) / (totalGuideLines * lineH);
         if (thumbH < 6) thumbH = 6;
-        int thumbY = guideVy + 2 + (guideYOffset * (trackH - thumbH)) / _guideMaxScroll;
+        int clampedOffset = constrain(guideYOffset, 0, _guideMaxScroll);
+        int thumbY = guideVy + 2 + (clampedOffset * (trackH - thumbH)) / _guideMaxScroll;
         canvas->drawFastVLine(237, guideVy + 2, trackH, borderColor);
         canvas->fillRect(236, thumbY, 2, thumbH, TFT_CYAN);
     }
 
     // ==========================================
-    // 5. 按 Esc 弹出的退出与保存确认弹窗 (Modal Dialog)
+    // 5. 按 Esc 弹出的退出与保存确认弹窗 (Modal Dialog - lilt Pop-up 物理弹簧缩放)
     // ==========================================
     if (_showExitConfirm) {
-        const int cardX = 16;
-        const int cardY = 24;
+        _exitDialogScale.set(1.0f);
+    } else {
+        _exitDialogScale.set(0.0f);
+    }
+
+    float scale = _exitDialogScale.get();
+    if (scale > 0.05f) {
         const int cardW = 208;
         const int cardH = 88;
         const uint16_t cardBg = canvas->color565(25, 38, 52);
 
-        canvas->fillRoundRect(cardX, cardY, cardW, cardH, 6, cardBg);
-        canvas->drawRoundRect(cardX, cardY, cardW, cardH, 6, TFT_CYAN);
-        canvas->drawRoundRect(cardX + 1, cardY + 1, cardW - 2, cardH - 2, 5, canvas->color565(50, 75, 100));
+        int curW = (int)roundf(cardW * scale);
+        int curH = (int)roundf(cardH * scale);
+        int curX = 120 - curW / 2;
+        int curY = 68 - curH / 2;
 
-        canvas->setTextDatum(top_center);
-        canvas->setTextColor(TFT_YELLOW, cardBg);
-        canvas->drawString(isZh ? "【退出硬件向导】" : "[Exit Hardware Setup]", 120, cardY + 8);
+        canvas->fillRoundRect(curX, curY, curW, curH, 6, cardBg);
+        canvas->drawRoundRect(curX, curY, curW, curH, 6, TFT_CYAN);
+        if (curW > 4 && curH > 4) {
+            canvas->drawRoundRect(curX + 1, curY + 1, curW - 2, curH - 2, 5, canvas->color565(50, 75, 100));
+        }
 
-        if (_hasConflict) {
-            canvas->setTextColor(TFT_RED, cardBg);
-            canvas->drawString(isZh ? "当前勾选存在冲突，无法生效!" : "Conflicts detected, cannot save!", 120, cardY + 30);
+        if (scale >= 0.70f) {
+            canvas->setTextDatum(top_center);
+            canvas->setTextColor(TFT_YELLOW, cardBg);
+            canvas->drawString(isZh ? "【退出硬件向导】" : "[Exit Hardware Setup]", 120, curY + 8);
 
-            canvas->setTextColor(TFT_LIGHTGRAY, cardBg);
-            canvas->drawString(isZh ? "[Esc] 不保存直接退出" : "[Esc] Discard & Exit", 120, cardY + 50);
+            if (_hasConflict) {
+                canvas->setTextColor(TFT_RED, cardBg);
+                canvas->drawString(isZh ? "当前勾选存在冲突，无法生效!" : "Conflicts detected, cannot save!", 120, curY + 30);
 
-            canvas->setTextColor(hintTextColor, cardBg);
-            canvas->drawString(isZh ? "[任意键] 返回修改配置" : "[Any Key] Back to edit", 120, cardY + 68);
-        } else {
-            canvas->setTextColor(TFT_WHITE, cardBg);
-            canvas->drawString(isZh ? "是否保存配置并重启系统生效？" : "Save changes & reboot system?", 120, cardY + 30);
+                canvas->setTextColor(TFT_LIGHTGRAY, cardBg);
+                canvas->drawString(isZh ? "[Esc] 不保存直接退出" : "[Esc] Discard & Exit", 120, curY + 50);
 
-            canvas->setTextColor(TFT_GREEN, cardBg);
-            canvas->drawString(isZh ? "[Enter] 保存并重启生效" : "[Enter] Save & Reboot", 120, cardY + 50);
+                canvas->setTextColor(hintTextColor, cardBg);
+                canvas->drawString(isZh ? "[任意键] 返回修改配置" : "[Any Key] Back to edit", 120, curY + 68);
+            } else {
+                canvas->setTextColor(TFT_WHITE, cardBg);
+                canvas->drawString(isZh ? "是否保存配置并重启系统生效？" : "Save changes & reboot system?", 120, curY + 30);
 
-            canvas->setTextColor(0xCE79, cardBg);
-            canvas->drawString(isZh ? "[Esc] 不保存退出  [任意键] 继续配置" : "[Esc] Discard  [Any] Continue", 120, cardY + 68);
+                canvas->setTextColor(TFT_GREEN, cardBg);
+                canvas->drawString(isZh ? "[Enter] 保存并重启生效" : "[Enter] Save & Reboot", 120, curY + 50);
+
+                canvas->setTextColor(0xCE79, cardBg);
+                canvas->drawString(isZh ? "[Esc] 不保存退出  [任意键] 继续配置" : "[Esc] Discard  [Any] Continue", 120, curY + 68);
+            }
         }
     }
 
@@ -474,13 +490,12 @@ void HardwareWizardView::draw(LGFX_Sprite* canvas) {
     canvas->clearClipRect();
 }
 
-bool HardwareWizardView::handleKey(const Keyboard_Class::KeysState& keys, char keyChar) {
+bool HardwareWizardView::handleDiscreteInput(bool justSemi, bool justDot, bool justComma, bool justSlash,
+                                             bool justSpace, bool justEnter, bool justEsc,
+                                             bool justBracketL, bool justBracketR) {
     if (_isRebooting) return false;
 
     Language lang = I18N::getLanguage();
-
-    bool isEscKey = (keyChar == 27 || keyChar == '`' || keys.del);
-    bool isEnterKey = (keys.enter || keyChar == '\r' || keyChar == '\n');
 
     // 1. 若当前处于退出确认弹窗中
     if (_showExitConfirm) {
@@ -489,39 +504,46 @@ bool HardwareWizardView::handleKey(const Keyboard_Class::KeysState& keys, char k
             return false;
         }
 
-        // 按 Esc 或 Backspace/Del：放弃修改直接退出，返回 true 切回主界面
-        if (isEscKey) {
+        // 按 Esc：放弃修改直接退出，返回 true 切回主界面
+        if (justEsc) {
             _showExitConfirm = false;
+            _exitDialogScale.set(0.0f);
             return true;
         }
 
         // 按 Enter：如果合法则保存并重启
-        if (isEnterKey) {
+        if (justEnter) {
             String err;
             if (HardwareConfig::getInstance().validate(err, lang)) {
                 HardwareConfig::getInstance().save();
                 _isRebooting = true;
                 _rebootStartTime = millis();
                 _showExitConfirm = false;
+                _exitDialogScale.set(0.0f);
             }
             return false;
         }
 
-        // 按任意其他键（如空格、方向键、字母键等）：取消弹窗继续留在向导
-        if (keys.word.size() > 0 || (keyChar != 0 && keyChar != 27 && keyChar != '`') || keys.fn) {
+        // 按任意其他方向键、空格、中括号等：取消弹窗继续留在向导
+        if (justSemi || justDot || justComma || justSlash || justSpace || justBracketL || justBracketR) {
             _showExitConfirm = false;
+            _exitDialogScale.set(0.0f);
             return false;
         }
         return false;
     }
 
-    // 2. 手动中括号翻页键处理（和卫星百科右侧界面保持完全一致）
-    // '[' 向上翻页
-    if (keyChar == '[' || M5Cardputer.Keyboard.isKeyPressed('[')) {
+    // 2. 手动中括号翻页键处理（带 lilt 物理回弹）
+    if (justBracketL) {
         if (_guideMaxScroll > 0) {
             _guideManualScrolled = true;
-            _guideManualYOffset -= 26; // 向上翻动 2 行
-            if (_guideManualYOffset < 0) _guideManualYOffset = 0;
+            if (_guideManualYOffset <= 0) {
+                _guideManualYOffset = 0;
+                _guideBounce.shift(-6.0f);
+            } else {
+                _guideManualYOffset -= 26;
+                if (_guideManualYOffset < 0) _guideManualYOffset = 0;
+            }
         }
         if (_descMaxScroll > 0) {
             _descManualScrolled = true;
@@ -531,12 +553,16 @@ bool HardwareWizardView::handleKey(const Keyboard_Class::KeysState& keys, char k
         return false;
     }
 
-    // ']' 向下翻页
-    if (keyChar == ']' || M5Cardputer.Keyboard.isKeyPressed(']')) {
+    if (justBracketR) {
         if (_guideMaxScroll > 0) {
             _guideManualScrolled = true;
-            _guideManualYOffset += 26; // 向下翻动 2 行
-            if (_guideManualYOffset > _guideMaxScroll) _guideManualYOffset = _guideMaxScroll;
+            if (_guideManualYOffset >= _guideMaxScroll) {
+                _guideManualYOffset = _guideMaxScroll;
+                _guideBounce.shift(6.0f);
+            } else {
+                _guideManualYOffset += 26;
+                if (_guideManualYOffset > _guideMaxScroll) _guideManualYOffset = _guideMaxScroll;
+            }
         }
         if (_descMaxScroll > 0) {
             _descManualScrolled = true;
@@ -547,42 +573,61 @@ bool HardwareWizardView::handleKey(const Keyboard_Class::KeysState& keys, char k
     }
 
     // 3. 正常向导界面下的按键处理
-    // 按 Esc / Tick / Del：弹出退出确认对话框
-    if (isEscKey) {
+    // 按 Esc：弹出退出确认对话框并启动 Pop-up 展开动画
+    if (justEsc) {
         _showExitConfirm = true;
         _confirmOpenTime = millis();
+        _exitDialogScale.jump(0.15f);
+        _exitDialogScale.set(1.0f);
         return false;
     }
 
-    // 方向键移动光标（在 0~3 四个模块项间循环）
-    if (keys.word.size() > 0) {
-        for (auto c : keys.word) {
-            if (c == ';') { // Up (Cardputer 上键物理映射为 ';')
-                _cursorIndex = (_cursorIndex - 1 + HW_MOD_COUNT) % HW_MOD_COUNT;
-                _descScrollStartTime = millis();
-                _descManualScrolled = false;
-                _descManualYOffset = 0;
-            } else if (c == '.') { // Down (Cardputer 下键物理映射为 '.')
-                _cursorIndex = (_cursorIndex + 1) % HW_MOD_COUNT;
-                _descScrollStartTime = millis();
-                _descManualScrolled = false;
-                _descManualYOffset = 0;
-            } else if (c == ',' || c == '/') { // Left / Right: 翻转当前勾选
-                HardwareConfig::getInstance().toggle((HardwareModule)_cursorIndex);
-                _guideScrollStartTime = millis();
-                _guideManualScrolled = false;
-                _guideManualYOffset = 0;
-            }
-        }
+    // 方向键移动光标（0~3 四个模块项间循环，带动 lilt 磁吸物理弹簧）
+    if (justSemi) { // UP
+        _cursorIndex = (_cursorIndex - 1 + HW_MOD_COUNT) % HW_MOD_COUNT;
+        _hwCursorY.set(_cursorIndex * 14.0f);
+        _descScrollStartTime = millis();
+        _descManualScrolled = false;
+        _descManualYOffset = 0;
+        return false;
     }
 
-    // 回车键或空格键：翻转当前选中项勾选
-    if (isEnterKey || keyChar == ' ') {
+    if (justDot) { // DOWN
+        _cursorIndex = (_cursorIndex + 1) % HW_MOD_COUNT;
+        _hwCursorY.set(_cursorIndex * 14.0f);
+        _descScrollStartTime = millis();
+        _descManualScrolled = false;
+        _descManualYOffset = 0;
+        return false;
+    }
+
+    // 翻转勾选状态：空格、逗号、斜杠、回车
+    if (justSpace || justComma || justSlash || justEnter) {
         HardwareConfig::getInstance().toggle((HardwareModule)_cursorIndex);
         _guideScrollStartTime = millis();
         _guideManualScrolled = false;
         _guideManualYOffset = 0;
+        return false;
     }
 
     return false;
+}
+
+bool HardwareWizardView::handleKey(const Keyboard_Class::KeysState& keys, char keyChar) {
+    bool justSemi = false, justDot = false, justComma = false, justSlash = false;
+    bool justSpace = (keyChar == ' ');
+    bool justEnter = (keys.enter || keyChar == '\r' || keyChar == '\n');
+    bool justEsc = (keyChar == 27 || keyChar == '`' || keys.del);
+    bool justBracketL = (keyChar == '[');
+    bool justBracketR = (keyChar == ']');
+
+    if (keys.word.size() > 0) {
+        char c = keys.word[0];
+        if (c == ';') justSemi = true;
+        else if (c == '.') justDot = true;
+        else if (c == ',') justComma = true;
+        else if (c == '/') justSlash = true;
+    }
+
+    return handleDiscreteInput(justSemi, justDot, justComma, justSlash, justSpace, justEnter, justEsc, justBracketL, justBracketR);
 }

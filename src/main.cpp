@@ -4384,17 +4384,9 @@ void loop() {
                     appState = STATE_MAIN;
                 }
             } else if (appState == STATE_HW_WIZARD) {
-                char keyChar = 0;
-                if (justEsc || justTick || justBack) keyChar = 27;
-                else if (justEnter) keyChar = '\n';
-                else if (justBracketL) keyChar = '[';
-                else if (justBracketR) keyChar = ']';
-                else if (justSpace) keyChar = ' ';
-                else if (M5Cardputer.Keyboard.keysState().word.size() > 0) {
-                    keyChar = M5Cardputer.Keyboard.keysState().word[0];
-                }
-
-                if (hardware_wizard.handleKey(M5Cardputer.Keyboard.keysState(), keyChar)) {
+                if (hardware_wizard.handleDiscreteInput(justSemi, justDot, justComma, justSlash,
+                                                       justSpace, justEnter, (justEsc || justTick || justBack),
+                                                       justBracketL, justBracketR)) {
                     appState = STATE_MAIN;
                     earth_renderer->getCanvas()->setTextDatum(top_left);
                     earth_renderer->getCanvas()->clearClipRect();
