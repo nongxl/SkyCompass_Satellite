@@ -374,11 +374,13 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
         RadioManager& rm = RadioManager::getInstance();
         float currentRssi = -122.0f;
         if (rm.isHardwareReady() && rm.isListening()) {
+            _lastRawRssi = HalRadio::getInstance().getRawInstantRSSI();
             currentRssi = HalRadio::getInstance().getInstantRSSI();
             if (currentRssi >= -10.0f || currentRssi < -135.0f) {
                 currentRssi = -122.0f + (float)(rand() % 6 - 3);
             }
         } else {
+            _lastRawRssi = -999.0f;
             currentRssi = -124.0f + (float)(rand() % 4 - 2);
         }
         addRssiSample(currentRssi);
@@ -799,6 +801,31 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
         if (!rm.isHardwareReady()) valColor = 0x52AA;
         canvas->setTextColor(valColor, canvas->color565(10, 16, 24));
         canvas->drawString(rssiStr, width - 4, height - 2);
+
+        // 过境或监听时：在当前 RSSI 上方显示底层芯片原生 getRSSI(false) 读数供对比分析
+        if (rm.isHardwareReady() && (hasPassNow || rm.isListening())) {
+            char rawStr[24];
+            if (_lastRawRssi > -500.0f) {
+                snprintf(rawStr, sizeof(rawStr), "RAW:%+.0fdB", _lastRawRssi);
+            } else {
+                snprintf(rawStr, sizeof(rawStr), "RAW:--dB");
+            }
+            int rtw = canvas->textWidth(rawStr);
+            int rbx = width - rtw - 6;
+            int rby = by - 12; // 位于当前 RSSI 胶囊正上方
+            int rbw = rtw + 5;
+            int rbh = 11;
+
+            canvas->fillRect(rbx, rby, rbw, rbh, canvas->color565(10, 16, 24));
+            canvas->drawRect(rbx, rby, rbw, rbh, canvas->color565(40, 56, 76));
+
+            uint16_t rawColor = (_lastRawRssi > -80.0f) ? 0xFBE0 : ((_lastRawRssi > -105.0f) ? 0x07FF : 0x7BEF);
+            if (_lastRawRssi >= 0.0f || _lastRawRssi < -135.0f) {
+                rawColor = TFT_YELLOW; // 异常/无效读数用黄色高亮提醒
+            }
+            canvas->setTextColor(rawColor, canvas->color565(10, 16, 24));
+            canvas->drawString(rawStr, width - 4, rby + rbh - 1);
+        }
     }
 
     // 4. 详情弹窗 (Detail Modal)

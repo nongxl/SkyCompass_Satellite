@@ -58,8 +58,8 @@ public:
     // 配置为 FSK / GFSK 模式并进入接收
     bool configFSK(float freqMHz, float brKbps = 4.8f, float freqDevKHz = 5.0f, float rxBwKHz = 50.0f, const uint8_t* syncWord = nullptr, size_t syncWordLen = 0);
 
-    // 动态微调频率（多普勒频移补偿，不重置射频引擎）
-    bool setFrequency(float freqMHz);
+    // 动态微调频率（多普勒频移补偿，calibrate 默认 false 避免重置芯片镜像抑制）
+    bool setFrequency(float freqMHz, bool calibrate = false);
 
     // 开始非阻塞接收
     bool startReceive();
@@ -70,8 +70,11 @@ public:
     // 轮询检查是否有新数据包接收完成，并捕获 CRC 校验错误
     RadioPollResult pollPacket(RadioPacket& outPacket);
 
-    // 获取当前实时瞬时 RSSI (用于瀑布能量图)
+    // 获取当前实时瞬时 RSSI (用于瀑布能量图，含边界滤波)
     float getInstantRSSI();
+
+    // 获取底层芯片原始未修改的瞬时环境 RSSI (直接读取 _radio->getRSSI(false))
+    float getRawInstantRSSI();
 
     // 获取当前配置信息
     RadioModulationMode getCurrentMode() const { return _currentMode; }

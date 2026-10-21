@@ -75,12 +75,25 @@ static void parseLoRaParams(const String& modeStr, uint32_t noradId, float& outB
         }
     }
 
-    // 4. 同步字 SyncWord (例如 SW18 或 SW12)
+    // 4. 同步字 SyncWord (例如 SW18, SW12, SW0x12)
     int idxSw = s.indexOf("SW");
     if (idxSw != -1) {
-        long val = strtol(s.substring(idxSw + 2).c_str(), nullptr, 16);
-        if (val > 0 && val <= 0xFF) {
-            outSyncWord = (uint8_t)val;
+        String swStr = s.substring(idxSw + 2);
+        swStr.trim();
+        if (swStr.startsWith("0X")) {
+            long val = strtol(swStr.c_str(), nullptr, 16);
+            if (val > 0 && val <= 0xFF) outSyncWord = (uint8_t)val;
+        } else {
+            long valDec = strtol(swStr.c_str(), nullptr, 10);
+            if (valDec == 18) {
+                // 业余卫星标准与 TinyGS 惯例用十进制 18 表示私有网络同步字 0x12
+                outSyncWord = 0x12;
+            } else if (valDec == 34) {
+                outSyncWord = 0x34;
+            } else {
+                long valHex = strtol(swStr.c_str(), nullptr, 16);
+                if (valHex > 0 && valHex <= 0xFF) outSyncWord = (uint8_t)valHex;
+            }
         }
     }
 
@@ -93,12 +106,18 @@ static void parseLoRaParams(const String& modeStr, uint32_t noradId, float& outB
     } else if (noradId == 46494) { // NORBI
         outSf = 9;
         outCr = 7;
+        outBw = 125.0f;
+        outSyncWord = 0x12;
     } else if (noradId == 61751) { // Vladivostok-1
         outSf = 10;
         outCr = 7;
-    } else if (noradId == 62676) { // FOSSASAT-2E
+        outBw = 125.0f;
+        outSyncWord = 0x12;
+    } else if (noradId == 62676 || noradId == 50463) { // FOSSASAT-2E
         outSf = 10;
         outCr = 7;
+        outBw = 125.0f;
+        outSyncWord = 0x12;
     } else if (noradId == 57172) { // UMKA-1
         outSf = 8;
         outCr = 5;
@@ -190,10 +209,10 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
                               targetName.c_str(), targetTunedFreq);
             }
         } else {
-            // 已处于持续监听状态：执行多普勒连续自动微调 (Doppler Continuous AFC Auto-Tuning)
-            // 采用 1.0 kHz 步进门限 + 500ms 最小调谐间隔，确保锁频紧密且不打断前导码接收
-            if (fabs(targetTunedFreq - _currentTunedFreq) >= 0.001f && (now - _lastDopplerTuneTime >= 500)) {
-                if (HalRadio::getInstance().setFrequency(targetTunedFreq)) {
+            // 已处于持续监听状态：执行多普勒自适应平滑微调 (Doppler AFC Auto-Tuning)
+            // 采用 3.0 kHz 步进门限 + 3000ms 最小调谐间隔，并跳过 calibrateImage，杜绝频繁打断前导码与数据包接收
+            if (fabs(targetTunedFreq - _currentTunedFreq) >= 0.003f && (now - _lastDopplerTuneTime >= 3000)) {
+                if (HalRadio::getInstance().setFrequency(targetTunedFreq, false)) {
                     _currentTunedFreq = targetTunedFreq;
                     _lastDopplerTuneTime = now;
                 }

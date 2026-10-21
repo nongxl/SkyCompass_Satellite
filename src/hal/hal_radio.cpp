@@ -44,6 +44,8 @@ bool HalRadio::init() {
     if (state == RADIOLIB_ERR_NONE) {
         // Cap LoRa-1262 使用 DIO2 控制 RF 开关
         _radio->setDio2AsRfSwitch(true);
+        // 开启高增益接收模式提升卫星微弱信号灵敏度 (+2~3dB)
+        _radio->setRxBoostedGainMode(true);
 
         _isDetected = true;
         _currentMode = RADIO_MODE_LORA;
@@ -92,6 +94,7 @@ bool HalRadio::configLoRa(float freqMHz, float bwKHz, uint8_t sf, uint8_t cr, ui
     if (state != RADIOLIB_ERR_NONE) return false;
 
     _radio->setDio2AsRfSwitch(true);
+    _radio->setRxBoostedGainMode(true);
 
     _currentMode = RADIO_MODE_LORA;
     _currentFreq = freqMHz;
@@ -143,10 +146,10 @@ bool HalRadio::configFSK(float freqMHz, float brKbps, float freqDevKHz, float rx
     return startReceive();
 }
 
-bool HalRadio::setFrequency(float freqMHz) {
+bool HalRadio::setFrequency(float freqMHz, bool calibrate) {
     if (!_isDetected || !_radio) return false;
     _currentFreq = freqMHz;
-    int16_t state = _radio->setFrequency(freqMHz);
+    int16_t state = _radio->setFrequency(freqMHz, calibrate);
     if (state == RADIOLIB_ERR_NONE) {
         if (_isReceiving) {
             _radio->startReceive();
@@ -225,4 +228,12 @@ float HalRadio::getInstantRSSI() {
         return -122.0f;
     }
     return inst;
+}
+
+float HalRadio::getRawInstantRSSI() {
+    if (!_isDetected || !_radio || !_isReceiving) {
+        return -999.0f;
+    }
+    // 直接返回芯片原生瞬时环境 RSSI 读数（不经任何门限替换）
+    return _radio->getRSSI(false);
 }
