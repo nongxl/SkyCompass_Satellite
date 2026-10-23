@@ -23,6 +23,7 @@
 - 🧭 **Pioneering Solar Shadow Alignment**: Overcomes the lack of an internal magnetometer by aligning the on-screen shadow projection with physical shadows for 100% spatial orientation alignment.
 - 🪐 **3-Axis Orbital Arch Gimbal**: I2C linkage with a Lego armillary arch mechanism to physically replicate flight heading, peak pass elevation, and along-track progress.
 - 🔋 **Robust Standalone Offline Survival**: 48-hour multi-level TLE flash cache, auto-sleep GNSS power management, and instant sub-second boot in off-grid field conditions.
+- 💡 **Bootup Multilingual Satellite Trivia**: Directly displays curated aerospace & radio geek trivia on the bootup screen during SGP4 multi-satellite orbit integration. Seamlessly transitions into main program upon initialization (random trivia per boot). Includes a dedicated [Prompt Template](prompts/satellite_trivia_prompt_template.md) for community contributions.
 
 ---
 
@@ -61,7 +62,7 @@ Users can freely choose any of the following combinations based on available har
 
 | Key | Action | Description |
 | :--- | :--- | :--- |
-| **`Enter`** | Toggle Recommended Passes Panel | Press `Enter` on an item to inspect details or jump directly to AOS time |
+| **`Enter`** | Toggle Recommended Passes Panel | Inspect pass details or jump directly to AOS time; flips next trivia during bootup |
 | **`S`** | Satellite Selection & Encyclopedia | `f` for filter, `d` to del custom, `O` for mission objects |
 | **`W`** | WiFi Setup & Sync | Scan hotspots, perform NTP time sync, and fetch latest TLEs |
 | **`H`** | Keyboard Help Modal | Pops up floating shortcut keybindings with multi-language support |

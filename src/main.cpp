@@ -2484,25 +2484,39 @@ void setup() {
                     continue;
                 }
                 setLoadingStatusText((currL_parse == LANG_ZH) ? ("解析轨道: " + g_satellites[i].name) : ((currL_parse == LANG_JA) ? ("軌道解析中: " + g_satellites[i].name) : ((currL_parse == LANG_ES) ? ("Analizando órbita: " + g_satellites[i].name) : ("Parsing Orbit: " + g_satellites[i].name))));
+                uint32_t norad = g_satellites[i].noradId;
                 TLEData loaded_tle;
-                if (TLEUpdater::getTLE(g_satellites[i].noradId, loaded_tle)) {
+                bool hasCache = TLEUpdater::getTLE(norad, loaded_tle);
+                
+                TLEData builtinTle;
+                bool hasBuiltin = TLEManager::getBuiltinTLE(norad, builtinTle);
+                
+                bool useBuiltin = false;
+                if (hasBuiltin) {
+                    if (!hasCache) {
+                        useBuiltin = true;
+                    } else {
+                        // 当固件重新编译并烘焙进更新的 TLE (Epoch 更晚) 时，优先采用内置 TLE 并同步更新 LittleFS 闪存缓存
+                        uint32_t builtinEpoch = parseTleEpoch(builtinTle.line1);
+                        uint32_t cacheEpoch = parseTleEpoch(loaded_tle.line1);
+                        if (builtinEpoch > cacheEpoch) {
+                            useBuiltin = true;
+                        }
+                    }
+                }
+                
+                if (useBuiltin) {
+                    builtinTle.baseScore = g_satellites[i].baseScore;
+                    lockSatMutex();
+                    g_satellites[i].tle = builtinTle;
+                    unlockSatMutex();
+                    // 同步持久化至 LittleFS 闪存缓存
+                    TLEUpdater::saveToCache(norad, builtinTle, 0);
+                } else if (hasCache) {
                     loaded_tle.baseScore = g_satellites[i].baseScore;
                     lockSatMutex();
                     g_satellites[i].tle = loaded_tle;
                     unlockSatMutex();
-                } else {
-                    // 全量出厂最新 TLE 数据库兜底 (覆盖全部 59 颗卫星)
-                    uint32_t norad = g_satellites[i].noradId;
-                    TLEData builtinTle;
-                    if (TLEManager::getBuiltinTLE(norad, builtinTle)) {
-                        builtinTle.baseScore = g_satellites[i].baseScore;
-                        lockSatMutex();
-                        g_satellites[i].tle = builtinTle;
-                        unlockSatMutex();
-                        // 首次烧录自初始化：自动将出厂最新 TLE 写入本地 LittleFS 缓存
-                        // 这样首次开机直接建立有效缓存，开机联网时不会一口气连续请求 37 次 CelesTrak 触发 403
-                        TLEUpdater::saveToCache(norad, builtinTle, 0);
-                    }
                 }
                 
                 if (g_satellites[i].tle.line1.length() >= 68 && g_satellites[i].tle.line2.length() >= 68) {

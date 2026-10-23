@@ -95,6 +95,7 @@ void TextUtils::wrapTextIntoLines(LGFX_Sprite* canvas, const String& text, int m
 
 int TextUtils::drawWrappedText(LGFX_Sprite* canvas, String text, int x, int y, int maxW, int lineH, bool draw) {
     if (!canvas) return 0;
+    canvas->setTextDatum(TL_DATUM);
     int lines = 0;
     int start = 0;
     
