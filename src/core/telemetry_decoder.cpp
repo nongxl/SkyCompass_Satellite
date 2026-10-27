@@ -48,7 +48,7 @@ const std::vector<SatelliteTlmProfile>& TelemetryDecoder::getBuiltinProfiles() {
     static std::vector<SatelliteTlmProfile> s_builtinProfiles;
     static bool s_initialized = false;
     if (!s_initialized) {
-        // 1. NORBI (NORAD 46494) 436.700 MHz LoRa 立方星数据字典
+        // 1. NORBI (NORAD 46494) 436.700 MHz LoRa 科学立方星
         SatelliteTlmProfile norbi;
         norbi.noradId = 46494;
         norbi.satName = "NORBI";
@@ -57,36 +57,95 @@ const std::vector<SatelliteTlmProfile>& TelemetryDecoder::getBuiltinProfiles() {
         norbi.rules.push_back({"Vbat", 2, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
         norbi.rules.push_back({"Temp", 4, FMT_INT8, 1.0f, 0.0f, "C", 0});
         norbi.rules.push_back({"I_bus", 5, FMT_UINT16_LE, 0.1f, 0.0f, "mA", 1});
+        norbi.rules.push_back({"Solar_X", 7, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        norbi.rules.push_back({"Solar_Y", 9, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
         s_builtinProfiles.push_back(norbi);
 
-        // 2. Vladivostok-1 / Geoscan 系列 (NORAD 61751)
+        // 2. Vladivostok-1 / Geoscan 系列 (NORAD 61751) 436.805 MHz
         SatelliteTlmProfile geoscan;
         geoscan.noradId = 61751;
         geoscan.satName = "Vladivostok-1";
         geoscan.frameType = "Geoscan LoRa";
+        geoscan.rules.push_back({"Frame#", 0, FMT_UINT8, 1.0f, 0.0f, "", 0});
         geoscan.rules.push_back({"Vbat", 1, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
         geoscan.rules.push_back({"Temp", 3, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        geoscan.rules.push_back({"I_bus", 4, FMT_UINT16_LE, 0.1f, 0.0f, "mA", 1});
+        geoscan.rules.push_back({"Uptime", 6, FMT_UINT16_LE, 1.0f, 0.0f, "s", 0});
         s_builtinProfiles.push_back(geoscan);
 
-        // 3. FOSSASAT-2E (NORAD 50463)
+        // 3. FOSSASAT-2E (NORAD 62676 / 50463) 436.700 MHz 开源 LoRa 口袋星
         SatelliteTlmProfile fossa;
-        fossa.noradId = 50463;
+        fossa.noradId = 62676;
         fossa.satName = "FOSSASAT-2E";
         fossa.frameType = "FOSSA LoRa TLM";
+        fossa.rules.push_back({"Frame#", 0, FMT_UINT8, 1.0f, 0.0f, "", 0});
         fossa.rules.push_back({"Vbat", 1, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
         fossa.rules.push_back({"Temp", 3, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        fossa.rules.push_back({"I_charge", 4, FMT_UINT16_LE, 0.1f, 0.0f, "mA", 1});
+        fossa.rules.push_back({"Solar_V", 6, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
         s_builtinProfiles.push_back(fossa);
 
-        // 4. Geoscan-Edelveis (NORAD 53385)
+        // 兼容原 50463 记录
+        SatelliteTlmProfile fossaLegacy = fossa;
+        fossaLegacy.noradId = 50463;
+        s_builtinProfiles.push_back(fossaLegacy);
+
+        // 4. HADES-D (NORAD 54754) 436.666 MHz 西班牙开源业余 LoRa 卫星
+        SatelliteTlmProfile hades;
+        hades.noradId = 54754;
+        hades.satName = "HADES-D";
+        hades.frameType = "HADES LoRa TLM";
+        hades.rules.push_back({"Frame#", 0, FMT_UINT8, 1.0f, 0.0f, "", 0});
+        hades.rules.push_back({"Vbat", 1, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        hades.rules.push_back({"Temp", 3, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        hades.rules.push_back({"PA_Temp", 4, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        hades.rules.push_back({"Solar_V", 5, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        s_builtinProfiles.push_back(hades);
+
+        // 5. VR3X-A (NORAD 47963) 437.475 MHz NASA 开源 LoRa 编队演示星
+        SatelliteTlmProfile vr3x;
+        vr3x.noradId = 47963;
+        vr3x.satName = "VR3X-A";
+        vr3x.frameType = "VR3X LoRa";
+        vr3x.rules.push_back({"Packet#", 0, FMT_UINT16_LE, 1.0f, 0.0f, "", 0});
+        vr3x.rules.push_back({"Vbat", 2, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        vr3x.rules.push_back({"Temp", 4, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        vr3x.rules.push_back({"State", 5, FMT_UINT8, 1.0f, 0.0f, "", 0});
+        s_builtinProfiles.push_back(vr3x);
+
+        // 6. Geoscan-Edelveis (NORAD 53385) 436.200 MHz
         SatelliteTlmProfile edelveis;
         edelveis.noradId = 53385;
         edelveis.satName = "Edelveis";
         edelveis.frameType = "Geoscan LoRa";
+        edelveis.rules.push_back({"Frame#", 0, FMT_UINT8, 1.0f, 0.0f, "", 0});
         edelveis.rules.push_back({"Vbat", 1, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
         edelveis.rules.push_back({"Temp", 3, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        edelveis.rules.push_back({"I_bus", 4, FMT_UINT16_LE, 0.1f, 0.0f, "mA", 1});
         s_builtinProfiles.push_back(edelveis);
 
-        // 5. PROVES-Electra (NORAD 69795) / PySquared 平台
+        // 7. NORBY-2 (NORAD 57179) 435.600 MHz
+        SatelliteTlmProfile norby2;
+        norby2.noradId = 57179;
+        norby2.satName = "NORBY-2";
+        norby2.frameType = "NORBY-2 LoRa";
+        norby2.rules.push_back({"Frame#", 0, FMT_UINT16_LE, 1.0f, 0.0f, "", 0});
+        norby2.rules.push_back({"Vbat", 2, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        norby2.rules.push_back({"Temp", 4, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        norby2.rules.push_back({"I_bus", 5, FMT_UINT16_LE, 0.1f, 0.0f, "mA", 1});
+        s_builtinProfiles.push_back(norby2);
+
+        // 8. UMKA-1 (NORAD 57172) 437.625 MHz
+        SatelliteTlmProfile umka;
+        umka.noradId = 57172;
+        umka.satName = "UMKA-1";
+        umka.frameType = "UMKA-1 LoRa";
+        umka.rules.push_back({"Frame#", 0, FMT_UINT16_LE, 1.0f, 0.0f, "", 0});
+        umka.rules.push_back({"Vbat", 2, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        umka.rules.push_back({"Temp", 4, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        s_builtinProfiles.push_back(umka);
+
+        // 9. PROVES-Electra (NORAD 69795) / PySquared 平台 437.400 MHz
         SatelliteTlmProfile proves;
         proves.noradId = 69795;
         proves.satName = "PROVES-Electra";
@@ -96,6 +155,34 @@ const std::vector<SatelliteTlmProfile>& TelemetryDecoder::getBuiltinProfiles() {
         proves.rules.push_back({"I_bus", 4, FMT_UINT16_LE, 0.1f, 0.0f, "mA", 1});
         proves.rules.push_back({"Reboot", 6, FMT_UINT16_LE, 1.0f, 0.0f, "", 0});
         s_builtinProfiles.push_back(proves);
+
+        // 10. LilacSat-2 (CAS-3H, NORAD 40908) 哈工大微纳卫星 437.200 MHz 4800 GFSK
+        SatelliteTlmProfile lilac;
+        lilac.noradId = 40908;
+        lilac.satName = "LilacSat-2";
+        lilac.frameType = "CAS-3H GFSK TLM";
+        lilac.rules.push_back({"Count", 0, FMT_UINT16_LE, 1.0f, 0.0f, "", 0});
+        lilac.rules.push_back({"Vbat", 2, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        lilac.rules.push_back({"I_bat", 4, FMT_INT16_LE, 0.1f, 0.0f, "mA", 1});
+        lilac.rules.push_back({"OBC_Temp", 6, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        lilac.rules.push_back({"PA_Temp", 7, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        lilac.rules.push_back({"Solar_X", 8, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        lilac.rules.push_back({"Solar_Y", 10, FMT_UINT16_LE, 0.001f, 0.0f, "V", 2});
+        lilac.rules.push_back({"Mag_Z", 12, FMT_INT16_LE, 0.1f, 0.0f, "uT", 1});
+        s_builtinProfiles.push_back(lilac);
+
+        // 11. XW-3 (CAS-9, NORAD 50466) 希望三号 435.575 MHz 4800 GMSK AX.25
+        SatelliteTlmProfile xw3;
+        xw3.noradId = 50466;
+        xw3.satName = "XW-3 (CAS-9)";
+        xw3.frameType = "CAS-9 AX.25 TLM";
+        xw3.rules.push_back({"Vbat", 0, FMT_UINT16_BE, 0.01f, 0.0f, "V", 2});
+        xw3.rules.push_back({"I_bus", 2, FMT_UINT16_BE, 0.1f, 0.0f, "mA", 1});
+        xw3.rules.push_back({"Temp_OBC", 4, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        xw3.rules.push_back({"Temp_PA", 5, FMT_INT8, 1.0f, 0.0f, "C", 0});
+        xw3.rules.push_back({"Solar_Tot", 6, FMT_UINT16_BE, 0.01f, 0.0f, "W", 2});
+        xw3.rules.push_back({"Gyro_Z", 8, FMT_INT16_BE, 0.01f, 0.0f, "deg/s", 1});
+        s_builtinProfiles.push_back(xw3);
 
         s_initialized = true;
     }
@@ -203,6 +290,23 @@ bool TelemetryDecoder::decodeAX25(const uint8_t* data, size_t len, DecodedTeleme
         out.fields.push_back({"Dest", out.destCall, ""});
         out.fields.push_back({"Source", out.sourceCall, ""});
         out.fields.push_back({"PayloadLen", String((int)payloadLen), "bytes"});
+
+        // 若为已知业余卫星 (如 XW-3 / CAS-9)，提取其物理量
+        if (out.sourceCall.indexOf("XW") != -1 || out.sourceCall.indexOf("CAS") != -1 || out.destCall.indexOf("BJ1W") != -1) {
+            out.satName = "XW-3 (CAS-9)";
+            out.noradId = 50466;
+            for (const auto& prof : getBuiltinProfiles()) {
+                if (prof.noradId == 50466) {
+                    DecodedTelemetry tlmFields;
+                    if (decodeByProfile(prof, payload, payloadLen, tlmFields)) {
+                        for (const auto& f : tlmFields.fields) {
+                            out.fields.push_back(f);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
 
         String asciiPayload = toAscii(payload, payloadLen);
         out.fields.push_back({"Text", asciiPayload, ""});

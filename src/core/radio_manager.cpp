@@ -134,6 +134,74 @@ static void parseLoRaParams(const String& modeStr, uint32_t noradId, float& outB
     } else if (noradId == 57172) { // UMKA-1
         outSf = 8;
         outCr = 5;
+    } else if (noradId == 54754) { // HADES-D
+        outSf = 10;
+        outCr = 5; // 4/5
+        outBw = 125.0f;
+        outSyncWord = 0x12;
+    } else if (noradId == 47963) { // VR3X-A
+        outSf = 9;
+        outCr = 5; // 4/5
+        outBw = 125.0f;
+        outSyncWord = 0x12;
+    } else if (noradId == 57179) { // NORBY-2
+        outSf = 9;
+        outCr = 7;
+        outBw = 125.0f;
+        outSyncWord = 0x12;
+    } else if (noradId == 53385) { // Geoscan-Edelveis
+        outSf = 10;
+        outCr = 7;
+        outBw = 125.0f;
+        outSyncWord = 0x12;
+    }
+}
+
+static void parseFSKParams(const String& modeStr, uint32_t noradId, float& outBrKbps, float& outFreqDevKHz, float& outRxBwKHz, uint8_t* outSyncWord, size_t& outSyncWordLen) {
+    outBrKbps = 4.8f;
+    outFreqDevKHz = 5.0f;
+    outRxBwKHz = 50.0f;
+    outSyncWordLen = 0;
+
+    String s = modeStr;
+    s.toUpperCase();
+
+    // 1. 比特率解析 (4800 / 9600 / 1200 等)
+    if (s.indexOf("9600") != -1 || s.indexOf("9.6") != -1) {
+        outBrKbps = 9.6f;
+        outFreqDevKHz = 5.0f;
+        outRxBwKHz = 50.0f;
+    } else if (s.indexOf("4800") != -1 || s.indexOf("4.8") != -1) {
+        outBrKbps = 4.8f;
+        outFreqDevKHz = 4.8f;
+        outRxBwKHz = 39.0f;
+    } else if (s.indexOf("1200") != -1 || s.indexOf("1.2") != -1) {
+        outBrKbps = 1.2f;
+        outFreqDevKHz = 3.0f;
+        outRxBwKHz = 25.0f;
+    }
+
+    // 2. 针对已知卫星 NORAD ID 设定专用同步字与物理参数
+    if (noradId == 40908) { // LilacSat-2 (CAS-3H 紫丁香二号 4800 GFSK)
+        outBrKbps = 4.8f;
+        outFreqDevKHz = 4.8f;
+        outRxBwKHz = 39.0f;
+        // LilacSat-2 采用 0x33, 0x5A 作为遥测包帧同步字
+        outSyncWord[0] = 0x33;
+        outSyncWord[1] = 0x5A;
+        outSyncWordLen = 2;
+    } else if (noradId == 50466) { // XW-3 (CAS-9 希望三号 4800 GMSK AX.25)
+        outBrKbps = 4.8f;
+        outFreqDevKHz = 4.8f;
+        outRxBwKHz = 39.0f;
+        // XW-3 AX.25 帧同步字 0x7E, 0x7E
+        outSyncWord[0] = 0x7E;
+        outSyncWord[1] = 0x7E;
+        outSyncWordLen = 2;
+    } else {
+        // 默认通用 AX.25 标志
+        outSyncWord[0] = 0x7E;
+        outSyncWordLen = 1;
     }
 }
 
@@ -194,12 +262,19 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
             _lastDopplerTuneTime = now;
 
             bool configOk = false;
-            // 判断调制方式 (LoRa 还是 FSK)
+            // 判断调制方式 (LoRa 还是 FSK/GFSK)
             String mUpper = targetMode;
             mUpper.toUpperCase();
-            if (mUpper.indexOf("FSK") != -1 || mUpper.indexOf("GFSK") != -1) {
-                // 默认 4.8kbps, dev 5kHz, bw 50kHz
-                configOk = HalRadio::getInstance().configFSK(targetTunedFreq, 4.8f, 5.0f, 50.0f);
+            if (mUpper.indexOf("FSK") != -1 || mUpper.indexOf("GFSK") != -1 || mUpper.indexOf("GMSK") != -1) {
+                // 自适应解析 FSK / GFSK 调制参数 (比特率, 频偏, 接收带宽, 同步字)
+                float brKbps = 4.8f;
+                float freqDevKHz = 5.0f;
+                float rxBwKHz = 50.0f;
+                uint8_t syncWord[8] = {0};
+                size_t syncWordLen = 0;
+                parseFSKParams(targetMode, targetNorad, brKbps, freqDevKHz, rxBwKHz, syncWord, syncWordLen);
+
+                configOk = HalRadio::getInstance().configFSK(targetTunedFreq, brKbps, freqDevKHz, rxBwKHz, syncWord, syncWordLen);
             } else {
                 // 自适应解析 LoRa 调制参数 (BW, SF, CR, SyncWord)
                 float bw = 125.0f;

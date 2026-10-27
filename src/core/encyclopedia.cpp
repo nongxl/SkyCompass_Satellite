@@ -666,6 +666,50 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         false  // defaultSelected
     },
 
+    // 54754 HADES-D (西班牙开源业余 LoRa 卫星)
+    {
+        54754,
+        "HADES-D",
+        Category::COMMUNICATIONS,
+        ICON_SATELLITE,
+        "西班牙AMSAT-EA研制的1.5U开源口袋立方星。下行以436.666MHz广播LoRa扩频遥测(SF10/BW 125k/CR 4:5, 同步字0x12)与FM语音转发，是全球TinyGS网络极度活跃的明星卫星。",
+        "1.5U PocketQube by AMSAT-EA Spain. Transmits 436.666 MHz LoRa telemetry (SF10/BW 125k/CR 4:5, SyncWord 0x12) and FM voice, a highly active target on TinyGS.",
+        "スペインAMSAT-EA開発の1.5Uポケットサット。436.666MHz LoRa(SF10/BW 125k)でテレメトリを送信するTinyGSで屈指の人気衛星。",
+        "PocketQube 1.5U de AMSAT-EA (Espana). Emite telemetria LoRa en 436.666 MHz (SF10/BW 125k/SW 0x12) y repetidor FM, muy activo en TinyGS.",
+        FLAG_RADIO | FLAG_SCIENCE,
+        TFT_YELLOW,
+        0,
+        9.0,
+        SAT_TYPE_HAM,
+        "436.666",
+        "LoRa (SF10/BW125/CR4:5)",
+        "",
+        "",
+        false  // defaultSelected
+    },
+
+    // 47963 VR3X-A (NASA 艾姆斯研究中心开源 LoRa 编队卫星)
+    {
+        47963,
+        "VR3X-A",
+        Category::COMMUNICATIONS,
+        ICON_SATELLITE,
+        "NASA艾姆斯研究中心研制的开源多星编队演示卫星。下行以437.475MHz持续发射LoRa扩频信号(SF9/BW 125k/CR 4:5, 同步字0x12)，测试自主分布式太空物联网互联技术。",
+        "NASA Ames open-source formation flight CubeSat. Transmits 437.475 MHz LoRa telemetry (SF9/BW 125k/CR 4:5, SyncWord 0x12) for distributed space mesh networking.",
+        "NASA Amesによるオープンソース編隊飛行CubeSat。437.475MHz LoRa(SF9/BW 125k)でテレメトリを送信。",
+        "CubeSat de formacion abierta de NASA Ames. Emite telemetria LoRa en 437.475 MHz (SF9/BW 125k/SW 0x12) para redes de malla espacial.",
+        FLAG_RADIO | FLAG_SCIENCE,
+        TFT_CYAN,
+        0,
+        9.0,
+        SAT_TYPE_HAM,
+        "437.475",
+        "LoRa (SF9/BW125/CR4:5)",
+        "",
+        "",
+        false  // defaultSelected
+    },
+
     // 40908 LilacSat-2 (哈工大 CAS-3H 紫丁香二号)
     {
         40908,
