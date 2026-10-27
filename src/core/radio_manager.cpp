@@ -3,12 +3,29 @@
 #include <LittleFS.h>
 #include <FS.h>
 
-#define MAX_LOG_PACKETS 30
+#define MAX_LOG_PACKETS 15
 
 RadioManager::RadioManager() {
+    _recentPackets.reserve(MAX_LOG_PACKETS + 1);
 }
 
 RadioManager::~RadioManager() {
+}
+
+static bool ensureStorageMounted() {
+    // 兼容所有挂载点与分区配置，确保文件系统 100% 处于可用状态
+    if (!LittleFS.begin(false, "/littlefs", 20)) {
+        if (!LittleFS.begin(true, "/littlefs", 20)) {
+            if (!LittleFS.begin()) {
+                Serial.println("[RadioManager] [WARN] LittleFS begin failed!");
+                return false;
+            }
+        }
+    }
+    if (!LittleFS.exists("/lora_logs")) {
+        LittleFS.mkdir("/lora_logs");
+    }
+    return true;
 }
 
 void RadioManager::init() {
@@ -23,12 +40,8 @@ void RadioManager::init() {
         }
     }
 
-    // 确保日志目录存在
-    if (LittleFS.begin()) {
-        if (!LittleFS.exists("/lora_logs")) {
-            LittleFS.mkdir("/lora_logs");
-        }
-    }
+    // 确保存储目录存在
+    ensureStorageMounted();
 
     _initialized = true;
 }
@@ -249,10 +262,18 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
                 item.decoded.noradId = _activeSatNorad;
             }
 
-            _recentPackets.insert(_recentPackets.begin(), item);
-            if (_recentPackets.size() > MAX_LOG_PACKETS) {
-                _recentPackets.pop_back();
+            // 低内存防卫盾：若可用堆内存低于 22KB，提前清理旧包，杜绝动态扩容触发 bad_alloc
+            if (ESP.getFreeHeap() < 22000) {
+                while (_recentPackets.size() > 4) {
+                    _recentPackets.pop_back();
+                }
+            } else {
+                while (_recentPackets.size() >= MAX_LOG_PACKETS) {
+                    _recentPackets.pop_back();
+                }
             }
+
+            _recentPackets.insert(_recentPackets.begin(), item);
             _totalPacketsReceived++;
             _validPackets++;
 
@@ -260,11 +281,11 @@ void RadioManager::update(uint32_t focalNoradId, const String& focalName, float 
             _toastText = "[RX] " + item.decoded.satName + " (" + String(pkt.length) + "B) RSSI:" + String(pkt.rssi, 0);
             _toastStartTime = now;
 
-            // 异步保存到本地文件
+            // 立即安全同步落盘至内部 Flash
             logPacketToFile(item);
 
-            Serial.printf("[RadioManager] Received packet: %s, RSSI: %.1f dBm\n",
-                          _toastText.c_str(), pkt.rssi);
+            Serial.printf("[RadioManager] Received packet: %s, RSSI: %.1f dBm (Heap: %u)\n",
+                          _toastText.c_str(), pkt.rssi, ESP.getFreeHeap());
         } else if (res == RADIO_POLL_CRC_ERROR) {
             _crcErrorPackets++;
             Serial.println("[RadioManager] CRC Error detected on incoming packet!");
@@ -341,10 +362,10 @@ void RadioManager::injectTestPacket() {
         item.decoded.noradId = injectNorad;
     }
 
-    _recentPackets.insert(_recentPackets.begin(), item);
-    if (_recentPackets.size() > MAX_LOG_PACKETS) {
+    while (_recentPackets.size() >= MAX_LOG_PACKETS) {
         _recentPackets.pop_back();
     }
+    _recentPackets.insert(_recentPackets.begin(), item);
     _totalPacketsReceived++;
     _validPackets++;
 
@@ -363,13 +384,29 @@ void RadioManager::injectTestCrcError() {
 }
 
 void RadioManager::logPacketToFile(const ReceivedLogItem& item) {
+    if (!ensureStorageMounted()) {
+        Serial.println("[RadioManager] [✘ ERROR] Storage not available, skip writing log.");
+        return;
+    }
+
+    // 优先写入标准目录 /lora_logs/rx.log
     File f = LittleFS.open("/lora_logs/rx.log", "a");
+    if (!f) {
+        // 若目录写入失败，自动降级安全写入根目录 /rx.log
+        f = LittleFS.open("/rx.log", "a");
+    }
+
     if (f) {
         f.printf("[%u] NORAD:%u %s | Freq:%.4f RSSI:%.1f SNR:%.1f Len:%d | Hex: %s\n",
                  item.raw.timestamp, item.decoded.noradId, item.decoded.satName.c_str(),
                  item.raw.freqMHz, item.raw.rssi, item.raw.snr, item.raw.length,
                  item.decoded.rawHex.c_str());
+        f.flush(); // 强制刷盘至物理 Flash，防止异常重启掉电丢失
         f.close();
+        Serial.printf("[RadioManager] [✔ SAVED] Packet logged to Flash (len: %d, RSSI: %.1f)\n", 
+                      (int)item.raw.length, item.raw.rssi);
+    } else {
+        Serial.println("[RadioManager] [✘ ERROR] Failed to open /lora_logs/rx.log or /rx.log for writing!");
     }
 }
 

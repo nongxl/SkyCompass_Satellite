@@ -7,6 +7,8 @@
 #include "core/sgp4_calc.h"
 #include "core/recent_launch_item.h"
 
+#define MAX_TOTAL_SELECTED_SATS 15
+
 class OrbitUtils {
 public:
     static void autoAssignIconAndColor(const String& name, SatIconType& icon, uint16_t& color);

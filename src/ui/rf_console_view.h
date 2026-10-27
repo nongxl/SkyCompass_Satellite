@@ -19,8 +19,9 @@ public:
 
     // 查询当前控制台是否处于激活显示状态
     bool isActive() const { return _isActive; }
-    void setActive(bool active) { _isActive = active; }
-    void toggle() { _isActive = !_isActive; }
+    void setActive(bool active);
+    void toggle();
+    void resetAnimations();
 
     // 瀑布能量图采样管理
     void addRssiSample(float rssi);

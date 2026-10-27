@@ -6,6 +6,8 @@ compile_commands.json
 docs/*
 !docs/*.md
 !docs/schematic_diagram.png
+!docs/images/
+!docs/images/*
 prompts/*
 !prompts/satellite_trivia_prompt_template.md
 .gitignore

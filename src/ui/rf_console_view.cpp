@@ -9,6 +9,41 @@ extern PositionManager* pos_manager;
 extern double baseUserLat;
 extern double baseUserLon;
 
+#include "../core/spring_animator.h"
+
+// ===================================================================
+// lilt 物理弹簧动效模型配置与状态管理
+// ===================================================================
+// 列表选中磁吸高亮框物理弹簧 (Default: 0.29s, 0.75 阻尼比，具有苹果级轻微物理回弹)
+static SpringValue s_rfCursorY(73.0f, SpringConfig::Default);
+// 详情弹窗中心 Pop-up 缩放物理动效 (0.0 -> 1.0, 阻尼 0.80)
+static SpringValue s_detailModalScale(0.0f, SpringConfig(0.24f, 0.80f));
+// 删除确认弹窗缩放物理动效 (0.0 -> 1.0, 阻尼 0.80)
+static SpringValue s_deleteModalScale(0.0f, SpringConfig(0.24f, 0.80f));
+// 记录上次的数据包总数，用于检测新包入队物理震颤动效
+static size_t s_lastTotalPackets = 0;
+// 边界撞墙回弹触发器 (施加冲量)
+static int s_boundaryBump = 0;
+
+void RfConsoleView::resetAnimations() {
+    s_rfCursorY.jump(73.0f);
+    s_detailModalScale.jump(0.0f);
+    s_deleteModalScale.jump(0.0f);
+    s_lastTotalPackets = RadioManager::getInstance().getTotalPacketsCount();
+    s_boundaryBump = 0;
+}
+
+void RfConsoleView::setActive(bool active) {
+    if (!_isActive && active) {
+        resetAnimations();
+    }
+    _isActive = active;
+}
+
+void RfConsoleView::toggle() {
+    setActive(!_isActive);
+}
+
 RfConsoleView::RfConsoleView() {
     for (int i = 0; i < WATERFALL_POINTS; i++) {
         _rssiHistory[i] = -120.0f + (float)(rand() % 6 - 3);
@@ -253,12 +288,18 @@ void RfConsoleView::handleKeys(bool justSemi, bool justDot, bool justEnter, bool
             _selectedPacketIndex--;
         } else if (count > 0) {
             _selectedPacketIndex = count - 1;
+            s_boundaryBump = 4; // 触顶循环回弹冲量
+        } else {
+            s_boundaryBump = 3; // 空列表触顶回弹
         }
     } else if (justDot) {
         if (_selectedPacketIndex < count - 1) {
             _selectedPacketIndex++;
         } else if (count > 0) {
             _selectedPacketIndex = 0;
+            s_boundaryBump = -4; // 触底循环回弹冲量
+        } else {
+            s_boundaryBump = -3; // 空列表触底回弹
         }
     } else if (justEnter && count > 0) {
         _showDetailModal = true;
@@ -691,6 +732,18 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
             }
             if (_selectedPacketIndex < 0) _selectedPacketIndex = 0;
 
+            // 1. 新包入队物理顿挫与撞墙弹性冲量
+            size_t currentTotalPackets = rm.getTotalPacketsCount();
+            if (s_lastTotalPackets != 0 && currentTotalPackets > s_lastTotalPackets) {
+                s_rfCursorY.shift(-3.5f); // 新包挤入顶部微震颤冲量
+            }
+            s_lastTotalPackets = currentTotalPackets;
+
+            if (s_boundaryBump != 0) {
+                s_rfCursorY.bump((float)s_boundaryBump);
+                s_boundaryBump = 0;
+            }
+
             int listY = 73;
             int rowH = 14;
             int visibleRows = 4;
@@ -699,34 +752,41 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
                 startIdx = _selectedPacketIndex - visibleRows + 1;
             }
 
+            // 2. 物理弹簧计算目标 Y 坐标并平滑吸附
+            int visibleRowIdx = _selectedPacketIndex - startIdx;
+            float targetCursorY = (float)(listY + visibleRowIdx * rowH);
+            s_rfCursorY.set(targetCursorY);
+
+            float smoothY = s_rfCursorY.get();
+            int curCursorY = (int)roundf(smoothY);
+
+            // 绘制平滑圆角磁吸高亮框 (暗蓝背衬 + 科技青色细边框)
+            canvas->fillRoundRect(2, curCursorY, width - 4, rowH, 3, canvas->color565(0, 42, 75));
+            canvas->drawRoundRect(2, curCursorY, width - 4, rowH, 3, canvas->color565(0, 180, 255));
+
             for (int i = 0; i < visibleRows && (startIdx + i) < (int)packets.size(); i++) {
                 int rowIdx = startIdx + i;
                 int rowY = listY + i * rowH;
-                bool isSelected = (rowIdx == _selectedPacketIndex);
-
-                if (isSelected) {
-                    canvas->fillRect(2, rowY, width - 4, rowH, 0x2145);
-                    canvas->drawRect(2, rowY, width - 4, rowH, 0x07FF);
-                }
+                bool isUnderCursor = (fabsf((float)rowY - smoothY) < (rowH * 0.55f));
 
                 const auto& p = packets[rowIdx];
                 canvas->setTextDatum(TL_DATUM);
 
                 // 序号
-                canvas->setTextColor(isSelected ? 0xFFFF : 0x07E0);
+                canvas->setTextColor(isUnderCursor ? 0xFFFF : 0x07E0);
                 char prefix[16];
                 snprintf(prefix, sizeof(prefix), "#%02d", rowIdx + 1);
                 canvas->drawString(prefix, 4, rowY + 2);
 
                 // 卫星名
-                canvas->setTextColor(isSelected ? 0x07FF : 0xC618);
+                canvas->setTextColor(isUnderCursor ? 0x07FF : 0xC618);
                 String satInfo = p.decoded.satName;
                 canvas->setClipRect(24, rowY, 48, rowH);
                 canvas->drawString(satInfo, 24, rowY + 2);
                 canvas->clearClipRect();
 
                 // 射频指标
-                canvas->setTextColor(0xCE79);
+                canvas->setTextColor(isUnderCursor ? 0xFFFF : 0xCE79);
                 char metrics[32];
                 snprintf(metrics, sizeof(metrics), "%ddB/%.0fdB %dB", (int)p.raw.rssi, p.raw.snr, (int)p.raw.length);
                 canvas->setClipRect(74, rowY, 68, rowH);
@@ -777,8 +837,14 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
         }
     }
 
-    // 4. 屏幕右下角常驻实时数字 RSSI 呈现 (无全屏模态弹窗时)
-    if (!_showDetailModal && !_showDeleteModal) {
+    // 弹窗状态更新与弹簧平滑度驱动
+    s_detailModalScale.set(_showDetailModal ? 1.0f : 0.0f);
+    s_deleteModalScale.set(_showDeleteModal ? 1.0f : 0.0f);
+    float detailScale = s_detailModalScale.get();
+    float delScale = s_deleteModalScale.get();
+
+    // 4. 屏幕右下角常驻实时数字 RSSI 呈现 (无全屏模态弹窗展开时)
+    if (detailScale < 0.15f && delScale < 0.15f) {
         char rssiStr[24];
         if (rm.isHardwareReady()) {
             snprintf(rssiStr, sizeof(rssiStr), "RSSI:%+.0fdBm", _lastInstantRssi);
@@ -828,76 +894,90 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
         }
     }
 
-    // 4. 详情弹窗 (Detail Modal)
-    if (_showDetailModal && !packets.empty() && _selectedPacketIndex < (int)packets.size()) {
-        const auto& sel = packets[_selectedPacketIndex];
-        int modalW = width - 20;
-        int modalH = height - 22;
-        int modalX = 10;
-        int modalY = 11;
+    // 4. 详情弹窗 (Detail Modal) - Pop-up 弹性中心展开缩放
+    if (detailScale > 0.02f && !packets.empty()) {
+        int targetIdx = _selectedPacketIndex;
+        if (targetIdx < 0) targetIdx = 0;
+        if (targetIdx >= (int)packets.size()) targetIdx = (int)packets.size() - 1;
+        // 关键安全修复：进行值深拷贝，避免后台收包 insert 时原有引用失效成为野指针触发 abort()
+        ReceivedLogItem sel = packets[targetIdx];
+        int baseModalW = width - 20;
+        int baseModalH = height - 22;
+        int modalW = (int)roundf(baseModalW * detailScale);
+        int modalH = (int)roundf(baseModalH * detailScale);
+        int modalX = (width - modalW) / 2;
+        int modalY = (height - modalH) / 2;
 
-        canvas->fillRect(modalX, modalY, modalW, modalH, 0x0841);
-        canvas->drawRect(modalX, modalY, modalW, modalH, 0x07FF);
-        canvas->drawFastHLine(modalX, modalY + 16, modalW, 0x2965);
+        canvas->fillRoundRect(modalX, modalY, modalW, modalH, 4, canvas->color565(12, 20, 32));
+        canvas->drawRoundRect(modalX, modalY, modalW, modalH, 4, canvas->color565(0, 190, 255));
 
-        canvas->setTextDatum(TL_DATUM);
-        canvas->setTextColor(0x07FF, 0x0841);
-        canvas->drawString(I18N::get(TXT_RF_MODAL_TITLE), modalX + 6, modalY + 3);
+        if (detailScale > 0.65f) {
+            canvas->drawFastHLine(modalX + 2, modalY + 16, modalW - 4, canvas->color565(35, 60, 90));
 
-        canvas->setClipRect(modalX + 2, modalY + 18, modalW - 4, modalH - 20);
-        int curY = modalY + 20;
+            canvas->setTextDatum(TL_DATUM);
+            canvas->setTextColor(canvas->color565(0, 220, 255), canvas->color565(12, 20, 32));
+            canvas->drawString(I18N::get(TXT_RF_MODAL_TITLE), modalX + 6, modalY + 3);
 
-        canvas->setTextColor(0xFFFF, 0x0841);
-        String headerLine = sel.decoded.satName + " [" + sel.decoded.frameType + "]";
-        canvas->drawString(headerLine.c_str(), modalX + 6, curY);
-        curY += 13;
+            canvas->setClipRect(modalX + 2, modalY + 18, modalW - 4, modalH - 20);
+            int curY = modalY + 20;
 
-        char rfLine[64];
-        snprintf(rfLine, sizeof(rfLine), "%.3fM | RSSI:%.0f | SNR:%.1f | %dB",
-                sel.raw.freqMHz, sel.raw.rssi, sel.raw.snr, (int)sel.raw.length);
-        canvas->setTextColor(0x07E0, 0x0841);
-        canvas->drawString(rfLine, modalX + 6, curY);
-        curY += 13;
-
-        canvas->setTextColor(0xFFE0, 0x0841);
-        for (size_t f = 0; f < sel.decoded.fields.size() && f < 6; f += 2) {
-            String fRow = sel.decoded.fields[f].key + ":" + sel.decoded.fields[f].value + sel.decoded.fields[f].unit;
-            if (f + 1 < sel.decoded.fields.size()) {
-                fRow += "  " + sel.decoded.fields[f+1].key + ":" + sel.decoded.fields[f+1].value + sel.decoded.fields[f+1].unit;
-            }
-            canvas->drawString(fRow.c_str(), modalX + 6, curY);
+            canvas->setTextColor(0xFFFF, canvas->color565(12, 20, 32));
+            String headerLine = sel.decoded.satName + " [" + sel.decoded.frameType + "]";
+            canvas->drawString(headerLine.c_str(), modalX + 6, curY);
             curY += 13;
+
+            char rfLine[64];
+            snprintf(rfLine, sizeof(rfLine), "%.3fM | RSSI:%.0f | SNR:%.1f | %dB",
+                    sel.raw.freqMHz, sel.raw.rssi, sel.raw.snr, (int)sel.raw.length);
+            canvas->setTextColor(0x07E0, canvas->color565(12, 20, 32));
+            canvas->drawString(rfLine, modalX + 6, curY);
+            curY += 13;
+
+            canvas->setTextColor(0xFFE0, canvas->color565(12, 20, 32));
+            for (size_t f = 0; f < sel.decoded.fields.size() && f < 6; f += 2) {
+                String fRow = sel.decoded.fields[f].key + ":" + sel.decoded.fields[f].value + sel.decoded.fields[f].unit;
+                if (f + 1 < sel.decoded.fields.size()) {
+                    fRow += "  " + sel.decoded.fields[f+1].key + ":" + sel.decoded.fields[f+1].value + sel.decoded.fields[f+1].unit;
+                }
+                canvas->drawString(fRow.c_str(), modalX + 6, curY);
+                curY += 13;
+            }
+
+            canvas->setTextColor(0xC618, canvas->color565(12, 20, 32));
+            canvas->drawString(I18N::get(TXT_RF_RAW_HEX), modalX + 6, curY);
+            curY += 11;
+
+            String hexLine1 = sel.decoded.rawHex.substring(0, 30);
+            String hexLine2 = sel.decoded.rawHex.length() > 30 ? sel.decoded.rawHex.substring(30, 60) : "";
+            canvas->setTextColor(0x7BEF, canvas->color565(12, 20, 32));
+            canvas->drawString(hexLine1.c_str(), modalX + 6, curY);
+            curY += 10;
+            if (hexLine2.length() > 0) {
+                canvas->drawString(hexLine2.c_str(), modalX + 6, curY);
+            }
+
+            canvas->clearClipRect();
         }
-
-        canvas->setTextColor(0xC618, 0x0841);
-        canvas->drawString(I18N::get(TXT_RF_RAW_HEX), modalX + 6, curY);
-        curY += 11;
-
-        String hexLine1 = sel.decoded.rawHex.substring(0, 30);
-        String hexLine2 = sel.decoded.rawHex.length() > 30 ? sel.decoded.rawHex.substring(30, 60) : "";
-        canvas->setTextColor(0x7BEF, 0x0841);
-        canvas->drawString(hexLine1.c_str(), modalX + 6, curY);
-        curY += 10;
-        if (hexLine2.length() > 0) {
-            canvas->drawString(hexLine2.c_str(), modalX + 6, curY);
-        }
-
-        canvas->clearClipRect();
     }
 
-    // 5. 删除报文确认弹窗
-    if (_showDeleteModal && !packets.empty()) {
-        int popW = 160;
-        int popH = 44;
+    // 5. 删除报文确认弹窗 - Pop-up 弹性中心展开缩放
+    if (delScale > 0.02f && !packets.empty()) {
+        int basePopW = 160;
+        int basePopH = 44;
+        int popW = (int)roundf(basePopW * delScale);
+        int popH = (int)roundf(basePopH * delScale);
         int popX = (width - popW) / 2;
         int popY = (height - popH) / 2;
 
-        canvas->fillRect(popX, popY, popW, popH, TFT_RED);
-        canvas->drawRect(popX, popY, popW, popH, TFT_WHITE);
-        canvas->setTextDatum(TC_DATUM);
-        canvas->setTextColor(TFT_WHITE);
-        canvas->drawString(I18N::getLanguage() == LANG_ZH ? "删除此条报文记录？" : "Delete this packet?", width / 2, popY + 6);
-        canvas->drawString(I18N::getLanguage() == LANG_ZH ? "[y] 确定   [n] 取消" : "[y] Yes   [n] No", width / 2, popY + 24);
+        canvas->fillRoundRect(popX, popY, popW, popH, 4, TFT_RED);
+        canvas->drawRoundRect(popX, popY, popW, popH, 4, TFT_WHITE);
+
+        if (delScale > 0.65f) {
+            canvas->setTextDatum(TC_DATUM);
+            canvas->setTextColor(TFT_WHITE, TFT_RED);
+            canvas->drawString(I18N::getLanguage() == LANG_ZH ? "删除此条报文记录？" : "Delete this packet?", width / 2, popY + 6);
+            canvas->drawString(I18N::getLanguage() == LANG_ZH ? "[y] 确定   [n] 取消" : "[y] Yes   [n] No", width / 2, popY + 24);
+        }
     }
 
     canvas->setTextDatum(TL_DATUM);

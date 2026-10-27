@@ -128,3 +128,23 @@
   * 实现基于规则的通用星务数据字典（Telemetry Dictionary Engine），内建 NORBI、Vladivostok-1、FOSSASAT-2E、Edelveis 等立方星规则映射。
 * [ ] **Phase 5 (未来展望)：全球地面站协同上传 (Global Station Feed)**
   * 支持在连接 WiFi 时，将抓取到的真实空间遥测 Hex 报文与信标异步上报至 TinyGS / SatNOGS DB 社区，加入全球分布式接收网络。
+
+---
+
+## 物理空中射频联调与实测验证成果
+
+为了验证本系统在真实硬件上的端到端接收与解析能力，我们使用 **Meshtastic 开源硬件（TinyLora-C3 V2, ESP32-C3 + SX1268）** 作为地面“模拟卫星”，配合系统的**时光机 (Time Machine)** 功能，成功完成了物理空中信号收发全链路闭环测试。
+
+### 1. 实测照片见证
+| RF Console 瀑布流接收与 0 误码统计 | 数据包 HEX 解码与遥测解析弹窗 |
+| :---: | :---: |
+| ![RF Console 实机收包瀑布图](images/norbi_lora_waterfall_rx.jpg) | ![HEX 报文与遥测解析弹窗](images/norbi_lora_hex_telemetry.jpg) |
+
+### 2. 核心实测指标
+* **全自动仰角过境感知**：通过时光机推进轨道时间（`+33540s`），推演 NORBI（46494）到达仰角 `EL: +13.4°`，系统自动由待机转为绿字 `[正在接收]`；
+* **多普勒动态跟踪与理论验证**：系统推演计算出 `-10.2kHz` 多普勒频移，将接收频点调整为 `436.690MHz`。由于 LoRa BW125kHz 拥有高达 $\pm 31.25\text{ kHz}$（$\pm \text{BW}/4$）的载波容差窗口，地面固定 $436.700\text{ MHz}$ 发射的空中信标依然被 $100\%$ 稳定锁定，实现 **5包连续捕获，0误码（OK:5 E:0）**；
+* **物理能量瀑布流**：瀑布图实时渲染出高能量脉冲，测得近场真实信号 `RSSI: -28dBm / -27dBm`，`SNR: +10dB ~ +12dB`；
+* **数据字典与星务遥测解析**：空中 Hex 报文（`53 4B 59 43 4F 4D 50 41 53 53...` 即 `SKYCOMPASS-BEACON #...`）被遥测解析引擎忠实还原并结构化展示（`Frame#: 19283`, `Vbat: 17.24V`, `Temp: 79C`, `I_bus: 2055.7mA`），且全量写入闪存日志。
+
+> 📘 **详尽测试教程与代码**：请参阅 [卫星物理射频仿真测试与实测收包验证指南](satellite_rf_simulation_guide.md)。
+

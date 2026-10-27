@@ -2116,10 +2116,12 @@ void loadSelectedSatellites() {
     lockSatMutex();
     for (int i = 0; i < NUM_SATELLITES; i++) {
         bool found = false;
-        for (int targetId : targetIds) {
-            if (g_satellites[i].noradId == targetId) {
-                found = true;
-                break;
+        if (matchedCount < MAX_TOTAL_SELECTED_SATS) {
+            for (int targetId : targetIds) {
+                if (g_satellites[i].noradId == targetId) {
+                    found = true;
+                    break;
+                }
             }
         }
         g_satellites[i].selected = found;
@@ -2736,6 +2738,46 @@ void drawSatSelectPage() {
     sat_select_view.draw(earth_renderer->getCanvas());
 }
 
+// 快速解算所有已选卫星在当前连续模拟时间的 SGP4 实时地心/大地坐标 (专用于射频巡天与浑仪舵机追焦)
+void updateSelectedSatRealtimePositions(double continuousSimTime, double current_gmst) {
+    for (int i = 0; i < NUM_SATELLITES; i++) {
+        lockSatMutex();
+        bool selectedCopy = g_satellites[i].selected;
+        SGP4Calc calcCopy = g_satellites[i].calc;
+        SatelliteType typeCopy = g_satellites[i].type;
+        uint32_t noradIdCopy = g_satellites[i].noradId;
+        String uplinkFreqCopy = g_satellites[i].uplinkFreq;
+        unlockSatMutex();
+
+        if (!selectedCopy) {
+            g_satCaches[i].lastGeoValid = false;
+            g_satCaches[i].isVisible = false;
+            continue;
+        }
+
+        if (typeCopy == SAT_TYPE_GEO_TV) {
+            double slotLon = getGeoSlotLongitude(noradIdCopy, uplinkFreqCopy);
+            GeodeticCoord geo;
+            ECEFCoord ecef;
+            TopocentricCoord topo;
+            double skew = 0.0;
+            calculateGeoSatPosition(slotLon, baseUserLat, baseUserLon, baseUserAlt, geo, ecef, topo, skew);
+            g_satCaches[i].lastGeo = geo;
+            g_satCaches[i].lastGeoValid = true;
+        } else {
+            double tx, ty, tz;
+            if (calcCopy.getTEME(continuousSimTime, tx, ty, tz)) {
+                ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
+                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                g_satCaches[i].lastGeo = geo;
+                g_satCaches[i].lastGeoValid = true;
+            } else {
+                g_satCaches[i].lastGeoValid = false;
+            }
+        }
+    }
+}
+
 void updateRadioTrackingPipeline(uint32_t currentSimTime, int32_t tmOffset) {
     if (appState != STATE_MAIN && !RfConsoleView::getInstance().isActive()) {
         return;
@@ -3195,8 +3237,26 @@ void loop() {
                     c->clearClipRect();
                 }
             } else {
-                // 实时解算当前无线电跟踪状态与多普勒频移，支持时光机快进/倒退
-                updateRadioTrackingPipeline(current_unix + timeMachineOffset, timeMachineOffset);
+                // 1. 同步时光机平滑弹簧
+                g_smoothTimeMachineOffset.set((float)timeMachineOffset);
+
+                // 2. 亚秒级连续模拟时间与 GMST 解算 (确保 RF 控制台、天球雷达与浑仪舵机时间基准严格一致)
+                double subsecondFraction = (double)(millis() % 1000) / 1000.0;
+                double continuousSimTime = (double)current_unix + subsecondFraction + (double)timeMachineOffset;
+                double current_gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(continuousSimTime));
+                uint32_t currentSimTime = (uint32_t)round(continuousSimTime);
+
+                // 3. 更新已选卫星空间位置，确保射频雷达与舵机云台解算均基于最新空间坐标
+                updateSelectedSatRealtimePositions(continuousSimTime, current_gmst);
+
+                // 4. 实时解算当前无线电跟踪状态与多普勒频移，支持时光机快进/倒退
+                updateRadioTrackingPipeline(currentSimTime, timeMachineOffset);
+
+                // 5. 驱动 3 轴浑仪舵机云台实时追焦过境卫星 (与主地球仪界面保持一致的自主巡天)
+                if (HardwareConfig::getInstance().isEnabled(HW_MOD_UNIT_8SERVOS) && gimbal.isOnline() && appState != STATE_SERVO_TEST) {
+                    GimbalTrackingPipeline::update(currentSimTime);
+                }
+
                 auto c = earth_renderer->getCanvas();
                 if (c) {
                     RfConsoleView::getInstance().draw(c, 240, 135);
@@ -4173,8 +4233,8 @@ void loop() {
                         if (recentLaunchSelectedIndex >= 0 && recentLaunchSelectedIndex < (int)g_recentLaunches.size()) {
                             RecentLaunchItem& targetItem = g_recentLaunches[recentLaunchSelectedIndex];
                             if (!targetItem.selected) {
-                                if (getTotalSelectedSatelliteCount() >= 30) {
-                                    recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选30颗" : "Limit reached: Max 30 sats total";
+                                if (getTotalSelectedSatelliteCount() >= MAX_TOTAL_SELECTED_SATS) {
+                                    recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选15颗" : "Limit reached: Max 15 sats total";
                                 } else {
                                     targetItem.selected = true;
                                     recentLaunchErrorMsg = "";
@@ -4333,8 +4393,8 @@ void loop() {
                         } else if (justEnter) {
                             if (realIdx >= 0 && realIdx < NUM_SATELLITES) {
                                 if (!g_satellites[realIdx].selected) {
-                                    if (getTotalSelectedSatelliteCount() >= 30) {
-                                        downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选30颗" : "Limit reached: Max 30 sats total";
+                                    if (getTotalSelectedSatelliteCount() >= MAX_TOTAL_SELECTED_SATS) {
+                                        downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选15颗" : "Limit reached: Max 15 sats total";
                                     } else {
                                         g_satellites[realIdx].selected = true;
                                         downloadErrorMsg = "";

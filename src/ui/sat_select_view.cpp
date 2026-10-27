@@ -9,6 +9,7 @@
 #include "hal/hal_wifi.h"
 #include "core/spring_animator.h"
 #include <LittleFS.h>
+#include "core/orbit_utils.h"
 
 extern volatile bool isDownloadingCustom;
 extern int getTotalSelectedSatelliteCount();
@@ -528,11 +529,11 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             char pageBuf[32];
             int totalSel = getTotalSelectedSatelliteCount();
             if (g_selectedCategoryMask != 0) {
-                sprintf(pageBuf, "(%d/%d) [%d/30]*", currentPage, totalPages, totalSel);
+                sprintf(pageBuf, "(%d/%d) [%d/%d]*", currentPage, totalPages, totalSel, MAX_TOTAL_SELECTED_SATS);
             } else {
-                sprintf(pageBuf, "(%d/%d) [%d/30]", currentPage, totalPages, totalSel);
+                sprintf(pageBuf, "(%d/%d) [%d/%d]", currentPage, totalPages, totalSel, MAX_TOTAL_SELECTED_SATS);
             }
-            canvas->setTextColor(totalSel >= 30 ? TFT_ORANGE : canvas->color565(110, 150, 180));
+            canvas->setTextColor(totalSel >= MAX_TOTAL_SELECTED_SATS ? TFT_ORANGE : canvas->color565(110, 150, 180));
             canvas->drawString(pageBuf, 8, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
         }
         
@@ -1300,8 +1301,8 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                 int currentIdx = recentLaunchSelectedIndex + 1;
                 char pageBuf[32];
                 int totalSel = getTotalSelectedSatelliteCount();
-                sprintf(pageBuf, "(%d/%d) [%d/30]", currentPage, totalPages, totalSel);
-                canvas->setTextColor(totalSel >= 30 ? TFT_ORANGE : canvas->color565(110, 150, 180));
+                sprintf(pageBuf, "(%d/%d) [%d/%d]", currentPage, totalPages, totalSel, MAX_TOTAL_SELECTED_SATS);
+                canvas->setTextColor(totalSel >= MAX_TOTAL_SELECTED_SATS ? TFT_ORANGE : canvas->color565(110, 150, 180));
                 canvas->drawString(pageBuf, 8, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
             }
             

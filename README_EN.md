@@ -161,14 +161,27 @@ For detailed mathematical models, physical formulations, and developer documenta
 | 📸 [**Lossless Screenshot & Toolchain Guide**](docs/screenshot_and_tools_guide.md) | PSRAM-free RGB565 chunked serial streaming, Python receiver script, and offline point-cloud/map preprocessing tools |
 | 🔭 [**Armillary Gimbal Design & Operation**](docs/浑仪卫星过境指向功能设计与使用指南.md) | 3-axis Lego mechanics, servo angular ranges and anti-jamming limit protections |
 | 📡 [**LoRa & UHF Telemetry Reception System**](docs/卫星LoRa+UHF-GFSK数据接收解析与长期记录系统实现方案v2.md) | SX1262 RF frontend, Doppler auto-tuning, and AX.25 telemetry frame parsing architecture |
+| 🛰️ [**Satellite RF Simulation & Testing Guide**](docs/satellite_rf_simulation_guide.md) | Indoor closed-loop testing via Meshtastic open hardware & Time Machine, Doppler tolerance theory, and live photos |
 
 ---
 
-## Live Screenshots
+## Live Screenshots & Hardware Verification
 
+### 1. UI Views
 | 3D Globe & Orbital Trajectory | Satellite Encyclopedia & HAM Info | Shortcut Help Floating Dialog |
 | :---: | :---: | :---: |
 | ![3D Trajectory](screenshot/skycompass_20260621_142730.png) | ![Encyclopedia](screenshot/skycompass_20260621_142358.png) | ![Help Dialog](screenshot/skycompass_20260621_142315.png) |
+
+### 2. Live Over-The-Air RF Reception & Telemetry Decoding (Cap LoRa-1262)
+Using an open-source LoRa beacon transmitter (ESP32-C3 + SX1268) simulating satellite downlinks, combined with the onboard **Time Machine** to warp the pass elevation to TCA, over-the-air packets were successfully captured with zero packet loss:
+
+| RF Console Live Waterfall & Doppler Tracking (5 pkts, 0 Err) | Packet HEX Dump & Telemetry Decoder Dialog |
+| :---: | :---: |
+| ![RF Console Live Waterfall](docs/images/norbi_lora_waterfall_rx.jpg) | ![HEX & Telemetry Dialog](docs/images/norbi_lora_hex_telemetry.jpg) |
+
+- **Doppler Math Validation**: At $EL: +13.4^\circ$, Doppler shift was calculated as $-10.2\text{ kHz}$ ($436.690\text{ MHz}$). Because LoRa 125kHz bandwidth offers $\pm 31.25\text{ kHz}$ ($\pm \text{BW}/4$) carrier tolerance, the fixed 436.700MHz transmitter is demodulated reliably with SNR up to $+12\text{ dB}$.
+- **Full-Chain Pipeline**: Proves the complete loop: SGP4 orbit dynamics ➔ Elevation auto-wake ➔ AFC tracking ➔ RF reception ➔ Waterfall display ➔ Telemetry decoding ➔ Local Flash/SD logging.
+
 
 ---
 

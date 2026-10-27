@@ -3,7 +3,9 @@
 static std::vector<SatelliteTlmProfile> s_customProfiles;
 
 static String toHex(const uint8_t* data, size_t len) {
+    if (len > 64) len = 64; // 保留前 64 字节，足够满足所有遥测排查，避免占用过多堆内存
     String res = "";
+    res.reserve(len * 3 + 1); // 一次性预分配，消除数十次连续堆内存 realloc
     char buf[4];
     for (size_t i = 0; i < len; i++) {
         sprintf(buf, "%02X ", data[i]);
@@ -13,7 +15,9 @@ static String toHex(const uint8_t* data, size_t len) {
 }
 
 static String toAscii(const uint8_t* data, size_t len) {
+    if (len > 64) len = 64;
     String res = "";
+    res.reserve(len + 1);
     for (size_t i = 0; i < len; i++) {
         char c = (char)data[i];
         if (c >= 32 && c <= 126) {
