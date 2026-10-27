@@ -270,6 +270,7 @@ int g_descMaxScroll = 0;
 int g_descBounceTrigger = 0;
 int g_objPageBounceTrigger = 0;
 int g_recBounceTrigger = 0;
+int g_satLimitShakeTrigger = 0; // 卫星选择达到上限时的阻尼抖动动效触发器
 
 // Level 3 Objects 分页数据结构与状态
 bool recentLaunchInObjectsView = false;
@@ -4235,6 +4236,7 @@ void loop() {
                             if (!targetItem.selected) {
                                 if (getTotalSelectedSatelliteCount() >= MAX_TOTAL_SELECTED_SATS) {
                                     recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选15颗" : "Limit reached: Max 15 sats total";
+                                    g_satLimitShakeTrigger = 6;
                                 } else {
                                     targetItem.selected = true;
                                     recentLaunchErrorMsg = "";
@@ -4395,6 +4397,7 @@ void loop() {
                                 if (!g_satellites[realIdx].selected) {
                                     if (getTotalSelectedSatelliteCount() >= MAX_TOTAL_SELECTED_SATS) {
                                         downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选15颗" : "Limit reached: Max 15 sats total";
+                                        g_satLimitShakeTrigger = 6;
                                     } else {
                                         g_satellites[realIdx].selected = true;
                                         downloadErrorMsg = "";

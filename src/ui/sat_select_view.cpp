@@ -13,6 +13,8 @@
 
 extern volatile bool isDownloadingCustom;
 extern int getTotalSelectedSatelliteCount();
+extern int g_satLimitShakeTrigger;
+static SpringValue s_limitShakeX(0.0f, SpringConfig(0.16f, 0.45f));
 
 extern EarthRenderer* earth_renderer;
 extern PositionManager* pos_manager;
@@ -490,9 +492,16 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             s_cursorY_encyclopedia.set(targetCursorY);
         }
         
+        // 触发勾选上限物理震动 (Shake/Wiggle)
+        if (g_satLimitShakeTrigger != 0) {
+            s_limitShakeX.shift((float)g_satLimitShakeTrigger);
+            g_satLimitShakeTrigger = 0;
+        }
+        int shakeX = (int)roundf(s_limitShakeX.get());
+
         // 绘制平滑物理磁吸高亮框
         float smoothY = s_cursorY_encyclopedia.get();
-        canvas->fillRoundRect(2, (int)roundf(smoothY), 82, 12, 3, canvas->color565(0, 120, 255));
+        canvas->fillRoundRect(2 + shakeX, (int)roundf(smoothY), 82, 12, 3, canvas->color565(0, 120, 255));
         
         for (int i = 0; i < itemsPerPage && (startIndex + i) < totalItems; i++) {
             int index = startIndex + i;
@@ -501,14 +510,15 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             } else {
                 canvas->setTextColor(TFT_LIGHTGRAY);
             }
+            int curShakeX = (index == satSelectedIndex) ? shakeX : 0;
             
             if (index < filteredCount) {
                 int realIdx = g_encyclopediaFilteredIndices[index];
                 String checkBox = g_satellites[realIdx].selected ? "[x]" : "[ ]";
-                canvas->drawString(checkBox.c_str(), 4, yPos);
+                canvas->drawString(checkBox.c_str(), 4 + curShakeX, yPos);
                 
                 if (index == satSelectedIndex) {
-                    TextUtils::drawScrollingText(canvas, g_satellites[realIdx].name.c_str(), 28, yPos, 56, TFT_WHITE);
+                    TextUtils::drawScrollingText(canvas, g_satellites[realIdx].name.c_str(), 28 + curShakeX, yPos, 56, TFT_WHITE);
                 } else {
                     String nameStr = g_satellites[realIdx].name;
                     if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
@@ -516,7 +526,7 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                 }
             } else {
                 String text = isDownloadingCustom ? I18N::get(TXT_DOWNLOADING) : ("[+] " + noradInput + "_");
-                canvas->drawString(text.c_str(), 4, yPos);
+                canvas->drawString(text.c_str(), 4 + curShakeX, yPos);
             }
             
             yPos += itemSpacing;
@@ -528,11 +538,7 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             int currentPage = (satSelectedIndex / itemsPerPage) + 1;
             char pageBuf[32];
             int totalSel = getTotalSelectedSatelliteCount();
-            if (g_selectedCategoryMask != 0) {
-                sprintf(pageBuf, "(%d/%d) [%d/%d]*", currentPage, totalPages, totalSel, MAX_TOTAL_SELECTED_SATS);
-            } else {
-                sprintf(pageBuf, "(%d/%d) [%d/%d]", currentPage, totalPages, totalSel, MAX_TOTAL_SELECTED_SATS);
-            }
+            sprintf(pageBuf, "(%d/%d) [%d/%d]", currentPage, totalPages, totalSel, MAX_TOTAL_SELECTED_SATS);
             canvas->setTextColor(totalSel >= MAX_TOTAL_SELECTED_SATS ? TFT_ORANGE : canvas->color565(110, 150, 180));
             canvas->drawString(pageBuf, 8, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
         }
@@ -1258,9 +1264,16 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                 s_cursorY_recentLaunch.set(targetCursorY);
             }
             
+            // 触发勾选上限物理震动 (Shake/Wiggle)
+            if (g_satLimitShakeTrigger != 0) {
+                s_limitShakeX.shift((float)g_satLimitShakeTrigger);
+                g_satLimitShakeTrigger = 0;
+            }
+            int shakeX = (int)roundf(s_limitShakeX.get());
+
             // 绘制平滑物理磁吸高亮框
             float smoothY = s_cursorY_recentLaunch.get();
-            canvas->fillRoundRect(2, (int)roundf(smoothY), 82, 12, 3, canvas->color565(0, 120, 255));
+            canvas->fillRoundRect(2 + shakeX, (int)roundf(smoothY), 82, 12, 3, canvas->color565(0, 120, 255));
             
             for (int i = 0; i < itemsPerPage && (startIndex + i) < totalItems; i++) {
                 int index = startIndex + i;
@@ -1269,6 +1282,7 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                 } else {
                     canvas->setTextColor(TFT_LIGHTGRAY);
                 }
+                int curShakeX = (index == recentLaunchSelectedIndex) ? shakeX : 0;
                 
                 lockSatMutex();
                 bool itemSel = (index < (int)g_recentLaunches.size()) ? g_recentLaunches[index].selected : false;
@@ -1278,13 +1292,13 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                 unlockSatMutex();
 
                 String checkBox = itemSel ? "[x]" : "[ ]";
-                canvas->drawString(checkBox.c_str(), 4, yPos);
+                canvas->drawString(checkBox.c_str(), 4 + curShakeX, yPos);
                 
                 if (itemIsGroup) {
                     nameStr = nameStr + " (" + String(itemSatCnt) + ")";
                 }
                 if (index == recentLaunchSelectedIndex) {
-                    TextUtils::drawScrollingText(canvas, nameStr.c_str(), 28, yPos, 56, TFT_WHITE);
+                    TextUtils::drawScrollingText(canvas, nameStr.c_str(), 28 + curShakeX, yPos, 56, TFT_WHITE);
                 } else {
                     if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
                     canvas->drawString(nameStr.c_str(), 28, yPos);
