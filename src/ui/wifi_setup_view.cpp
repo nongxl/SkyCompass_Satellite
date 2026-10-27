@@ -4,14 +4,23 @@ WifiSetupView::WifiSetupView()
     : _selectedIndex(0),
       _isScanning(false),
       _isInputtingPassword(false),
-      _passwordLen(0) {
+      _passwordLen(0),
+      _statusMessage(""),
+      _statusMessageUntilMs(0) {
     memset(_passwordBuffer, 0, sizeof(_passwordBuffer));
+}
+
+void WifiSetupView::showStatus(const String& msg, uint32_t durationMs) {
+    _statusMessage = msg;
+    _statusMessageUntilMs = millis() + durationMs;
 }
 
 void WifiSetupView::reset() {
     _isScanning = false;
     _isInputtingPassword = false;
     _passwordLen = 0;
+    _statusMessage = "";
+    _statusMessageUntilMs = 0;
     memset(_passwordBuffer, 0, sizeof(_passwordBuffer));
     _networks.clear();
     _networks.shrink_to_fit();
@@ -70,6 +79,11 @@ void WifiSetupView::draw(LGFX_Sprite* canvas) {
     canvas->setTextColor(TFT_WHITE);
     canvas->drawString(I18N::get(TXT_WIFI_SETUP), 10, 5);
     
+    if (_statusMessage.length() > 0 && millis() < _statusMessageUntilMs) {
+        canvas->setTextColor(TFT_YELLOW);
+        canvas->drawString(_statusMessage.c_str(), width - 95, 5);
+    }
+    
     canvas->setTextColor(TFT_WHITE);
     
     if (_isScanning) {
@@ -99,7 +113,11 @@ void WifiSetupView::draw(LGFX_Sprite* canvas) {
             canvas->drawString(displayStr, 25, 100);
             
             canvas->setTextColor(TFT_LIGHTGRAY);
-            canvas->drawString(I18N::get(TXT_WIFI_HELP_CONN), 10, height - 15);
+            if (I18N::getLanguage() == LANG_ZH) {
+                canvas->drawString("[Enter] 连接  [Fn+Del] 清空  [ESC] 取消", 5, height - 15);
+            } else {
+                canvas->drawString("[Enter] Conn  [Fn+Del] Clear  [ESC] Cancel", 5, height - 15);
+            }
         } else {
             canvas->drawString(I18N::get(TXT_SELECT_NETWORK), 10, 30);
             
@@ -115,25 +133,38 @@ void WifiSetupView::draw(LGFX_Sprite* canvas) {
             
             for (int i = 0; i < itemsPerPage && (startIndex + i) < (int)_networks.size(); i++) {
                 int index = startIndex + i;
+                bool isSaved = HalWifi::hasCredential(_networks[index].ssid);
+                
                 if (index == _selectedIndex) {
                     canvas->fillRect(5, yPos - 2, width - 10, 18, canvas->color565(50, 100, 150));
                     canvas->setTextColor(TFT_WHITE);
                 } else {
-                    canvas->setTextColor(TFT_LIGHTGRAY);
+                    canvas->setTextColor(isSaved ? canvas->color565(120, 220, 120) : TFT_LIGHTGRAY);
                 }
                 
-                String ssidStr = truncateUtf8(_networks[index].ssid, 14);
-                canvas->drawString(ssidStr.c_str(), 10, yPos);
+                String prefix = isSaved ? "* " : "  ";
+                String ssidStr = prefix + truncateUtf8(_networks[index].ssid, 12);
+                canvas->drawString(ssidStr.c_str(), 8, yPos);
                 
                 char rssiStr[16];
-                snprintf(rssiStr, sizeof(rssiStr), "%ddBm", _networks[index].rssi);
+                snprintf(rssiStr, sizeof(rssiStr), "%ddBm", (int)_networks[index].rssi);
                 canvas->drawString(rssiStr, width - 50, yPos);
                 
                 yPos += 20;
             }
             
             canvas->setTextColor(TFT_LIGHTGRAY);
-            canvas->drawString(I18N::get(TXT_WIFI_HELP_SEL), 5, height - 15);
+            bool currentSelectedSaved = (!_networks.empty() && _selectedIndex >= 0 && _selectedIndex < (int)_networks.size()) ?
+                                        HalWifi::hasCredential(_networks[_selectedIndex].ssid) : false;
+            if (currentSelectedSaved) {
+                if (I18N::getLanguage() == LANG_ZH) {
+                    canvas->drawString("[^/v] 选择 [Enter] 连接 [F] 忘记 [ESC] 退出", 5, height - 15);
+                } else {
+                    canvas->drawString("[^/v] Sel [Enter] Conn [F] Forget [ESC] Exit", 5, height - 15);
+                }
+            } else {
+                canvas->drawString(I18N::get(TXT_WIFI_HELP_SEL), 5, height - 15);
+            }
         }
     }
 }
@@ -169,7 +200,11 @@ bool WifiSetupView::handleInput(bool justEsc, bool justTick, bool justBack, bool
                 return true;
             }
         } else if (justBack) {
-            if (_passwordLen > 0) {
+            // Fn+Back 或 Ctrl+Back 或 Opt/Alt+Back 或 del 键 -> 一键清空密码
+            if (keysState.fn || keysState.ctrl || keysState.opt || keysState.del) {
+                memset(_passwordBuffer, 0, sizeof(_passwordBuffer));
+                _passwordLen = 0;
+            } else if (_passwordLen > 0) {
                 _passwordBuffer[--_passwordLen] = '\0';
             }
         } else {
@@ -181,20 +216,34 @@ bool WifiSetupView::handleInput(bool justEsc, bool justTick, bool justBack, bool
             }
         }
     } else {
+        bool justF = false;
+        bool justD = false;
+        for (auto c : keysState.word) {
+            if (c == 'f' || c == 'F') justF = true;
+            if (c == 'd' || c == 'D') justD = true;
+        }
+
         if (justR) {
             _isScanning = true;
+        } else if ((justF || justD) && !_networks.empty() && _selectedIndex >= 0 && _selectedIndex < (int)_networks.size()) {
+            if (HalWifi::hasCredential(_networks[_selectedIndex].ssid)) {
+                String forgottenSsid = _networks[_selectedIndex].ssid;
+                HalWifi::forgetNetwork(forgottenSsid);
+                showStatus((I18N::getLanguage() == LANG_ZH) ? "已忘记网络" : "Network forgotten");
+            }
         } else if (justEnter) {
             if (!_networks.empty() && _selectedIndex >= 0 && _selectedIndex < (int)_networks.size()) {
                 _isInputtingPassword = true;
                 memset(_passwordBuffer, 0, sizeof(_passwordBuffer));
                 _passwordLen = 0;
-                String savedSsid = "", savedPass = "";
-                if (HalWifi::loadCredentials(savedSsid, savedPass) && savedSsid == _networks[_selectedIndex].ssid) {
+                String savedPass = "";
+                if (HalWifi::getCredential(_networks[_selectedIndex].ssid, savedPass)) {
                     strncpy(_passwordBuffer, savedPass.c_str(), sizeof(_passwordBuffer) - 1);
                     _passwordLen = strlen(_passwordBuffer);
                 }
             }
         } else if (justSemi) { // UP arrow
+
             if (!_networks.empty()) {
                 if (_selectedIndex > 0) _selectedIndex--;
                 else _selectedIndex = _networks.size() - 1;
@@ -207,3 +256,4 @@ bool WifiSetupView::handleInput(bool justEsc, bool justTick, bool justBack, bool
     }
     return false;
 }
+

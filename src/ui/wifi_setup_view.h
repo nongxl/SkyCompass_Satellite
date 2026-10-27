@@ -46,6 +46,8 @@ public:
     // 是否正在输入密码
     bool isInputtingPassword() const { return _isInputtingPassword; }
 
+    void showStatus(const String& msg, uint32_t durationMs = 2000);
+
 private:
     static String truncateUtf8(const String& str, size_t maxChars);
 
@@ -55,6 +57,8 @@ private:
     bool _isInputtingPassword;
     char _passwordBuffer[64];
     int _passwordLen;
+    String _statusMessage;
+    uint32_t _statusMessageUntilMs;
 };
 
 #endif // WIFI_SETUP_VIEW_H

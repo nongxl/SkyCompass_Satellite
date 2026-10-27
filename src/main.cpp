@@ -1273,19 +1273,12 @@ void recentLaunchNetworkTaskImpl(bool shouldDisconnectWifi = true) {
     
     // 1. WiFi Connection
     if (!HalWifi::isConnected()) {
-        String ssid = "";
-        String pass = "";
-        int32_t channel = 0;
-        HalWifi::loadCredentials(ssid, pass, &channel);
-        
-        if (ssid.length() > 0) {
-            recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
-            HalWifi::begin(ssid.c_str(), pass.c_str(), channel);
-        }
+        recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
+        HalWifi::autoConnect();
         
         // If auto-connect with saved credentials failed or no credentials saved -> pop up WiFi setup screen
         if (!HalWifi::isConnected()) {
-            if (ssid.length() == 0) {
+            if (HalWifi::getSavedNetworks().empty()) {
                 recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "未找到已知WiFi，请配置" : "WiFi not found, please configure";
                 recentLaunchDownloading = false;
                 recentLaunchDownloadFinishedMs = millis();
@@ -1422,19 +1415,10 @@ void forceRefreshSingleSatTask(void* parameter) {
         bool wifiReady = true;
         // 1. WiFi Connection
         if (!HalWifi::isConnected()) {
-            String ssid = "";
-            String pass = "";
-            HalWifi::loadCredentials(ssid, pass);
-            if (ssid.length() == 0) {
-                downloadErrorMsg = "No WiFi Configured!";
+            downloadErrorMsg = "Connecting WiFi...";
+            if (!HalWifi::autoConnect()) {
+                downloadErrorMsg = (HalWifi::getSavedNetworks().empty()) ? "No WiFi Configured!" : "WiFi Connect Failed!";
                 wifiReady = false;
-            } else {
-                downloadErrorMsg = "Connecting WiFi...";
-                HalWifi::begin(ssid.c_str(), pass.c_str());
-                if (!HalWifi::isConnected()) {
-                    downloadErrorMsg = "WiFi Connect Failed!";
-                    wifiReady = false;
-                }
             }
         }
         
@@ -1485,19 +1469,10 @@ void downloadCustomSatTask(void* parameter) {
         bool wifiReady = true;
         
         if (!wifiWasConnected) {
-            String ssid = "";
-            String pass = "";
-            HalWifi::loadCredentials(ssid, pass);
-            if (ssid.length() == 0) {
-                downloadErrorMsg = "No WiFi Configured!";
+            downloadErrorMsg = "Connecting WiFi...";
+            if (!HalWifi::autoConnect()) {
+                downloadErrorMsg = (HalWifi::getSavedNetworks().empty()) ? "No WiFi Configured!" : "WiFi Connect Failed!";
                 wifiReady = false;
-            } else {
-                downloadErrorMsg = "Connecting WiFi...";
-                HalWifi::begin(ssid.c_str(), pass.c_str());
-                if (!HalWifi::isConnected()) {
-                    downloadErrorMsg = "WiFi Connect Failed!";
-                    wifiReady = false;
-                }
             }
         }
         
@@ -1648,27 +1623,29 @@ void networkTaskImpl(void* parameter) {
         }
         shouldSave = params->shouldSave;
         delete params;
+        
+        // 1. 手动指定网络发起连接
+        HalWifi::begin(ssid.c_str(), pass.c_str(), channel, hasBssid ? bssid : nullptr);
     } else {
-        HalWifi::loadCredentials(ssid, pass, &channel);
+        auto savedList = HalWifi::getSavedNetworks();
+        if (savedList.empty()) {
+            LOG_I("APP", "No WiFi credentials found (first boot / new user). Entering setup mode for user configuration.");
+            wifiGuard.enabled = false;
+            HalWifi::disconnect();
+            delay(50);
+            g_wifiSetupReturnState = appState;
+            appState = STATE_WIFI_SETUP;
+            wifi_setup_view.startScan();
+            g_wifiConnecting = false;
+            g_dataUpdating = false;
+            g_timeSynced = true;
+            triggerPrediction = true;
+            return;
+        }
+        
+        // 自动漫游连接最佳已知网络
+        HalWifi::autoConnect();
     }
-    
-    if (ssid.length() == 0) {
-        LOG_I("APP", "No WiFi credentials found (first boot / new user). Entering setup mode for user configuration.");
-        wifiGuard.enabled = false;
-        HalWifi::disconnect();
-        delay(50);
-        g_wifiSetupReturnState = appState;
-        appState = STATE_WIFI_SETUP;
-        wifi_setup_view.startScan();
-        g_wifiConnecting = false;
-        g_dataUpdating = false;
-        g_timeSynced = true;
-        triggerPrediction = true;
-        return;
-    }
-
-    // 1. Connect WiFi
-    HalWifi::begin(ssid.c_str(), pass.c_str(), channel, hasBssid ? bssid : nullptr);
     
     if (!HalWifi::isConnected()) {
         LOG_I("APP", "WiFi connection failed. Entering setup mode for user configuration.");
@@ -1692,7 +1669,7 @@ void networkTaskImpl(void* parameter) {
         return;
     }
     
-    if (HalWifi::isConnected() && shouldSave) {
+    if (HalWifi::isConnected() && shouldSave && ssid.length() > 0) {
         HalWifi::saveCredentials(ssid, pass, channel);
     }
     

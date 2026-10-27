@@ -13,8 +13,20 @@ struct WiFiNetwork {
     uint8_t bssid[6] = {0};
 };
 
+struct SavedWifiCred {
+    String ssid;
+    String password;
+    int32_t channel;
+
+    SavedWifiCred() : ssid(""), password(""), channel(0) {}
+    SavedWifiCred(const String& s, const String& p, int32_t c = 0)
+        : ssid(s), password(p), channel(c) {}
+};
+
 class HalWifi {
 public:
+    static const int MAX_SAVED_NETWORKS = 8;
+
     static void begin(const char* ssid, const char* password, int32_t channel = 0, const uint8_t* bssid = nullptr);
     static bool isConnected();
     
@@ -30,14 +42,22 @@ public:
     // Scan for available WiFi networks
     static std::vector<WiFiNetwork> scanNetworks();
 
-    // NVS Credentials Management
+    // NVS Multi-Credentials Management
+    static std::vector<SavedWifiCred> getSavedNetworks();
+    static bool hasCredential(const String& ssid);
+    static bool getCredential(const String& ssid, String& outPassword, int32_t* outChannel = nullptr);
     static void saveCredentials(const String& ssid, const String& password, int32_t channel = 0);
+    static bool forgetNetwork(const String& ssid);
     static bool loadCredentials(String& outSsid, String& outPassword, int32_t* outChannel = nullptr);
     
+    // 智能自动漫游连接：匹配周围信号最强的已知网络自动连接
+    static bool autoConnect();
+
     // Disconnect and stop WiFi
     static void disconnect();
 
     // 在开机最早时刻预分配 WiFi STA 驱动与 DMA 缓冲区并立即射频休眠，杜绝内存碎片化引发分配失败
     static void preinit();
 };
+
 

@@ -200,30 +200,235 @@ std::vector<WiFiNetwork> HalWifi::scanNetworks() {
     return networks;
 }
 
-void HalWifi::saveCredentials(const String& ssid, const String& password, int32_t channel) {
+std::vector<SavedWifiCred> HalWifi::getSavedNetworks() {
+    std::vector<SavedWifiCred> list;
     Preferences prefs;
-    prefs.begin("wifi", false); // false = read/write
-    prefs.putString("ssid", ssid);
-    prefs.putString("pass", password);
-    if (channel > 0) {
-        prefs.putInt("ch", channel);
+    
+    // 优先读取多网络配置列表
+    if (prefs.begin("wifi_list", true)) {
+        int count = prefs.getInt("count", 0);
+        if (count > 0) {
+            if (count > MAX_SAVED_NETWORKS) count = MAX_SAVED_NETWORKS;
+            for (int i = 0; i < count; ++i) {
+                String sKey = "s" + String(i);
+                String pKey = "p" + String(i);
+                String cKey = "c" + String(i);
+                String s = prefs.getString(sKey.c_str(), "");
+                String p = prefs.getString(pKey.c_str(), "");
+                int32_t c = prefs.getInt(cKey.c_str(), 0);
+                if (s.length() > 0) {
+                    list.push_back({s, p, c});
+                }
+            }
+        }
+        prefs.end();
     }
-    prefs.end();
-    LOG_I("APP", "WiFi credentials saved to NVS (SSID: %s, Ch: %d).", ssid.c_str(), (int)channel);
+    
+    // 若多网络列表为空，尝试从历史单网络配置（"wifi" 命名空间）无缝迁移
+    if (list.empty()) {
+        if (prefs.begin("wifi", true)) {
+            String oldSsid = prefs.getString("ssid", "");
+            String oldPass = prefs.getString("pass", "");
+            int32_t oldCh = prefs.getInt("ch", 0);
+            prefs.end();
+            
+            if (oldSsid.length() > 0) {
+                list.push_back({oldSsid, oldPass, oldCh});
+                // 自动固化迁移至 wifi_list
+                if (prefs.begin("wifi_list", false)) {
+                    prefs.putInt("count", 1);
+                    prefs.putString("s0", oldSsid);
+                    prefs.putString("p0", oldPass);
+                    prefs.putInt("c0", oldCh);
+                    prefs.end();
+                    LOG_I("APP", "[WiFi] Migrated legacy credential to multi-network storage: '%s'", oldSsid.c_str());
+                }
+            }
+        }
+    }
+    
+    return list;
+}
+
+bool HalWifi::hasCredential(const String& ssid) {
+    if (ssid.length() == 0) return false;
+    auto list = getSavedNetworks();
+    for (const auto& item : list) {
+        if (item.ssid == ssid) return true;
+    }
+    return false;
+}
+
+bool HalWifi::getCredential(const String& ssid, String& outPassword, int32_t* outChannel) {
+    if (ssid.length() == 0) return false;
+    auto list = getSavedNetworks();
+    for (const auto& item : list) {
+        if (item.ssid == ssid) {
+            outPassword = item.password;
+            if (outChannel) {
+                *outChannel = item.channel;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+void HalWifi::saveCredentials(const String& ssid, const String& password, int32_t channel) {
+    if (ssid.length() == 0) return;
+    
+    auto list = getSavedNetworks();
+    // 检查是否已有记录并移除（后续置顶为最新记录）
+    int foundIdx = -1;
+    for (size_t i = 0; i < list.size(); ++i) {
+        if (list[i].ssid == ssid) {
+            foundIdx = (int)i;
+            break;
+        }
+    }
+    
+    SavedWifiCred newEntry = {ssid, password, channel};
+    if (foundIdx >= 0) {
+        list.erase(list.begin() + foundIdx);
+    }
+    list.insert(list.begin(), newEntry); // 置顶为 Most-Recently-Used
+    
+    // 超出最大容量时截断末尾最久未用的配置
+    if ((int)list.size() > MAX_SAVED_NETWORKS) {
+        list.resize(MAX_SAVED_NETWORKS);
+    }
+    
+    // 保存至 wifi_list 命名空间
+    Preferences prefs;
+    if (prefs.begin("wifi_list", false)) {
+        prefs.clear();
+        prefs.putInt("count", (int)list.size());
+        for (size_t i = 0; i < list.size(); ++i) {
+            prefs.putString(("s" + String(i)).c_str(), list[i].ssid);
+            prefs.putString(("p" + String(i)).c_str(), list[i].password);
+            prefs.putInt(("c" + String(i)).c_str(), list[i].channel);
+        }
+        prefs.end();
+    }
+    
+    // 同步更新兼容旧版单一记录（"wifi" 命名空间）
+    if (prefs.begin("wifi", false)) {
+        prefs.putString("ssid", ssid);
+        prefs.putString("pass", password);
+        if (channel > 0) {
+            prefs.putInt("ch", channel);
+        }
+        prefs.end();
+    }
+    
+    LOG_I("APP", "[WiFi] Saved credentials for '%s' (Total saved: %d, Ch: %d)", 
+          ssid.c_str(), (int)list.size(), (int)channel);
+}
+
+bool HalWifi::forgetNetwork(const String& ssid) {
+    if (ssid.length() == 0) return false;
+    auto list = getSavedNetworks();
+    bool removed = false;
+    for (auto it = list.begin(); it != list.end(); ++it) {
+        if (it->ssid == ssid) {
+            list.erase(it);
+            removed = true;
+            break;
+        }
+    }
+    if (!removed) return false;
+    
+    Preferences prefs;
+    if (prefs.begin("wifi_list", false)) {
+        prefs.clear();
+        prefs.putInt("count", (int)list.size());
+        for (size_t i = 0; i < list.size(); ++i) {
+            prefs.putString(("s" + String(i)).c_str(), list[i].ssid);
+            prefs.putString(("p" + String(i)).c_str(), list[i].password);
+            prefs.putInt(("c" + String(i)).c_str(), list[i].channel);
+        }
+        prefs.end();
+    }
+    LOG_I("APP", "[WiFi] Forgot network: '%s' (Remaining: %d)", ssid.c_str(), (int)list.size());
+    return true;
 }
 
 bool HalWifi::loadCredentials(String& outSsid, String& outPassword, int32_t* outChannel) {
-    Preferences prefs;
-    prefs.begin("wifi", true); // true = read-only
-    outSsid = prefs.getString("ssid", "");
-    outPassword = prefs.getString("pass", "");
-    if (outChannel) {
-        *outChannel = prefs.getInt("ch", 0);
+    auto list = getSavedNetworks();
+    if (list.empty()) {
+        outSsid = "";
+        outPassword = "";
+        if (outChannel) *outChannel = 0;
+        return false;
     }
-    prefs.end();
-    
-    return outSsid.length() > 0;
+    outSsid = list[0].ssid;
+    outPassword = list[0].password;
+    if (outChannel) {
+        *outChannel = list[0].channel;
+    }
+    return true;
 }
+
+bool HalWifi::autoConnect() {
+    if (isConnected()) {
+        return true;
+    }
+    
+    auto saved = getSavedNetworks();
+    if (saved.empty()) {
+        LOG_I("APP", "[WiFi] AutoConnect aborted: No saved networks in NVS.");
+        return false;
+    }
+    
+    // 如果只保存了 1 个网络，直接快速直连，无需额外耗时全信道扫描
+    if (saved.size() == 1) {
+        LOG_I("APP", "[WiFi] AutoConnect: Connecting to single saved network '%s'...", saved[0].ssid.c_str());
+        begin(saved[0].ssid.c_str(), saved[0].password.c_str(), saved[0].channel);
+        return isConnected();
+    }
+    
+    // 保存了多个已知网络：先扫描周围 AP，自动漫游连接匹配到且信号最好的已知网络
+    LOG_I("APP", "[WiFi] AutoConnect: %d saved networks found. Scanning environment...", (int)saved.size());
+    auto scanned = scanNetworks();
+    
+    int bestSavedIdx = -1;
+    int bestScanIdx = -1;
+    int32_t bestRssi = -999;
+    
+    for (size_t s = 0; s < scanned.size(); ++s) {
+        for (size_t k = 0; k < saved.size(); ++k) {
+            if (scanned[s].ssid == saved[k].ssid) {
+                // 优先挑选信号最好的已知网络；若信号相近（差在5dB以内），优先尊重最近使用排序
+                if (scanned[s].rssi > bestRssi) {
+                    bestRssi = scanned[s].rssi;
+                    bestSavedIdx = (int)k;
+                    bestScanIdx = (int)s;
+                }
+                break;
+            }
+        }
+    }
+    
+    if (bestSavedIdx >= 0 && bestScanIdx >= 0) {
+        LOG_I("APP", "[WiFi] AutoConnect: Best match '%s' (RSSI: %ddBm, Ch: %d)",
+              saved[bestSavedIdx].ssid.c_str(), (int)bestRssi, (int)scanned[bestScanIdx].channel);
+        begin(saved[bestSavedIdx].ssid.c_str(),
+              saved[bestSavedIdx].password.c_str(),
+              scanned[bestScanIdx].channel,
+              scanned[bestScanIdx].bssid);
+        if (isConnected()) {
+            // 将此连通的网络置顶刷新为最近使用
+            saveCredentials(saved[bestSavedIdx].ssid, saved[bestSavedIdx].password, scanned[bestScanIdx].channel);
+            return true;
+        }
+    }
+    
+    // 若扫描未能命中（例如隐藏 SSID、弱信号漏搜），回退尝试最近一次使用的网络
+    LOG_W("APP", "[WiFi] AutoConnect: No saved AP matched in scan. Fallback to '%s'", saved[0].ssid.c_str());
+    begin(saved[0].ssid.c_str(), saved[0].password.c_str(), saved[0].channel);
+    return isConnected();
+}
+
 
 void HalWifi::disconnect() {
     WiFi.setAutoReconnect(false);
