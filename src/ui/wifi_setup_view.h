@@ -59,6 +59,14 @@ private:
     int _passwordLen;
     String _statusMessage;
     uint32_t _statusMessageUntilMs;
+
+    // 按键去抖与连打状态控制（杜绝点按连击，支持平滑长按连打）
+    std::vector<char> _lastWord;
+    char _activeRepeatChar;
+    uint32_t _charPressStartTime;
+    uint32_t _lastCharRepeatTime;
+    uint32_t _backPressStartTime;
+    uint32_t _lastBackRepeatTime;
 };
 
 #endif // WIFI_SETUP_VIEW_H

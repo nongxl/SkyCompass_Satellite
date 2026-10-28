@@ -6,7 +6,12 @@ WifiSetupView::WifiSetupView()
       _isInputtingPassword(false),
       _passwordLen(0),
       _statusMessage(""),
-      _statusMessageUntilMs(0) {
+      _statusMessageUntilMs(0),
+      _activeRepeatChar(0),
+      _charPressStartTime(0),
+      _lastCharRepeatTime(0),
+      _backPressStartTime(0),
+      _lastBackRepeatTime(0) {
     memset(_passwordBuffer, 0, sizeof(_passwordBuffer));
 }
 
@@ -21,6 +26,12 @@ void WifiSetupView::reset() {
     _passwordLen = 0;
     _statusMessage = "";
     _statusMessageUntilMs = 0;
+    _lastWord.clear();
+    _activeRepeatChar = 0;
+    _charPressStartTime = 0;
+    _lastCharRepeatTime = 0;
+    _backPressStartTime = 0;
+    _lastBackRepeatTime = 0;
     memset(_passwordBuffer, 0, sizeof(_passwordBuffer));
     _networks.clear();
     _networks.shrink_to_fit();
@@ -188,6 +199,7 @@ bool WifiSetupView::handleInput(bool justEsc, bool justTick, bool justBack, bool
         outExit = true;
         return true;
     } else if (_isInputtingPassword) {
+        uint32_t now = millis();
         if (justEnter) {
             if (!_networks.empty() && _selectedIndex >= 0 && _selectedIndex < (int)_networks.size()) {
                 outConnectReq.triggered = true;
@@ -200,19 +212,68 @@ bool WifiSetupView::handleInput(bool justEsc, bool justTick, bool justBack, bool
                 return true;
             }
         } else if (justBack) {
-            // Fn+Back 或 Ctrl+Back 或 Opt/Alt+Back 或 del 键 -> 一键清空密码
-            if (keysState.fn || keysState.ctrl || keysState.opt || keysState.del) {
+            _backPressStartTime = now;
+            _lastBackRepeatTime = now;
+            // Fn+Back 或 Ctrl+Back 或 Opt/Alt+Back -> 一键清空密码
+            if (keysState.fn || keysState.ctrl || keysState.opt) {
                 memset(_passwordBuffer, 0, sizeof(_passwordBuffer));
                 _passwordLen = 0;
             } else if (_passwordLen > 0) {
                 _passwordBuffer[--_passwordLen] = '\0';
             }
+        } else if (keysState.del && _passwordLen > 0) {
+            // 退格键长按连续删除：按住超过 350ms 后，每 70ms 删一个字符
+            if (_backPressStartTime > 0 && (now - _backPressStartTime >= 350) && (now - _lastBackRepeatTime >= 70)) {
+                _lastBackRepeatTime = now;
+                _passwordBuffer[--_passwordLen] = '\0';
+            }
         } else {
+            if (!keysState.del) {
+                _backPressStartTime = 0;
+            }
+
+            // 字符输入去抖与平滑连发：
+            // 单次点按只在按键边沿触发（首次按下立即录入），彻底杜绝单次点按导致的连击
+            // 持续按住超过 400ms 后才进入连发，每 100ms 重复一个字符
+            char currentChar = 0;
             for (auto c : keysState.word) {
-                if (_passwordLen < 63 && c >= ' ' && c <= '~') {
-                    _passwordBuffer[_passwordLen++] = c;
-                    _passwordBuffer[_passwordLen] = '\0';
+                if (c >= ' ' && c <= '~') {
+                    currentChar = c;
+                    break;
                 }
+            }
+
+            if (currentChar != 0) {
+                bool wasPressed = false;
+                for (auto lc : _lastWord) {
+                    if (lc == currentChar) {
+                        wasPressed = true;
+                        break;
+                    }
+                }
+
+                if (!wasPressed) {
+                    // 新按下的字符：立即边沿输入
+                    if (_passwordLen < 63) {
+                        _passwordBuffer[_passwordLen++] = currentChar;
+                        _passwordBuffer[_passwordLen] = '\0';
+                    }
+                    _activeRepeatChar = currentChar;
+                    _charPressStartTime = now;
+                    _lastCharRepeatTime = now;
+                } else if (currentChar == _activeRepeatChar) {
+                    // 持续按住：达到长按门限才连发
+                    if (now - _charPressStartTime >= 400 && now - _lastCharRepeatTime >= 100) {
+                        if (_passwordLen < 63) {
+                            _passwordBuffer[_passwordLen++] = currentChar;
+                            _passwordBuffer[_passwordLen] = '\0';
+                        }
+                        _lastCharRepeatTime = now;
+                    }
+                }
+            } else {
+                _activeRepeatChar = 0;
+                _charPressStartTime = 0;
             }
         }
     } else {
@@ -236,6 +297,10 @@ bool WifiSetupView::handleInput(bool justEsc, bool justTick, bool justBack, bool
                 _isInputtingPassword = true;
                 memset(_passwordBuffer, 0, sizeof(_passwordBuffer));
                 _passwordLen = 0;
+                _lastWord = keysState.word;
+                _activeRepeatChar = 0;
+                _charPressStartTime = 0;
+                _backPressStartTime = 0;
                 String savedPass = "";
                 if (HalWifi::getCredential(_networks[_selectedIndex].ssid, savedPass)) {
                     strncpy(_passwordBuffer, savedPass.c_str(), sizeof(_passwordBuffer) - 1);
@@ -254,6 +319,7 @@ bool WifiSetupView::handleInput(bool justEsc, bool justTick, bool justBack, bool
             }
         }
     }
+    _lastWord = keysState.word;
     return false;
 }
 
