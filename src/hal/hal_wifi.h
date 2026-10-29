@@ -55,6 +55,7 @@ public:
 
     // Disconnect and stop WiFi
     static void disconnect();
+    static bool isConnectAborted();
 
     // 在开机最早时刻预分配 WiFi STA 驱动与 DMA 缓冲区并立即射频休眠，杜绝内存碎片化引发分配失败
     static void preinit();

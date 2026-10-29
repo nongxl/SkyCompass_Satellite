@@ -253,6 +253,9 @@ uint32_t downloadFinishedMs = 0;
 AppState g_wifiSetupReturnState = STATE_SAT_SELECT;
 
 void exitWiFiSetupScreen() {
+    if (g_wifiSetupReturnState == STATE_WIFI_SETUP) {
+        g_wifiSetupReturnState = STATE_MAIN;
+    }
     appState = g_wifiSetupReturnState;
     wifi_setup_view.reset();
     if (!HalWifi::isConnected()) {
@@ -1226,7 +1229,11 @@ struct WiFiDisconnectGuard {
     WiFiDisconnectGuard(bool en = true) : enabled(en) {}
     ~WiFiDisconnectGuard() {
         if (enabled) {
-            LOG_I("APP", "Network task complete. Turning off WiFi to reclaim memory.");
+            if (appState != STATE_WIFI_SETUP) {
+                LOG_I("APP", "Network task complete. Turning off WiFi to reclaim memory.");
+                HalWifi::disconnect();
+            }
+            if (false)
             HalWifi::disconnect();
         }
     }
@@ -1285,7 +1292,12 @@ void recentLaunchNetworkTaskImpl(bool shouldDisconnectWifi = true) {
                 wifiGuard.enabled = false;
                 HalWifi::disconnect();
                 delay(50);
-                g_wifiSetupReturnState = STATE_SAT_SELECT;
+                if (appState != STATE_WIFI_SETUP && !HalWifi::isConnectAborted()) {
+                    g_wifiSetupReturnState = STATE_SAT_SELECT;
+                    appState = STATE_WIFI_SETUP;
+                    wifi_setup_view.startScan();
+                }
+                return;
                 appState = STATE_WIFI_SETUP;
                 wifi_setup_view.startScan();
                 return;
@@ -1631,6 +1643,19 @@ void networkTaskImpl(void* parameter) {
         if (savedList.empty()) {
             LOG_I("APP", "No WiFi credentials found (first boot / new user). Entering setup mode for user configuration.");
             wifiGuard.enabled = false;
+            if (appState != STATE_WIFI_SETUP && !HalWifi::isConnectAborted()) {
+                HalWifi::disconnect();
+                delay(50);
+                g_wifiSetupReturnState = appState;
+                appState = STATE_WIFI_SETUP;
+                wifi_setup_view.startScan();
+            }
+            g_wifiConnecting = false;
+            g_dataUpdating = false;
+            g_timeSynced = true;
+            triggerPrediction = true;
+            return;
+            wifiGuard.enabled = false;
             HalWifi::disconnect();
             delay(50);
             g_wifiSetupReturnState = appState;
@@ -1659,7 +1684,14 @@ void networkTaskImpl(void* parameter) {
         triggerPrediction = true;
 
         wifiGuard.enabled = false;
-        HalWifi::disconnect(); // 失败后在此彻底关闭驱动并进入 WIFI_OFF，释放射频与协议栈内存
+        if (appState != STATE_WIFI_SETUP && !HalWifi::isConnectAborted()) {
+            HalWifi::disconnect(); // 失败后在此彻底关闭驱动并进入 WIFI_OFF，释放射频与协议栈内存
+            delay(50);
+            g_wifiSetupReturnState = appState;
+            appState = STATE_WIFI_SETUP;
+            wifi_setup_view.startScan();
+        }
+        return;
         delay(50);
 
         // 检测不到可连接的 WiFi 时自动弹出网络配置界面供用户选择是否连接
@@ -1816,6 +1848,7 @@ void networkTaskImpl(void* parameter) {
             WiFiClient sharedClient;
             
             for (int k = 0; k < totalStale; k++) {
+                if (!HalWifi::isConnected() || appState == STATE_WIFI_SETUP || HalWifi::isConnectAborted()) break;
                 int i = staleIdx[k];
                 uint32_t noradId = g_satellites[i].noradId;
                 
@@ -2959,6 +2992,15 @@ void loop() {
         }
     }
 
+    // 1.5 锁相追踪每次 current_unix 秒跳变的精确毫秒起点，确保亚秒级连续模拟时间严格单调递增，消除每秒回跳抽搐
+    static uint32_t s_lastObservedUnix = 0;
+    static unsigned long s_unixSecondStartMs = 0;
+    if (current_unix != s_lastObservedUnix) {
+        s_lastObservedUnix = current_unix;
+        s_unixSecondStartMs = millis();
+    }
+    double g_subsecondFraction = (double)min(999UL, millis() - s_unixSecondStartMs) / 1000.0;
+
     // 2. GNSS 状态处理与授时同步引擎（全局执行，不受任何界面 return 阻断）
     if (gnss && (lastTimeAdjustMillis == 0)) {
         gnss->update();
@@ -3150,7 +3192,7 @@ void loop() {
         bool justW = false;
         bool justLongW = false;
 
-        bool allowLongPressW = !(appState == STATE_WIFI_SETUP && wifi_setup_view.isInputtingPassword())
+        bool allowLongPressW = (appState != STATE_WIFI_SETUP)
                                && !g_showCategoryFilterDialog;
 
         if (!allowLongPressW) {
@@ -3206,7 +3248,7 @@ void loop() {
                 earth_renderer->setVisualMode(nextMode);
             }
             bool justZero = (M5Cardputer.Keyboard.keysState().word.size() > 0 && M5Cardputer.Keyboard.keysState().word[0] == '0');
-            RfConsoleView::getInstance().handleKeys(justSemi, justDot, justEnter, justD, (justEsc || justTick), justT, justComma, justSlash, (justZero || justR), justY, justN, timeMachineOffset);
+            RfConsoleView::getInstance().handleKeys(justSemi, justDot, justEnter, justD, (justEsc || justTick), justT, justComma, justSlash, (justZero || justR), justY, justN, timeMachineOffset, justBracketL, justBracketR);
             if (!RfConsoleView::getInstance().isActive()) {
                 // 用户按 Esc 退出了 RF 控制台，立即复位 Canvas 全局状态，防止污染主界面文字排版
                 auto c = earth_renderer->getCanvas();
@@ -3219,10 +3261,10 @@ void loop() {
                 g_smoothTimeMachineOffset.set((float)timeMachineOffset);
 
                 // 2. 亚秒级连续模拟时间与 GMST 解算 (确保 RF 控制台、天球雷达与浑仪舵机时间基准严格一致)
-                double subsecondFraction = (double)(millis() % 1000) / 1000.0;
+                double subsecondFraction = g_subsecondFraction;
                 double continuousSimTime = (double)current_unix + subsecondFraction + (double)timeMachineOffset;
                 double current_gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(continuousSimTime));
-                uint32_t currentSimTime = (uint32_t)round(continuousSimTime);
+                uint32_t currentSimTime = (uint32_t)((int64_t)current_unix + (int64_t)timeMachineOffset);
 
                 // 3. 更新已选卫星空间位置，确保射频雷达与舵机云台解算均基于最新空间坐标
                 updateSelectedSatRealtimePositions(continuousSimTime, current_gmst);
@@ -3931,6 +3973,9 @@ void loop() {
                     if (shouldExit) {
                         exitWiFiSetupScreen();
                     } else if (req.triggered) {
+                        if (g_wifiSetupReturnState == STATE_WIFI_SETUP) {
+                            g_wifiSetupReturnState = STATE_MAIN;
+                        }
                         appState = g_wifiSetupReturnState;
                         manualWifiToggle = true; // Stay connected since user explicitly set it up
                         NetworkParams* params = new NetworkParams();
@@ -4488,6 +4533,12 @@ void loop() {
             if (wifi_setup_view.isScanning()) {
                 NetworkActiveGuard netGuard; // 保护扫描期间不被 predictorTask 抢占争夺内存
                 wifi_setup_view.performScan();
+                M5Cardputer.update();
+                lastEsc = M5Cardputer.Keyboard.isKeyPressed(27);
+                lastTick = M5Cardputer.Keyboard.isKeyPressed('`');
+                lastBack = M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE);
+                lastEnter = M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER);
+                lastW = M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W');
                 // 扫描完成后释放了 WiFi 堆栈缓冲区，唤醒推算任务重新计算
                 if (!predictionsReady) {
                     triggerPrediction = true;
@@ -4512,9 +4563,9 @@ void loop() {
         }
         
         // 亚秒级连续模拟时间与弹簧时间平滑引擎 (消除每秒跳帧顿挫与时间机器跳跃)
-        double subsecondFraction = (double)(millis() % 1000) / 1000.0;
+        double subsecondFraction = g_subsecondFraction;
         double continuousSimTime = (double)current_unix + subsecondFraction + (double)g_smoothTimeMachineOffset.get();
-        uint32_t simTime = (uint32_t)round(continuousSimTime);
+        uint32_t simTime = (uint32_t)((int64_t)current_unix + (int64_t)round(g_smoothTimeMachineOffset.get()));
         double current_gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(continuousSimTime));
 
         // Target camera values for smooth transitions

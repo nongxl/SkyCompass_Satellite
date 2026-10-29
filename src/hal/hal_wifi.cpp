@@ -3,7 +3,14 @@
 #include <esp_wifi.h>
 #include <time.h>
 
+static volatile bool s_abortConnect = false;
+
+bool HalWifi::isConnectAborted() {
+    return s_abortConnect;
+}
+
 void HalWifi::begin(const char* ssid, const char* password, int32_t channel, const uint8_t* bssid) {
+    s_abortConnect = false;
     if (ssid == nullptr || strlen(ssid) == 0) {
         LOG_I("APP", "WiFi SSID is empty, skipping WiFi connection.");
         return;
@@ -76,8 +83,11 @@ void HalWifi::begin(const char* ssid, const char* password, int32_t channel, con
     // 6. 平滑等待连接与 DHCP 分配，最多等 24 次（12 秒）
     int retries = 0;
     bool fallbackToAllChannel = false;
-    while (WiFi.status() != WL_CONNECTED && retries < 24) {
-        delay(500);
+    while (WiFi.status() != WL_CONNECTED && retries < 24 && !s_abortConnect) {
+        for (int w = 0; w < 10 && !s_abortConnect && WiFi.status() != WL_CONNECTED; ++w) {
+            delay(50);
+        }
+        if (s_abortConnect) break;
         LOG_I("APP", "[WiFi] Connecting to '%s'... (%d/24)", ssid, retries + 1);
         retries++;
         
@@ -118,8 +128,15 @@ void HalWifi::begin(const char* ssid, const char* password, int32_t channel, con
             }
         }
     } else {
-        LOG_I("APP", "\nWiFi Connection Failed (Timeout).");
-        disconnect();
+        if (s_abortConnect) {
+            LOG_I("APP", "\nWiFi Connection Aborted by user.");
+        } else {
+            LOG_I("APP", "\nWiFi Connection Failed (Timeout).");
+    
+            disconnect();
+            s_abortConnect = false;
+        }
+
     }
 }
 
@@ -137,13 +154,22 @@ bool HalWifi::syncNTPTime(long gmtOffset_sec, int daylightOffset_sec) {
     
     struct tm timeinfo;
     int retries = 0;
-    while (!getLocalTime(&timeinfo) && retries < 6) {
-        delay(500);
+    while (!getLocalTime(&timeinfo) && retries < 6 && !s_abortConnect) {
+        for (int w = 0; w < 10 && !s_abortConnect; ++w) {
+            delay(50);
+        }
+        if (false) {
+        for (int w = 0; w < 10 && !s_abortConnect && WiFi.status() != WL_CONNECTED; ++w) {
+            delay(50);
+        }
+        if (s_abortConnect) break;
+        }
+        if (s_abortConnect) break;
         log_i(".");
         retries++;
     }
     
-    if (retries < 6) {
+    if (retries < 6 && !s_abortConnect) {
         LOG_I("APP", "\nTime synced successfully!");
         log_i("Current time: %s", asctime(&timeinfo));
         return true;
@@ -370,6 +396,7 @@ bool HalWifi::loadCredentials(String& outSsid, String& outPassword, int32_t* out
 }
 
 bool HalWifi::autoConnect() {
+    s_abortConnect = false;
     if (isConnected()) {
         return true;
     }
@@ -390,6 +417,7 @@ bool HalWifi::autoConnect() {
     // 保存了多个已知网络：先扫描周围 AP，自动漫游连接匹配到且信号最好的已知网络
     LOG_I("APP", "[WiFi] AutoConnect: %d saved networks found. Scanning environment...", (int)saved.size());
     auto scanned = scanNetworks();
+    if (s_abortConnect) return false;
     
     int bestSavedIdx = -1;
     int bestScanIdx = -1;
@@ -424,6 +452,7 @@ bool HalWifi::autoConnect() {
     }
     
     // 若扫描未能命中（例如隐藏 SSID、弱信号漏搜），回退尝试最近一次使用的网络
+    if (s_abortConnect) return false;
     LOG_W("APP", "[WiFi] AutoConnect: No saved AP matched in scan. Fallback to '%s'", saved[0].ssid.c_str());
     begin(saved[0].ssid.c_str(), saved[0].password.c_str(), saved[0].channel);
     return isConnected();
@@ -431,6 +460,7 @@ bool HalWifi::autoConnect() {
 
 
 void HalWifi::disconnect() {
+    s_abortConnect = true;
     WiFi.setAutoReconnect(false);
     WiFi.disconnect(false, false);
     delay(20);

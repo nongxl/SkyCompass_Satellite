@@ -20,6 +20,8 @@ static SpringValue s_rfCursorY(73.0f, SpringConfig::Default);
 static SpringValue s_detailModalScale(0.0f, SpringConfig(0.24f, 0.80f));
 // 删除确认弹窗缩放物理动效 (0.0 -> 1.0, 阻尼 0.80)
 static SpringValue s_deleteModalScale(0.0f, SpringConfig(0.24f, 0.80f));
+// 详情弹窗内容翻页滚动物理弹簧 (Default: 0.29s, 0.75 阻尼比，具有 lilt 丝滑回弹)
+static SpringValue s_detailScrollY(0.0f, SpringConfig::Default);
 // 记录上次的数据包总数，用于检测新包入队物理震颤动效
 static size_t s_lastTotalPackets = 0;
 // 边界撞墙回弹触发器 (施加冲量)
@@ -29,6 +31,9 @@ void RfConsoleView::resetAnimations() {
     s_rfCursorY.jump(73.0f);
     s_detailModalScale.jump(0.0f);
     s_deleteModalScale.jump(0.0f);
+    s_detailScrollY.jump(0.0f);
+    _detailScrollTarget = 0;
+    _detailMaxScroll = 0;
     s_lastTotalPackets = RadioManager::getInstance().getTotalPacketsCount();
     s_boundaryBump = 0;
 }
@@ -231,7 +236,7 @@ static const char* getCompass8Dir(float az) {
 
 void RfConsoleView::handleKeys(bool justSemi, bool justDot, bool justEnter, bool justD, bool justEsc, 
                                 bool justT, bool justComma, bool justSlash, bool justZero, bool justY, bool justN,
-                                int32_t& timeOffset) {
+                                int32_t& timeOffset, bool justBracketL, bool justBracketR) {
     if (justEsc) {
         if (_showDeleteModal) {
             _showDeleteModal = false;
@@ -277,6 +282,23 @@ void RfConsoleView::handleKeys(bool justSemi, bool justDot, bool justEnter, bool
     int count = (int)packets.size();
 
     if (_showDetailModal) {
+        if (justBracketL || justSemi) {
+            if (_detailScrollTarget <= 0) {
+                _detailScrollTarget = 0;
+                s_detailScrollY.shift(-12.0f); // 触顶边缘 lilt 弹性下冲回弹
+            } else {
+                _detailScrollTarget -= 52;
+                if (_detailScrollTarget < 0) _detailScrollTarget = 0;
+            }
+        } else if (justBracketR || justDot) {
+            if (_detailScrollTarget >= _detailMaxScroll) {
+                _detailScrollTarget = _detailMaxScroll;
+                s_detailScrollY.shift(12.0f); // 触底边缘 lilt 弹性上冲回弹
+            } else {
+                _detailScrollTarget += 52;
+                if (_detailScrollTarget > _detailMaxScroll) _detailScrollTarget = _detailMaxScroll;
+            }
+        }
         if (justEnter) {
             _showDetailModal = false;
         }
@@ -303,6 +325,9 @@ void RfConsoleView::handleKeys(bool justSemi, bool justDot, bool justEnter, bool
         }
     } else if (justEnter && count > 0) {
         _showDetailModal = true;
+        _detailScrollTarget = 0;
+        _detailMaxScroll = 0;
+        s_detailScrollY.jump(0.0f);
     } else if (justD && count > 0) {
         _showDeleteModal = true;
     }
@@ -918,6 +943,118 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
             canvas->setTextColor(canvas->color565(0, 220, 255), canvas->color565(12, 20, 32));
             canvas->drawString(I18N::get(TXT_RF_MODAL_TITLE), modalX + 6, modalY + 3);
 
+            struct ModalLineItem {
+                String text;
+                uint16_t color;
+                int height;
+            };
+            std::vector<ModalLineItem> lines;
+
+            lines.push_back({sel.decoded.satName + " [" + sel.decoded.frameType + "]", 0xFFFF, 13});
+
+            char rfLine[64];
+            snprintf(rfLine, sizeof(rfLine), "%.3fM | RSSI:%.0f | SNR:%.1f | %dB",
+                    sel.raw.freqMHz, sel.raw.rssi, sel.raw.snr, (int)sel.raw.length);
+            lines.push_back({String(rfLine), 0x07E0, 13});
+
+            for (size_t f = 0; f < sel.decoded.fields.size(); ) {
+                String item1 = sel.decoded.fields[f].key + ":" + sel.decoded.fields[f].value + sel.decoded.fields[f].unit;
+                if (f + 1 < sel.decoded.fields.size()) {
+                    String item2 = sel.decoded.fields[f+1].key + ":" + sel.decoded.fields[f+1].value + sel.decoded.fields[f+1].unit;
+                    String combined = item1 + "  " + item2;
+                    if (canvas->textWidth(combined.c_str()) <= baseModalW - 18) {
+                        lines.push_back({combined, 0xFFE0, 13});
+                        f += 2;
+                        continue;
+                    }
+                }
+                if (item1.length() > 32) {
+                    for (size_t p = 0; p < item1.length(); p += 32) {
+                        size_t endP = (p + 32 < item1.length()) ? (p + 32) : item1.length();
+                        lines.push_back({item1.substring(p, endP), 0xFFE0, 13});
+                    }
+                } else {
+                    lines.push_back({item1, 0xFFE0, 13});
+                }
+                f += 1;
+            }
+
+            lines.push_back({String(I18N::get(TXT_RF_RAW_HEX)), 0xC618, 12});
+            for (size_t p = 0; p < sel.decoded.rawHex.length(); p += 30) {
+                size_t endP = (p + 30 < sel.decoded.rawHex.length()) ? (p + 30) : sel.decoded.rawHex.length();
+                String hLine = sel.decoded.rawHex.substring(p, endP);
+                hLine.trim();
+                if (hLine.length() > 0) {
+                    lines.push_back({hLine, 0x7BEF, 11});
+                }
+            }
+
+            if (sel.decoded.rawAscii.length() > 0) {
+                lines.push_back({String(I18N::getLanguage() == LANG_ZH ? "ASCII 载荷:" : "ASCII Payload:"), 0xC618, 12});
+                for (size_t p = 0; p < sel.decoded.rawAscii.length(); p += 32) {
+                    size_t endP = (p + 32 < sel.decoded.rawAscii.length()) ? (p + 32) : sel.decoded.rawAscii.length();
+                    lines.push_back({sel.decoded.rawAscii.substring(p, endP), 0x7BEF, 11});
+                }
+            }
+
+            int totalContentH = 0;
+            for (const auto& ln : lines) {
+                totalContentH += ln.height;
+            }
+
+            int baseViewH = baseModalH - 22;
+            _detailMaxScroll = (totalContentH > baseViewH) ? (totalContentH - baseViewH + 4) : 0;
+            if (_detailScrollTarget > _detailMaxScroll) _detailScrollTarget = _detailMaxScroll;
+            if (_detailScrollTarget < 0) _detailScrollTarget = 0;
+
+            s_detailScrollY.set((float)_detailScrollTarget);
+            int scrollY = (int)roundf(s_detailScrollY.get());
+
+            if (_detailMaxScroll > 0) {
+                int pageStep = 52;
+                int totalPages = (_detailMaxScroll + pageStep - 1) / pageStep + 1;
+                int curPage = (_detailScrollTarget + pageStep / 2) / pageStep + 1;
+                if (curPage > totalPages) curPage = totalPages;
+                char pgBuf[24];
+                snprintf(pgBuf, sizeof(pgBuf), "[ / ] %d/%d", curPage, totalPages);
+                canvas->setTextDatum(TR_DATUM);
+                canvas->setTextColor(0x7BEF, canvas->color565(12, 20, 32));
+                canvas->drawString(pgBuf, modalX + modalW - 6, modalY + 3);
+                canvas->setTextDatum(TL_DATUM);
+            }
+
+            int viewTop = modalY + 18;
+            int viewH = modalH - 20;
+            canvas->setClipRect(modalX + 2, viewTop, modalW - 4, viewH);
+
+            int relY = 0;
+            for (const auto& ln : lines) {
+                int drawY = viewTop + 2 + relY - scrollY;
+                if (drawY + ln.height >= viewTop && drawY <= viewTop + viewH) {
+                    canvas->setTextColor(ln.color, canvas->color565(12, 20, 32));
+                    canvas->drawString(ln.text.c_str(), modalX + 6, drawY);
+                }
+                relY += ln.height;
+            }
+
+            // 右侧滚动进度条 (随 lilt 物理弹簧与越界回弹实时联动)
+            if (_detailMaxScroll > 0 && viewH > 12) {
+                int trackX = modalX + modalW - 4;
+                int trackY = viewTop + 2;
+                int trackH = viewH - 4;
+                canvas->drawFastVLine(trackX, trackY, trackH, canvas->color565(25, 42, 62));
+                int thumbH = max(10, (trackH * baseViewH) / max(1, totalContentH));
+                if (thumbH > trackH) thumbH = trackH;
+                float normScroll = (float)scrollY / (float)_detailMaxScroll;
+                if (normScroll < 0.0f) normScroll = 0.0f;
+                if (normScroll > 1.0f) normScroll = 1.0f;
+                int thumbY = trackY + (int)roundf(normScroll * (float)(trackH - thumbH));
+                canvas->fillRect(trackX, thumbY, 2, thumbH, canvas->color565(0, 190, 255));
+            }
+
+            canvas->clearClipRect();
+            if (false) {
+
             canvas->setClipRect(modalX + 2, modalY + 18, modalW - 4, modalH - 20);
             int curY = modalY + 20;
 
@@ -954,6 +1091,7 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
             curY += 10;
             if (hexLine2.length() > 0) {
                 canvas->drawString(hexLine2.c_str(), modalX + 6, curY);
+            }
             }
 
             canvas->clearClipRect();

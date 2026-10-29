@@ -540,7 +540,17 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             int totalSel = getTotalSelectedSatelliteCount();
             sprintf(pageBuf, "(%d/%d) [%d/%d]", currentPage, totalPages, totalSel, MAX_TOTAL_SELECTED_SATS);
             canvas->setTextColor(totalSel >= MAX_TOTAL_SELECTED_SATS ? TFT_ORANGE : canvas->color565(110, 150, 180));
-            canvas->drawString(pageBuf, 8, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
+            int pageX = 8;
+            if (pageX + canvas->textWidth(pageBuf) > 83) {
+                sprintf(pageBuf, "(%d/%d)[%d/%d]", currentPage, totalPages, totalSel, MAX_TOTAL_SELECTED_SATS);
+                if (pageX + canvas->textWidth(pageBuf) > 83) {
+                    pageX = 4;
+                    if (pageX + canvas->textWidth(pageBuf) > 83) {
+                        sprintf(pageBuf, "%d/%d [%d/%d]", currentPage, totalPages, totalSel, MAX_TOTAL_SELECTED_SATS);
+                    }
+                }
+            }
+            canvas->drawString(pageBuf, pageX, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
         }
         
         // Right Panel (Description)
@@ -1317,7 +1327,17 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                 int totalSel = getTotalSelectedSatelliteCount();
                 sprintf(pageBuf, "(%d/%d) [%d/%d]", currentPage, totalPages, totalSel, MAX_TOTAL_SELECTED_SATS);
                 canvas->setTextColor(totalSel >= MAX_TOTAL_SELECTED_SATS ? TFT_ORANGE : canvas->color565(110, 150, 180));
-                canvas->drawString(pageBuf, 8, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
+                int pageX = 8;
+            if (pageX + canvas->textWidth(pageBuf) > 83) {
+                sprintf(pageBuf, "(%d/%d)[%d/%d]", currentPage, totalPages, totalSel, MAX_TOTAL_SELECTED_SATS);
+                if (pageX + canvas->textWidth(pageBuf) > 83) {
+                    pageX = 4;
+                    if (pageX + canvas->textWidth(pageBuf) > 83) {
+                        sprintf(pageBuf, "%d/%d [%d/%d]", currentPage, totalPages, totalSel, MAX_TOTAL_SELECTED_SATS);
+                    }
+                }
+            }
+            canvas->drawString(pageBuf, pageX, showBanner ? (bottomLimit - 12) : (bottomLimit - 13));
             }
             
             canvas->drawFastVLine(85, 20, bottomLimit - 20, TFT_DARKGREY);

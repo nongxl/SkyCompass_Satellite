@@ -15,7 +15,7 @@ public:
     // 键盘交互处理 (支持 T 键测试注入，, / 键微调时间轴校准，0/R 键复位，d/y/n 键删除数据)
     void handleKeys(bool justSemi, bool justDot, bool justEnter, bool justD, bool justEsc, 
                     bool justT, bool justComma, bool justSlash, bool justZero, bool justY, bool justN,
-                    int32_t& timeOffset);
+                    int32_t& timeOffset, bool justBracketL = false, bool justBracketR = false);
 
     // 查询当前控制台是否处于激活显示状态
     bool isActive() const { return _isActive; }
@@ -32,6 +32,8 @@ private:
     int _selectedPacketIndex = 0;
     bool _showDetailModal = false;
     bool _showDeleteModal = false;
+    int _detailScrollTarget = 0;
+    int _detailMaxScroll = 0;
 
     // 瀑布能量图历史采样点 (宽 240px，每 2px 一个采样点，共 120 个采样)
     static const int WATERFALL_POINTS = 120;
