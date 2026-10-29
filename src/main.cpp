@@ -1039,11 +1039,11 @@ bool fetchSatNogsFrequency(int noradId, String& outDl, String& outUl, String& ou
     PredictorTaskSuspendGuard predGuard;
     delay(50);
     WiFiClient client;
-    client.setTimeout(4000);
+    client.setTimeout(3);
     
     HTTPClient http;
-    http.setTimeout(4000);
-    http.setConnectTimeout(4000);
+    http.setTimeout(3500);
+    http.setConnectTimeout(3500);
     
     String url = "http://db.satnogs.org/api/transmitters/?format=json&norad_cat_id=" + String(noradId);
     http.begin(client, url);
@@ -1097,7 +1097,7 @@ void fetchFrequencies() {
     delay(50);
     std::unique_ptr<WiFiClient> client(new WiFiClient());
     if (!client) return;
-    client->setTimeout(2000);
+    client->setTimeout(2);
     
     std::unique_ptr<HTTPClient> http(new HTTPClient());
     if (!http) return;
@@ -1314,9 +1314,6 @@ void recentLaunchNetworkTaskImpl(bool shouldDisconnectWifi = true) {
                     wifi_setup_view.startScan();
                 }
                 return;
-                appState = STATE_WIFI_SETUP;
-                wifi_setup_view.startScan();
-                return;
             } else {
                 markRecentLaunchPendingReboot();
                 recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "内存碎片，请重启设备" : "Low memory, please restart";
@@ -1441,7 +1438,7 @@ void recentLaunchNetworkTaskImpl(bool shouldDisconnectWifi = true) {
         } else if (recentLaunchErrorMsg.length() == 0 || recentLaunchErrorMsg == I18N::get(TXT_REFRESHING_GP)) {
             recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "下载失败，请重试" : "Download Failed!";
         }
-        LOG_I("RECENT_LAUNCH", "Celestrak JSON fetch failed");
+        LOG_I("RECENT_LAUNCH", "Celestrak GP fetch failed");
         recentLaunchDownloading = false;
         recentLaunchDownloadFinishedMs = millis();
     }

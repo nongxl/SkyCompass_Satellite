@@ -397,8 +397,10 @@ public:
                     sprintf(idStr, "\"NORAD_CAT_ID\":%u", (unsigned int)curr.catalogNumber);
                     char idStr2[32];
                     sprintf(idStr2, "\"NORAD_CAT_ID\":\"%u\"", (unsigned int)curr.catalogNumber);
+                    char idStrCsv[24];
+                    sprintf(idStrCsv, ",%u,", (unsigned int)curr.catalogNumber);
                     
-                    if (line.indexOf(idStr) != -1 || line.indexOf(idStr2) != -1) {
+                    if (line.indexOf(idStr) != -1 || line.indexOf(idStr2) != -1 || line.indexOf(idStrCsv) != -1) {
                         OrbitRecord tempRecord;
                         if (parser.parse(line, tempRecord)) {
                             if (tempRecord.catalogNumber == curr.catalogNumber) {
