@@ -232,11 +232,18 @@ struct PredictorTaskSuspendGuard {
     NetworkActiveGuard netActiveGuard;
     PredictorTaskSuspendGuard() {
         LOG_I("APP", "Predictor task cooperative yield for network ops");
+        int waitTicks = 0;
+        while (g_orbitCalculating && waitTicks < 35) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            waitTicks++;
+        }
     }
     ~PredictorTaskSuspendGuard() {
         LOG_I("APP", "Predictor task cooperative resume after network ops");
     }
 };
+
+std::vector<String> g_savedRecentLaunchSelBatchIds;
 
 std::vector<RecentLaunchItem> g_pendingRecentLaunches;
 volatile bool g_recentLaunchesPending = false;
@@ -745,11 +752,10 @@ void predictorTask(void* parameter) {
             }
             
             if (triggerPrediction || cancelPrediction || g_networkActive) {
-                if (cancelPrediction) {
-                    cancelPrediction = false;
-                    g_orbitCalculating = false;
-                    g_currentPredictingBaseTime = 0;
-                }
+                if (g_networkActive) triggerPrediction = true;
+                cancelPrediction = false;
+                g_orbitCalculating = false;
+                g_currentPredictingBaseTime = 0;
                 continue;
             }
             
@@ -934,11 +940,10 @@ void predictorTask(void* parameter) {
 
         
         if (triggerPrediction || cancelPrediction || g_networkActive) {
-            if (cancelPrediction) {
-                cancelPrediction = false;
-                g_orbitCalculating = false; // 强行熄灭 Chain Mono 的计算动画
-                g_currentPredictingBaseTime = 0;
-            }
+            if (g_networkActive) triggerPrediction = true;
+            cancelPrediction = false;
+            g_orbitCalculating = false; // 强行熄灭 Chain Mono 的计算动画
+            g_currentPredictingBaseTime = 0;
             continue;
         }
         
@@ -1278,6 +1283,17 @@ void recentLaunchNetworkTaskImpl(bool shouldDisconnectWifi = true) {
     recentLaunchDownloadSuccess = false;
     recentLaunchErrorMsg = "";
     
+    // 提前释放过境预测缓存与三级子列表缓存（联网同步完成后 predictorTask 会自动重新计算），立省 ~6KB 连续堆内存供 WiFi/lwIP 使用
+    g_level3Objects.clear();
+    g_level3Objects.shrink_to_fit();
+    lockPassMutex();
+    std::vector<PassEvent>().swap(recommendedPasses);
+    std::vector<TreeItem>().swap(displayTree);
+    lastPredictionBaseTime = 0;
+    predictionsReady = false;
+    unlockPassMutex();
+    triggerPrediction = true;
+
     // 1. WiFi Connection
     if (!HalWifi::isConnected()) {
         recentLaunchErrorMsg = I18N::get(TXT_CONNECTING_WIFI);
@@ -1355,6 +1371,17 @@ void recentLaunchNetworkTaskImpl(bool shouldDisconnectWifi = true) {
     
     if (!success) {
         recentLaunchErrorMsg = I18N::get(TXT_REFRESHING_GP);
+        // 备份用户已勾选的批次 ID，并暂时释放内存中的旧近期发射列表（立省 ~10KB 堆内存，彻底消除 TCP 乱序队列 OOM 死锁）
+        lockSatMutex();
+        g_savedRecentLaunchSelBatchIds.clear();
+        for (const auto& item : g_recentLaunches) {
+            if (item.selected) {
+                g_savedRecentLaunchSelBatchIds.push_back(item.batchId);
+            }
+        }
+        std::vector<RecentLaunchItem>().swap(g_recentLaunches);
+        unlockSatMutex();
+
         delay(200); // Give ESP32 stack and heap a brief breathing room to reclaim socket memory
         std::vector<RecentLaunchItem> dummy;
         int httpCode = 0;
@@ -1366,6 +1393,22 @@ void recentLaunchNetworkTaskImpl(bool shouldDisconnectWifi = true) {
                 timeFile.close();
             }
         } else {
+            // 下载失败时从本地快照恢复原有列表与勾选状态，确保界面数据不丢失
+            std::vector<RecentLaunchItem> restored;
+            if (OrbitDataProvider::loadRecentLaunchesMeta(restored) && !restored.empty()) {
+                for (auto& item : restored) {
+                    item.selected = false;
+                    for (const auto& selId : g_savedRecentLaunchSelBatchIds) {
+                        if (item.batchId == selId) {
+                            item.selected = true;
+                            break;
+                        }
+                    }
+                }
+                lockSatMutex();
+                g_recentLaunches = std::move(restored);
+                unlockSatMutex();
+            }
             if (httpCode < 0) {
                 if (httpCode == -100) {
                     recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "存储空间错误" : "Storage Error";
@@ -1425,7 +1468,18 @@ void forceRefreshSingleSatTask(void* parameter) {
         LOG_I("APP", "Force refreshing TLE for sat index %d, norad %u", targetIdx, (unsigned int)targetId);
         
         bool wifiReady = true;
-        // 1. WiFi Connection
+        // 提前释放过境预测缓存与三级子列表缓存（联网同步完成后 predictorTask 会自动重新计算），立省 ~6KB 连续堆内存供 WiFi/lwIP 使用
+    g_level3Objects.clear();
+    g_level3Objects.shrink_to_fit();
+    lockPassMutex();
+    std::vector<PassEvent>().swap(recommendedPasses);
+    std::vector<TreeItem>().swap(displayTree);
+    lastPredictionBaseTime = 0;
+    predictionsReady = false;
+    unlockPassMutex();
+    triggerPrediction = true;
+
+    // 1. WiFi Connection
         if (!HalWifi::isConnected()) {
             downloadErrorMsg = "Connecting WiFi...";
             if (!HalWifi::autoConnect()) {
@@ -1733,12 +1787,11 @@ void networkTaskImpl(void* parameter) {
                         ((I18N::getLanguage() == LANG_ZH) ? "初次配置: 正在同步近期发射..." : "First sync: downloading recent launches...") :
                         ((I18N::getLanguage() == LANG_ZH) ? "正在同步近期发射..." : "Downloading recent launches..."));
             }
-            recentLaunchNetworkTaskImpl(false); // 不断开 WiFi，优先在最纯净内存下完成 Recent Launch 流式解析
+            recentLaunchNetworkTaskImpl(false); // 不断开 WiFi，优先在最纯净内存下完成 Recent Launch 流式下载
             if (recentLaunchDownloadSuccess) {
                 clearRecentLaunchPendingReboot();
-                // 成功后重新加载最新缓存到全局变量并刷新UI
-                tryLoadRecentLaunchCache();
-                LOG_I("APP", "[RECENT_LAUNCH] Pending reboot update completed successfully!");
+                // 标记 g_recentLaunchRefreshPending 已在 recentLaunchNetworkTaskImpl 内置位，待网络任务结束关闭 WiFi 后由主循环安全解析
+                LOG_I("APP", "[RECENT_LAUNCH] Pending reboot update downloaded successfully! Queued for post-WiFi parse.");
             }
         } else {
             LOG_I("APP", "[RECENT_LAUNCH] Subsequent boot: skipped auto-sync (manual refresh required).");
@@ -2889,7 +2942,7 @@ void loop() {
         }
     }
 
-    if (g_recentLaunchRefreshPending) {
+    if (g_recentLaunchRefreshPending && !g_networkActive) {
         g_recentLaunchRefreshPending = false;
         recentLaunchDownloading = false; // Reset downloading flag early to unlock file reads for loading
         
@@ -2914,6 +2967,20 @@ void loop() {
                 return valA.second > valB.second;
             });
             
+            // 恢复更新前用户已勾选的发射批次状态
+            if (!g_savedRecentLaunchSelBatchIds.empty()) {
+                for (auto& item : tempLaunches) {
+                    for (const auto& selId : g_savedRecentLaunchSelBatchIds) {
+                        if (item.batchId == selId) {
+                            item.selected = true;
+                            break;
+                        }
+                    }
+                }
+                g_savedRecentLaunchSelBatchIds.clear();
+                g_savedRecentLaunchSelBatchIds.shrink_to_fit();
+            }
+
             // 后台下载后同步写入最新快照，供下次开机毫秒级启动
             OrbitDataProvider::saveRecentLaunchesMeta(tempLaunches);
             
