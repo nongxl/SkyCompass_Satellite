@@ -951,7 +951,7 @@ void predictorTask(void* parameter) {
         }), allPasses.end());
 
         // 2. 就地二分分区：今晚（24小时内）事件在前，未来事件在后 (0 字节内存分配)
-        uint32_t tonightLimit = nowTs + 24 * 3600;
+        uint32_t tonightLimit = getTonightEndUnix(nowTs);
         auto futureBegin = std::partition(allPasses.begin(), allPasses.end(), [tonightLimit](const PassEvent& p) {
             return p.aosTime < tonightLimit;
         });
@@ -2827,7 +2827,7 @@ void loop() {
                     int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
                     uint32_t day1 = (baseTime + tzOffsetSec) / 86400;
                     uint32_t day2 = (targetTime + tzOffsetSec) / 86400;
-                    if (day1 == day2) {
+                    if (day1 == day2 && getTonightEndUnix(baseTime) == getTonightEndUnix(targetTime)) {
                         isCacheValid = true;
                     }
                 }
@@ -3689,7 +3689,7 @@ void loop() {
                             int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
                             uint32_t day1 = (baseTime + tzOffsetSec) / 86400;
                             uint32_t day2 = (targetTime + tzOffsetSec) / 86400;
-                            if (day1 == day2) {
+                            if (day1 == day2 && getTonightEndUnix(baseTime) == getTonightEndUnix(targetTime)) {
                                 isCacheValid = true;
                             }
                         }

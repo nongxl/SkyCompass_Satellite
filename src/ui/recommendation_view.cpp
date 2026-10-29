@@ -69,7 +69,20 @@ extern GimbalController gimbal;
 extern int g_recBounceTrigger;
 
 
+uint32_t getTonightEndUnix(uint32_t currentSimTime) {
+    int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
+    int64_t localNow = (int64_t)currentSimTime + (int64_t)tzOffsetSec;
+    if (localNow < 0) localNow = 0;
+    int64_t localDayStart = (localNow / 86400) * 86400;
+    int64_t secOfDay = localNow % 86400;
+    // 本地时间 00:00~06:00 属于当晚下半夜，截止至今日清晨 06:00；06:00~24:00 则截止至次日清晨 06:00
+    int64_t localTonightEnd = (secOfDay < 6 * 3600) ? (localDayStart + 6 * 3600) : (localDayStart + 30 * 3600);
+    int64_t utcEnd = localTonightEnd - (int64_t)tzOffsetSec;
+    return (utcEnd > (int64_t)currentSimTime) ? (uint32_t)utcEnd : (currentSimTime + 3600);
+}
+
 void rebuildTreeLocal(std::vector<TreeItem>& tree, const std::vector<PassEvent>& passes, uint32_t current_unix) {
+    uint32_t tonightEnd = getTonightEndUnix(current_unix);
     tree.clear();
     for (int c = 0; c < 4; c++) {
         tree.push_back({true, c, -1});
@@ -80,7 +93,7 @@ void rebuildTreeLocal(std::vector<TreeItem>& tree, const std::vector<PassEvent>&
                 const auto& p = passes[i];
                 bool isPassValid = (p.isVisible || p.isRadioPass);
                 bool match = false;
-                if (c == 0 && isPassValid && p.losTime >= current_unix && p.aosTime < current_unix + 24 * 3600) match = true;
+                if (c == 0 && isPassValid && p.losTime >= current_unix && p.aosTime < tonightEnd) match = true;
                 else if (c == 1 && isPassValid && p.losTime >= current_unix && p.aosTime < current_unix + 7 * 24 * 3600) match = true;
                 else if (c == 2 && isPassValid && p.score >= 4 && p.losTime >= current_unix) match = true;
                 else if (c == 3 && p.losTime >= current_unix) match = true;
@@ -306,6 +319,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     // Detect if selected satellites have stale TLEs
                     bool hasStaleTle = false;
                     uint32_t currentSimTime = current_unix + timeMachineOffset;
+                    uint32_t tonightEnd = getTonightEndUnix(currentSimTime);
                     for (int i = 0; i < NUM_SATELLITES; i++) {
                         if (g_satellites[i].selected && g_satellites[i].tle.line1.length() >= 32) {
                             uint32_t ep = parseTleEpoch(g_satellites[i].tle.line1);
@@ -465,10 +479,11 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     // Count passes per category for display in top-level items
                     int catCounts[4] = {0, 0, 0, 0};
                     uint32_t currentSimTime = current_unix + timeMachineOffset;
+                    uint32_t tonightEnd = getTonightEndUnix(currentSimTime);
                     for (const auto& p : recommendedPasses) {
                         if (p.losTime >= currentSimTime) {
                             bool isPassValid = (p.isVisible || p.isRadioPass);
-                            if (isPassValid && p.aosTime < currentSimTime + 24*3600) catCounts[0]++;
+                            if (isPassValid && p.aosTime < tonightEnd) catCounts[0]++;
                             if (isPassValid && p.aosTime < currentSimTime + 7*24*3600) catCounts[1]++;
                             if (isPassValid && p.score >= 4) catCounts[2]++;
                             catCounts[3]++;
