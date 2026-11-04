@@ -83,6 +83,8 @@ static const char* const t_en[TXT_MAX] = {
     "Module Setup[M]",
     "Servo Setup[Aa]",
     "RF Console[Ctrl]",
+    "Screen Sleep[G0]",
+    "Wakeup[AnyKey]",
     
     // Recommended Passes Panel
     " RECOMMENDED PASSES",
@@ -284,6 +286,8 @@ static const char* const t_zh[TXT_MAX] = {
     "硬件模块[M]",
     "舵机调试[Aa]",
     "射频终端[Ctrl]",
+    "主动息屏[G0]",
+    "唤醒屏幕[Any]",
     
     // Recommended Passes Panel
     " 推荐过境事件",
@@ -485,6 +489,8 @@ static const char* const t_ja[TXT_MAX] = {
     "モジュール[M]",
     "サーボ調整[Aa]",
     "RF端末[Ctrl]",
+    "スリープ[G0]",
+    "復帰[AnyKey]",
     
     // Recommended Passes Panel
     " 推奨の通過イベント",
@@ -686,6 +692,8 @@ static const char* const t_es[TXT_MAX] = {
     "Modulos[M]",
     "Calib servos[Aa]",
     "Consola RF[Ctrl]",
+    "Suspender[G0]",
+    "Despertar[Cualq]",
     
     // Recommended Passes Panel
     " PASES RECOMENDADOS",

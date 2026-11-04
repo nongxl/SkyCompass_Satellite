@@ -22,7 +22,7 @@
 - 📻 **All-Weather Amateur Radio (HAM) Assistance**: Real-time Doppler shift compensation, dual-channel APRS/SSTV monitoring, and space packet capture console.
 - 🧭 **Pioneering Solar Shadow Alignment**: Overcomes the lack of an internal magnetometer by aligning the on-screen shadow projection with physical shadows for 100% spatial orientation alignment.
 - 🪐 **3-Axis Orbital Arch Gimbal**: I2C linkage with a Lego armillary arch mechanism to physically replicate flight heading, peak pass elevation, and along-track progress.
-- 🔋 **Robust Standalone Offline Survival**: 48-hour multi-level TLE flash cache, auto-sleep GNSS power management, and instant sub-second boot in off-grid field conditions.
+- 🔋 **Robust Offline Survival & Low-Power Standby**: 48-hour multi-level TLE flash cache, auto-sleep GNSS power management, 3s countdown active screen-off via `BtnG0` (turns off display backlight, Chain Mono, IMU, and 3D engine; drops current to 30~45mA while retaining background RF telemetry logging in RF Console), safe one-key wake-up.
 - 💡 **Bootup Multilingual Satellite Trivia**: Directly displays curated aerospace & radio geek trivia on the bootup screen during SGP4 multi-satellite orbit integration. Seamlessly transitions into main program upon initialization (random trivia per boot). Includes a dedicated [Prompt Template](prompts/satellite_trivia_prompt_template.md) for community contributions.
 
 ---
@@ -78,7 +78,7 @@ Users can freely choose any of the following combinations based on available har
 | **`Space`** | Lock IMU Perspective | Locks / releases motion-sensor camera orientation |
 | **`Del`** | Toggle HUD Overlay | Shows / hides corner telemetry badges |
 | **`[` / `]`** | Adjust Backlight Brightness | Hardware backlight dimming (16 ~ 255) |
-| **`G0` (Side)** | Lossless Screen Capture | Dumps raw RGB565 via serial; PC script reconstructs 24-bit BMP |
+| **`G0` (Side)** | Active Screen Sleep & Standby | 3s countdown to turn off screen/IMU/rendering; wake up with any key; keeps background telemetry capture in RF Console |
 | **`Esc` / `~`** | Back / Exit Overlay | Dismisses dialogs, passes panel, or exits Sat View mode |
 
 ---

@@ -86,6 +86,8 @@ enum TextId {
     TXT_HELP_MODULE,
     TXT_HELP_SERVO,
     TXT_HELP_RF_CONSOLE,
+    TXT_HELP_SLEEP,
+    TXT_HELP_WAKE,
     
     // Recommended Passes Panel
     TXT_RECOMMENDED_PASSES,

@@ -90,30 +90,33 @@ void DialogViews::drawHelpDialog(LGFX_Sprite* canvas) {
         }
     };
 
-    int ty = y + 17;
+    int ty = y + 15;
     drawHotKey(I18N::get(TXT_HELP_BRIGHT), '[', x + 8, ty);
-    drawHotKey(I18N::get(TXT_HELP_GNSS), 'g', x + 112, ty); ty += 13;
+    drawHotKey(I18N::get(TXT_HELP_GNSS), 'g', x + 112, ty); ty += 12;
     
     drawHotKey(I18N::get(TXT_HELP_HELP), 'h', x + 8, ty);
-    drawHotKey(I18N::get(TXT_HELP_HUD), '\0', x + 112, ty); ty += 13;
+    drawHotKey(I18N::get(TXT_HELP_HUD), '\0', x + 112, ty); ty += 12;
     
     drawHotKey(I18N::get(TXT_HELP_LOCK), ' ', x + 8, ty);
-    drawHotKey(I18N::get(TXT_HELP_PASSLIST), 'e', x + 112, ty); ty += 13;
+    drawHotKey(I18N::get(TXT_HELP_PASSLIST), 'e', x + 112, ty); ty += 12;
     
     drawHotKey(I18N::get(TXT_HELP_SATS), 's', x + 8, ty);
-    drawHotKey(I18N::get(TXT_HELP_TIME), ',', x + 112, ty); ty += 13;
+    drawHotKey(I18N::get(TXT_HELP_TIME), ',', x + 112, ty); ty += 12;
     
     drawHotKey(I18N::get(TXT_HELP_VIEW), 'v', x + 8, ty);
-    drawHotKey(I18N::get(TXT_HELP_WIFI), 'w', x + 112, ty); ty += 13;
+    drawHotKey(I18N::get(TXT_HELP_WIFI), 'w', x + 112, ty); ty += 12;
     
     drawHotKey(I18N::get(TXT_HELP_CONFIG), 'c', x + 8, ty);
-    drawHotKey(I18N::get(TXT_HELP_REALTIME), 'r', x + 112, ty); ty += 13;
+    drawHotKey(I18N::get(TXT_HELP_REALTIME), 'r', x + 112, ty); ty += 12;
     
     drawHotKey(I18N::get(TXT_HELP_TAB), 't', x + 8, ty);
-    drawHotKey(I18N::get(TXT_HELP_MODULE), 'm', x + 112, ty); ty += 13;
+    drawHotKey(I18N::get(TXT_HELP_MODULE), 'm', x + 112, ty); ty += 12;
     
     drawHotKey(I18N::get(TXT_HELP_SERVO), '\0', x + 8, ty);
-    drawHotKey(I18N::get(TXT_HELP_RF_CONSOLE), '^', x + 112, ty); ty += 13;
+    drawHotKey(I18N::get(TXT_HELP_RF_CONSOLE), '^', x + 112, ty); ty += 12;
+
+    drawHotKey(I18N::get(TXT_HELP_SLEEP), '0', x + 8, ty);
+    drawHotKey(I18N::get(TXT_HELP_WAKE), '\0', x + 112, ty); ty += 12;
 }
 
 void DialogViews::drawLangSelectDialog(LGFX_Sprite* canvas, int selectedLangIndex) {
