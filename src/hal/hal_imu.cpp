@@ -326,11 +326,29 @@ public:
         _lastUpdate = millis();
         _stillCount = 0;
         _data.status = IMU_STATUS_READY;
+        extern SemaphoreHandle_t g_i2cBusMutex;
+        if (g_i2cBusMutex != NULL) {
+            if (xSemaphoreTake(g_i2cBusMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                M5.Imu.begin();
+                xSemaphoreGive(g_i2cBusMutex);
+            }
+        } else {
+            M5.Imu.begin();
+        }
     }
 
     void disable() override {
         _enabled = false;
         _data.status = IMU_STATUS_IDLE;
+        extern SemaphoreHandle_t g_i2cBusMutex;
+        if (g_i2cBusMutex != NULL) {
+            if (xSemaphoreTake(g_i2cBusMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                M5.Imu.sleep();
+                xSemaphoreGive(g_i2cBusMutex);
+            }
+        } else {
+            M5.Imu.sleep();
+        }
     }
 
     bool hasNewData() override {

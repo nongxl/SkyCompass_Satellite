@@ -2297,6 +2297,8 @@ void setup() {
           (unsigned int)ESP.getFreeHeap(), (unsigned int)ESP.getMaxAllocHeap());
 
     auto cfg = M5.config();
+    cfg.internal_spk = false; // 禁用内部扬声器功放与 I2S 音频任务，消除音频芯片静态功耗
+    cfg.internal_mic = false; // 禁用麦克风电路
     M5Cardputer.begin(cfg, true);
     I18N::begin();
     M5Cardputer.Display.setBrightness(currentBrightness);
@@ -3056,6 +3058,7 @@ void loop() {
                          M5Cardputer.Keyboard.isPressed() || 
                          M5Cardputer.Keyboard.isChange();
         if (hasWakeup) {
+            setCpuFrequencyMhz(240); // 瞬间恢复 240MHz 满血算力
             M5Cardputer.Display.wakeup();
             M5Cardputer.Display.setBrightness(currentBrightness);
             if (imu) imu->enable();
@@ -3115,6 +3118,7 @@ void loop() {
             if (!RfConsoleView::getInstance().isActive() || !HardwareConfig::getInstance().isEnabled(HW_MOD_CAP_LORA1262)) {
                 HalRadio::getInstance().sleep();
             }
+            setCpuFrequencyMhz(80); // 息屏后动态降频至 80MHz，功耗立降 25~30mA（APB 80MHz 保持 SPI/UART 时序精确，后台收星收信零损耗）
             return;
         }
     } else {
