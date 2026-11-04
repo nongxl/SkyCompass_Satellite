@@ -6,6 +6,7 @@
 class ChainMonoView {
 public:
     static void update();
+    static void clearDisplay();
 };
 
 #endif // CHAIN_MONO_VIEW_H

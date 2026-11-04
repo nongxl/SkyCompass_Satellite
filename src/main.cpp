@@ -91,7 +91,28 @@ inline void applyNightVisionFilter(LGFX_Sprite* canvas) {
     ImageUtils::applyNightVisionFilter(canvas);
 }
 
+#include "ui/screen_off_overlay.h"
+
+enum ScreenPowerState {
+    SCREEN_STATE_ON = 0,
+    SCREEN_STATE_COUNTDOWN = 1,
+    SCREEN_STATE_OFF = 2
+};
+ScreenPowerState g_screenPowerState = SCREEN_STATE_ON;
+bool g_isScreenOff = false;
+unsigned long g_screenCountdownStartMs = 0;
+const unsigned long SCREEN_COUNTDOWN_DURATION_MS = 3000;
+
 inline void pushCanvasWithFilter() {
+    if (g_screenPowerState == SCREEN_STATE_COUNTDOWN && earth_renderer) {
+        unsigned long elapsed = millis() - g_screenCountdownStartMs;
+        int remainingSec = 3 - (int)(elapsed / 1000);
+        if (remainingSec < 1) remainingSec = 1;
+        if (remainingSec > 3) remainingSec = 3;
+        float prog = (float)elapsed / (float)SCREEN_COUNTDOWN_DURATION_MS;
+        if (prog > 1.0f) prog = 1.0f;
+        ScreenOffOverlay::draw(earth_renderer->getCanvas(), remainingSec, prog);
+    }
     ImageUtils::pushCanvasWithFilter(earth_renderer);
 }
 
@@ -3023,10 +3044,88 @@ void loop() {
         recentLaunchDownloadFinishedMs = millis();
     }
 
+    static unsigned long s_lastAnimLoopMs = 0;
     M5Cardputer.update();
 
+    // ---------------------------------------------------------
+    // 主动息屏与低功耗待机状态机 (BtnG0 Active Screen-Off Pipeline)
+    // ---------------------------------------------------------
+    if (g_screenPowerState == SCREEN_STATE_OFF) {
+        // 息屏待机状态：检测键盘任意键或侧边按键唤醒
+        bool hasWakeup = M5Cardputer.BtnA.wasPressed() || 
+                         M5Cardputer.Keyboard.isPressed() || 
+                         M5Cardputer.Keyboard.isChange();
+        if (hasWakeup) {
+            M5Cardputer.Display.wakeup();
+            M5Cardputer.Display.setBrightness(currentBrightness);
+            if (imu) imu->enable();
+            g_isScreenOff = false;
+            g_screenPowerState = SCREEN_STATE_ON;
+            s_lastAnimLoopMs = millis();
+            last_update = millis();
+            return; // 消费本次唤醒键
+        }
+
+        // 息屏期间后台时钟单调推进
+        time_t sysTimeNow = time(nullptr);
+        if (sysTimeNow >= 1704067200) {
+            current_unix = (uint32_t)sysTimeNow;
+        } else {
+            static unsigned long last_off_tick = millis();
+            unsigned long now_ms = millis();
+            if (now_ms - last_off_tick >= 1000) {
+                unsigned long el = (now_ms - last_off_tick) / 1000;
+                current_unix += el;
+                last_off_tick += el * 1000;
+            }
+        }
+
+        // RF 控制台界面特例保持：若处于 RfConsoleView 且安装了 Cap LoRa-1262，持续保持多普勒调谐与射频接收落盘
+        if (RfConsoleView::getInstance().isActive() && HardwareConfig::getInstance().isEnabled(HW_MOD_CAP_LORA1262)) {
+            updateRadioTrackingPipeline(current_unix + timeMachineOffset, timeMachineOffset);
+            if (HardwareConfig::getInstance().isEnabled(HW_MOD_UNIT_8SERVOS) && gimbal.isOnline()) {
+                gimbal.tick();
+                GimbalTrackingPipeline::update(current_unix + timeMachineOffset);
+            }
+        }
+
+        // 息屏低功耗让出 CPU 核心
+        vTaskDelay(pdMS_TO_TICKS(20));
+        return;
+    }
+
+    if (g_screenPowerState == SCREEN_STATE_COUNTDOWN) {
+        // 倒计时状态：用户再次按 BtnA 或键盘任意键立即取消倒计时
+        bool cancelCountdown = M5Cardputer.BtnA.wasPressed() || 
+                               M5Cardputer.Keyboard.isPressed() || 
+                               M5Cardputer.Keyboard.isChange();
+        if (cancelCountdown) {
+            g_screenPowerState = SCREEN_STATE_ON;
+            return; // 消费取消按键，避免误触界面操作
+        }
+
+        // 倒计时超时判定（3秒）
+        if (millis() - g_screenCountdownStartMs >= SCREEN_COUNTDOWN_DURATION_MS) {
+            g_screenPowerState = SCREEN_STATE_OFF;
+            g_isScreenOff = true;
+            M5Cardputer.Display.setBrightness(0);
+            M5Cardputer.Display.sleep();
+            ChainMonoView::clearDisplay();
+            if (imu) imu->disable();
+            if (!RfConsoleView::getInstance().isActive() || !HardwareConfig::getInstance().isEnabled(HW_MOD_CAP_LORA1262)) {
+                HalRadio::getInstance().sleep();
+            }
+            return;
+        }
+    } else {
+        // 正常运行状态：按下侧边 BtnG0 触发 3 秒倒计时
+        if (M5Cardputer.BtnA.wasPressed()) {
+            g_screenPowerState = SCREEN_STATE_COUNTDOWN;
+            g_screenCountdownStartMs = millis();
+        }
+    }
+
     // 推进物理弹簧动效引擎
-    static unsigned long s_lastAnimLoopMs = 0;
     unsigned long animNowMs = millis();
     if (s_lastAnimLoopMs == 0) s_lastAnimLoopMs = animNowMs;
     float animDt = (animNowMs - s_lastAnimLoopMs) / 1000.0f;
@@ -3035,11 +3134,6 @@ void loop() {
 
     bool isFastForwarding = (lastTimeAdjustMillis != 0) || showRecommendations;
     g_isFastForwarding = isFastForwarding;
-
-    // BtnG0 (side button): trigger screenshot transfer via serial
-    if (M5Cardputer.BtnA.wasPressed()) {
-        doScreenshot();
-    }
 
     // 1. 全局系统时间推进引擎（所有界面与模式下统一单调前进）
     time_t sysTimeNow = time(nullptr);

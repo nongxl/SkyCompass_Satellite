@@ -322,6 +322,9 @@ public:
 
     void enable() override {
         _enabled = true;
+        _firstUpdate = true;
+        _lastUpdate = millis();
+        _stillCount = 0;
         _data.status = IMU_STATUS_READY;
     }
 
