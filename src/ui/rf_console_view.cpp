@@ -363,10 +363,15 @@ static uint16_t getWaterfallHeatColor(float norm, bool isGlowLine) {
     }
 
     if (!isGlowLine) {
-        // 背景柱体调低亮度（约 35% 浓度），呈半透明深邃热力图光晕，保证前景数据完全清晰可辨
-        r = (uint8_t)(r * 0.35f);
-        g = (uint8_t)(g * 0.35f);
-        b = (uint8_t)(b * 0.35f);
+        // 背景柱体调低浓度（约 18% 亮度），呈深邃暗态微光热力底衬，彻底消除对雷达方位图与前景文字的遮挡
+        r = (uint8_t)(r * 0.18f);
+        g = (uint8_t)(g * 0.18f);
+        b = (uint8_t)(b * 0.18f);
+    } else {
+        // 轮廓线保持优雅半透明（约 60% 亮度），避免高亮折线切断雷达圆盘与关键节点
+        r = (uint8_t)(r * 0.60f);
+        g = (uint8_t)(g * 0.60f);
+        b = (uint8_t)(b * 0.60f);
     }
 
     return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
@@ -546,15 +551,15 @@ void RfConsoleView::draw(LGFX_Sprite* canvas, int width, int height) {
              (int)rm.getValidPacketsCount(), (int)rm.getCrcErrorCount());
     canvas->drawString(statBuf, width - 4, 3);
 
-    // 2. 绘制底层天球俯视雷达平面图 (大圆圈、NSWE方位、过境卫星轨道弧线、AOS/TCA/LOS节点、运动方向箭头)
-    // 缩小调整至不超过上方内存条：cy = 77, r = 54 (最高点 Y = 23，在 Y=20 内存条下方)
+    // 2. 绘制信号瀑布热力图置于最底层 (深邃暗态频谱波形作为底衬氛围)
+    drawBackgroundWaterfall(canvas, width, height);
+
+    // 3. 绘制天球俯视雷达平面图置于热力图上层 (大圆圈、NSWE方位、过境卫星轨道弧线、AOS/TCA/LOS节点、运动方向箭头)
+    // 保持在热力图之上渲染，使方位角大圆盘、过境弧线与关键节点完全清晰可辨
     int radarCx = width / 2; // 120
     int radarCy = 77;
     int radarR = 54;
     drawSkyRadarPlot(canvas, radarCx, radarCy, radarR, track, hasTarget, hasPassNow, isUpcoming);
-
-    // 3. 绘制背景层信号瀑布热力图 (叠加于平面图上层，呈现半透明光晕流淌效果)
-    drawBackgroundWaterfall(canvas, width, height);
 
     // 4. 前景完整数据层呈现
     const auto& packets = rm.getRecentPackets();
