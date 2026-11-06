@@ -214,8 +214,8 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
     // 抽屉顶部内存使用率进度条 (宽 140px, 高 2px, Y = 17)
     {
         uint32_t freeHeap = ESP.getFreeHeap();
-        const float MAX_APP_HEAP = 45000.0f;
-        float memRatio = 1.0f - ((float)freeHeap / MAX_APP_HEAP);
+        uint32_t totalHeap = ESP.getHeapSize();
+        float memRatio = (totalHeap > 0) ? ((float)(totalHeap - freeHeap) / (float)totalHeap) : 0.0f;
         if (memRatio < 0.0f) memRatio = 0.0f;
         if (memRatio > 1.0f) memRatio = 1.0f;
 
@@ -225,14 +225,14 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
         if (fillWidth < 0) fillWidth = 0;
 
         uint16_t memColor;
-        if (freeHeap >= 20000) {
-            memColor = canvas->color565(0, 220, 255); // 青蓝色 (极为充裕，剩余 >= 20KB)
-        } else if (freeHeap >= 10000) {
-            memColor = TFT_GREEN;                     // 绿色 (健康正常，剩余 10KB~20KB)
-        } else if (freeHeap >= 6000) {
-            memColor = TFT_YELLOW;                    // 黄色 (适度，剩余 6KB~10KB)
+        if (freeHeap < 10000 || memRatio >= 0.85f) {
+            memColor = TFT_RED;                       // 红色 (紧张)
+        } else if (freeHeap < 25000 || memRatio >= 0.72f) {
+            memColor = TFT_YELLOW;                    // 黄色 (适度偏高)
+        } else if (memRatio >= 0.60f) {
+            memColor = TFT_GREEN;                     // 绿色 (健康正常)
         } else {
-            memColor = TFT_RED;                       // 红色 (紧张，剩余 < 6KB)
+            memColor = canvas->color565(0, 220, 255); // 青蓝色 (极为充裕，与 RF 控制台一致)
         }
         canvas->fillRect(panelX, 17, barW, 2, canvas->color565(35, 45, 55));
         if (fillWidth > 0) {
