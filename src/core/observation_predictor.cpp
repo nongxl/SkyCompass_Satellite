@@ -190,23 +190,56 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
     bool isRewinding = false;
     uint32_t rewindAnchor = 0;
     uint32_t lastRewindAnchor = 0;
+
+    // 太阳位置 60s 缓存，消除精扫阶段每 10s 重复解算天文历表的巨大开销
+    uint32_t cachedSunSec = 0xFFFFFFFF;
+    SunPositionData cachedSunPos;
+    double cachedSubLatR = 0, cachedSubLonR = 0;
+    double cachedSinSubLat = 0, cachedCosSubLat = 0;
+    double cachedSunDirX = 0, cachedSunDirY = 0, cachedSunDirZ = 0;
+    bool cachedIsNight = false;
+
+    auto updateSunCache = [&](uint32_t timeSec) {
+        uint32_t minuteBucket = timeSec / 60;
+        if (minuteBucket != cachedSunSec) {
+            cachedSunSec = minuteBucket;
+            cachedSunPos = sunCalc.calculatePosition(timeSec, _userLat, _userLon);
+            cachedIsNight = (cachedSunPos.altitude < -6.0);
+            cachedSubLatR = cachedSunPos.subsolarLat * DEG_TO_RAD;
+            cachedSubLonR = cachedSunPos.subsolarLon * DEG_TO_RAD;
+            cachedSinSubLat = sin(cachedSubLatR);
+            cachedCosSubLat = cos(cachedSubLatR);
+            cachedSunDirX = cachedCosSubLat * cos(cachedSubLonR);
+            cachedSunDirY = cachedCosSubLat * sin(cachedSubLonR);
+            cachedSunDirZ = cachedSinSubLat;
+        }
+    };
     
     while (t <= endTime) {
         if (triggerPrediction || cancelPrediction) return passes;
         
         iterations++;
-        // Reset Watchdog Timer periodically and yield to Idle Task to prevent starvation.
-        // Note: pdMS_TO_TICKS(2) was 0 ticks (a no-op). Using 1 tick ensures IDLE0 runs and feeds the WDT.
-        if ((iterations & 15) == 0) {
+        // 合理放宽看门狗喂狗与让出间隔（约每 18ms 让出 1 毫秒，远离 5,000ms WDT 超时），消除空睡开销
+        if ((iterations & 255) == 0) {
             esp_task_wdt_reset();
             vTaskDelay(1);
             if (ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
                 break; // 堆内存安全熔断：及时刹车，防止底层 STL 申请内存失败抛出 bad_alloc 崩溃
             }
         }
+
+        // 白昼加速过滤：对于纯目视卫星（非无线电目标），地面太阳高度角 >= -3.0° 时绝无裸眼可见过境可能
+        // 直接安全大步跳过白昼，消除白天无意义的 SGP4 运算与过境精扫
+        if (!isRadioTarget && !inPass && stepSeconds > 10) {
+            updateSunCache(t);
+            if (cachedSunPos.altitude >= -3.0) {
+                t += 480; // 白昼大步跨进 8 分钟
+                continue;
+            }
+        }
         
         double tx, ty, tz;
-        if (!sgp4.getTEME(t, tx, ty, tz)) {
+        if (!sgp4.getTEMEFast(t, tx, ty, tz)) {
             t += stepSeconds;
             continue;
         }
@@ -311,6 +344,9 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                     currentPass.losTime = t;
                     currentPass.endAz = az;
                 }
+
+                // 轨道几何死区加速跳步：LEO 卫星落山后正飞往地球背面，至少 55% 周期内（约 50 分钟）不可能再次升空
+                uint32_t orbitSkipSec = (periodSec >= 4800.0 && periodSec <= 7200.0) ? (uint32_t)(periodSec * 0.55) : 0;
                 
                 if (currentPass.maxElevation >= 10.0f) {
                     // Populate basic satellite-wide tracking info for post-processors
@@ -460,7 +496,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                     }
                 }
                 
-                t += stepSeconds;
+                t += (orbitSkipSec > 0) ? orbitSkipSec : stepSeconds;
                 continue;
             }
             
@@ -475,18 +511,16 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                 currentPass.maxAz = az;
             }
             
-            // 3. Visibility Check
-            SunPositionData sunPos = sunCalc.calculatePosition(t, _userLat, _userLon);
-            bool isNight = (sunPos.altitude < -6.0);
+            // 3. Visibility Check (复用 60 秒太阳历表缓存)
+            updateSunCache(t);
+            bool isNight = cachedIsNight;
             
             // Precise Earth Umbra Shadow Check (Using Fast Spherical Approximation instead of WGS84)
             double dist_sat = sqrt(ecef.x*ecef.x + ecef.y*ecef.y + ecef.z*ecef.z);
             double latR = asin(ecef.z / dist_sat);
             double lonR = atan2(ecef.y, ecef.x);
-            double subLatR = sunPos.subsolarLat * DEG_TO_RAD;
-            double subLonR = sunPos.subsolarLon * DEG_TO_RAD;
             
-            double cos_theta_val = sin(subLatR)*sin(latR) + cos(subLatR)*cos(latR)*cos(lonR - subLonR);
+            double cos_theta_val = cachedSinSubLat*sin(latR) + cachedCosSubLat*cos(latR)*cos(lonR - cachedSubLonR);
             bool satIlluminated = true;
             if (cos_theta_val < 0) {
                 // Angle between satellite and sun > 90 deg. Check conical shadow approximation.
@@ -520,9 +554,9 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                 currentPass.endAz = az;
                 
                 // Calculate phase angle and magnitude
-                double sunDirX = cos(subLatR) * cos(subLonR);
-                double sunDirY = cos(subLatR) * sin(subLonR);
-                double sunDirZ = sin(subLatR);
+                double sunDirX = cachedSunDirX;
+                double sunDirY = cachedSunDirY;
+                double sunDirZ = cachedSunDirZ;
                 
                 // Vector from satellite to observer (ECEF)
                 double satToObsX = obsECEF.x - ecef.x;

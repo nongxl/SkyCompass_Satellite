@@ -55,6 +55,32 @@ bool SGP4Calc::getTEME(double unix_ts, double& x, double& y, double& z) {
     return getTEME(unix_ts, x, y, z, vx, vy, vz);
 }
 
+bool SGP4Calc::getTEMEFast(uint32_t unix_ts, double& x, double& y, double& z) {
+    double vx, vy, vz;
+    return getTEMEFast(unix_ts, x, y, z, vx, vy, vz);
+}
+
+bool SGP4Calc::getTEMEFast(uint32_t unix_ts, double& x, double& y, double& z, double& vx, double& vy, double& vz) {
+    double jd = CoordTransform::unixToJulian((double)unix_ts);
+    double tsince = (jd - sat.satrec.jdsatepoch) * 24.0 * 60.0;
+    if (abs(tsince) > 30.0 * 24.0 * 60.0) {
+        return false;
+    }
+    double ro[3];
+    double vo[3];
+    bool success = sgp4(wgs72, sat.satrec, tsince, ro, vo);
+    if (success && sat.satrec.error == 0) {
+        x = ro[0];
+        y = ro[1];
+        z = ro[2];
+        vx = vo[0];
+        vy = vo[1];
+        vz = vo[2];
+        return true;
+    }
+    return false;
+}
+
 bool SGP4Calc::getTEME(double unix_ts, double& x, double& y, double& z, double& vx, double& vy, double& vz) {
     double jd = CoordTransform::unixToJulian(unix_ts);
     

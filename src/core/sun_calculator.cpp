@@ -58,17 +58,8 @@ SunPositionData SunCalculator::calculatePosition(uint32_t timestamp, double lati
     if (shouldLog) {
     }
     
-    // 使用 PositionManager 统一转换时间戳为时间数据
-    TimeData timeData = _positionManager->getTimeData(timestamp);
-    uint16_t year = timeData.year;
-    uint8_t month = timeData.month;
-    uint8_t day = timeData.day;
-    uint8_t hours = timeData.hour;
-    uint8_t minutes = timeData.minute;
-    uint8_t seconds = timeData.second;
-    
-    // 计算儒略日（传入完整年份 2026）
-    double julianDay = calculateJulianDay((year < 100) ? (year + 2000) : year, month, day, hours, minutes, seconds);
+    // 极速直接转换：Unix 时间戳转儒略日无需经历逐年循环 (Unix 1970-01-01 00:00:00 对应 JD 2440587.5)
+    double julianDay = (double)timestamp / 86400.0 + 2440587.5;
     
     // 计算儒略世纪数
     double jc = calculateJulianCentury(julianDay);

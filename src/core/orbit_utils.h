@@ -7,7 +7,7 @@
 #include "core/sgp4_calc.h"
 #include "core/recent_launch_item.h"
 
-#define MAX_TOTAL_SELECTED_SATS 15
+#define MAX_TOTAL_SELECTED_SATS 20
 
 class OrbitUtils {
 public:

@@ -221,6 +221,7 @@ void unlockPassMutex() {
 
 volatile bool g_networkActive = false;
 static volatile int s_networkActiveCount = 0;
+static volatile uint32_t s_lastNetworkFinishedMs = 0;
 struct NetworkActiveGuard {
     NetworkActiveGuard() {
         s_networkActiveCount++;
@@ -229,6 +230,9 @@ struct NetworkActiveGuard {
     ~NetworkActiveGuard() {
         if (s_networkActiveCount > 0) s_networkActiveCount--;
         g_networkActive = (s_networkActiveCount > 0);
+        if (!g_networkActive) {
+            s_lastNetworkFinishedMs = millis();
+        }
     }
 };
 
@@ -645,9 +649,14 @@ void predictorTask(void* parameter) {
             continue;
         }
         
-        // Wait 2 seconds to let the system finish recycling WiFi/TCP/SSL memory
+        // 智能动态等待：仅在刚刚结束网络操作时等待 1.5s 供系统回收堆内存；纯离线交互仅等待 150ms 防抖，立省近 2 秒！
         predictionProgress = 0;
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        uint32_t msSinceNet = millis() - s_lastNetworkFinishedMs;
+        if (s_lastNetworkFinishedMs != 0 && msSinceNet < 1500) {
+            vTaskDelay(pdMS_TO_TICKS(1500 - msSinceNet));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(150));
+        }
         
         if (g_networkActive) {
             continue;
@@ -896,9 +905,8 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                int remainingSlots = 16 - (int)allPasses.size();
-                if (remainingSlots <= 0 || ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
-                    LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
+                if (ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
+                    LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection (%u bytes free, %d passes)", 
                           ESP.getFreeHeap(), (int)allPasses.size());
                     break;
                 }
@@ -923,10 +931,13 @@ void predictorTask(void* parameter) {
                     }
                 }
                 
-                int currentSatTarget = std::min(perSatQuota, remainingSlots);
+                int currentSatTarget = perSatQuota;
                 // 仅 1~2 颗星时算力内存极充沛，预测满 7 天；卫星多于 6 颗时为保障流畅度预测 3 天
                 int daysToPredict = (totalCandidates <= 2) ? 7 : (isRadioTarget ? 3 : ((candidateSatIndices.size() > 6) ? 3 : 7));
-                auto passes = predictor.predictPasses(tle, stdMag, startTime, daysToPredict, isRadioTarget, currentSatTarget);
+                // 消除首日重复推算：首日已在 Phase 1 完整精算过，Phase 2 从 Day 2 起算（前留 15 分钟缓冲防截断）
+                uint32_t p2StartTime = (daysToPredict > 1) ? (startTime + 86400 - 900) : startTime;
+                int p2Days = (daysToPredict > 1) ? (daysToPredict - 1) : 1;
+                auto passes = predictor.predictPasses(tle, stdMag, p2StartTime, p2Days, isRadioTarget, currentSatTarget);
                 // 质量优先排序
                 std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
                     if (a.score != b.score) return a.score > b.score;
@@ -934,12 +945,28 @@ void predictorTask(void* parameter) {
                 });
                 int added = 0;
                 for (auto& p : passes) {
-                    if (added >= currentSatTarget || allPasses.size() >= 16) break;
+                    if (added >= currentSatTarget) break;
                     if (!isAlreadyInAllPasses(p)) {
                         p.satSelected = true;
                         p.satIndex = satIdx;
-                        allPasses.push_back(p);
-                        added++;
+                        if (allPasses.size() < 16) {
+                            allPasses.push_back(p);
+                            added++;
+                        } else {
+                            // 槽位已满时对低分项进行优质置换，确保 20 颗星公平竞争，不因槽位满而漏算后排卫星
+                            size_t minIdx = 0;
+                            for (size_t k = 1; k < allPasses.size(); ++k) {
+                                if (allPasses[k].score < allPasses[minIdx].score || 
+                                   (allPasses[k].score == allPasses[minIdx].score && allPasses[k].maxElevation < allPasses[minIdx].maxElevation)) {
+                                    minIdx = k;
+                                }
+                            }
+                            if (p.score > allPasses[minIdx].score || 
+                               (p.score == allPasses[minIdx].score && p.maxElevation > allPasses[minIdx].maxElevation)) {
+                                allPasses[minIdx] = p;
+                                added++;
+                            }
+                        }
                     }
                 }
                 completedCount++;
@@ -952,9 +979,8 @@ void predictorTask(void* parameter) {
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
                 
-                int remainingSlots = 16 - (int)allPasses.size();
-                if (remainingSlots <= 0 || ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
-                    LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection or max passes reached (%u bytes free, %d passes)", 
+                if (ESP.getFreeHeap() < 4500 || ESP.getMaxAllocHeap() < 1200) {
+                    LOG_I("APP", "Predictor task Phase 2 safely limited: heap protection (%u bytes free, %d passes)", 
                           ESP.getFreeHeap(), (int)allPasses.size());
                     break;
                 }
@@ -967,21 +993,38 @@ void predictorTask(void* parameter) {
                 unlockSatMutex();
                 
                 if (rlTle.line1.length() >= 14 && rlTle.line2.length() >= 14) {
-                    int currentRLTarget = std::min(perSatQuota, remainingSlots);
+                    int currentRLTarget = perSatQuota;
                     int rlDaysToPredict = (totalCandidates <= 2) ? 7 : ((candidateRLIndices.size() > 6) ? 3 : 7);
-                    auto passes = predictor.predictPasses(rlTle, 3.0, startTime, rlDaysToPredict, false, currentRLTarget);
+                    uint32_t p2RLStartTime = (rlDaysToPredict > 1) ? (startTime + 86400 - 900) : startTime;
+                    int p2RLDays = (rlDaysToPredict > 1) ? (rlDaysToPredict - 1) : 1;
+                    auto passes = predictor.predictPasses(rlTle, 3.0, p2RLStartTime, p2RLDays, false, currentRLTarget);
                     std::sort(passes.begin(), passes.end(), [](const PassEvent& a, const PassEvent& b) {
                         if (a.score != b.score) return a.score > b.score;
                         return a.aosTime < b.aosTime;
                     });
                     int added = 0;
                     for (auto& p : passes) {
-                        if (added >= currentRLTarget || allPasses.size() >= 16) break;
+                        if (added >= currentRLTarget) break;
                         if (!isAlreadyInAllPasses(p)) {
                             p.satSelected = true;
                             p.satIndex = -100;
-                            allPasses.push_back(p);
-                            added++;
+                            if (allPasses.size() < 16) {
+                                allPasses.push_back(p);
+                                added++;
+                            } else {
+                                size_t minIdx = 0;
+                                for (size_t k = 1; k < allPasses.size(); ++k) {
+                                    if (allPasses[k].score < allPasses[minIdx].score || 
+                                       (allPasses[k].score == allPasses[minIdx].score && allPasses[k].maxElevation < allPasses[minIdx].maxElevation)) {
+                                        minIdx = k;
+                                    }
+                                }
+                                if (p.score > allPasses[minIdx].score || 
+                                   (p.score == allPasses[minIdx].score && p.maxElevation > allPasses[minIdx].maxElevation)) {
+                                    allPasses[minIdx] = p;
+                                    added++;
+                                }
+                            }
                         }
                     }
                 }
@@ -4465,7 +4508,7 @@ void loop() {
                             RecentLaunchItem& targetItem = g_recentLaunches[recentLaunchSelectedIndex];
                             if (!targetItem.selected) {
                                 if (getTotalSelectedSatelliteCount() >= MAX_TOTAL_SELECTED_SATS) {
-                                    recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选15颗" : "Limit reached: Max 15 sats total";
+                                    recentLaunchErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选20颗" : "Limit reached: Max 20 sats total";
                                     g_satLimitShakeTrigger = 6;
                                 } else {
                                     targetItem.selected = true;
@@ -4628,7 +4671,7 @@ void loop() {
                             if (realIdx >= 0 && realIdx < NUM_SATELLITES) {
                                 if (!g_satellites[realIdx].selected) {
                                     if (getTotalSelectedSatelliteCount() >= MAX_TOTAL_SELECTED_SATS) {
-                                        downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选15颗" : "Limit reached: Max 15 sats total";
+                                        downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选20颗" : "Limit reached: Max 20 sats total";
                                         g_satLimitShakeTrigger = 6;
                                     } else {
                                         lockSatMutex();
