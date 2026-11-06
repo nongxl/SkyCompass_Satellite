@@ -708,6 +708,13 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             canvas->setTextColor(TFT_LIGHTGRAY);
             canvas->drawString((String(I18N::get(TXT_ID)) + String(selSat.noradId)).c_str(), rightX + 48, descY + 20);
             
+            // Draw SATCAT Ops Status badge
+            const char* opsStr = I18N::getOpsStatusStr(selSat.opsStatus);
+            uint16_t opsCol = I18N::getOpsStatusColor(selSat.opsStatus);
+            canvas->setTextColor(opsCol);
+            int opsW = canvas->textWidth(opsStr);
+            canvas->drawString(opsStr, width - opsW - 4, descY + 20);
+            
             if (selSat.tle.line1.length() >= 32) {
                 uint32_t currentSimTime = current_unix + timeMachineOffset;
                 uint32_t satEpoch = TLEUpdater::parseTleEpochPublic(selSat.tle.line1);
@@ -791,6 +798,21 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                 } else if (selSat.description) {
                     finalDesc = selSat.description;
                 }
+            }
+            
+            // 已脱轨航天器科普特别前缀
+            if (selSat.opsStatus == 'D') {
+                String deorbPrefix = "";
+                if (currL == LANG_ZH) {
+                    deorbPrefix = "【已再入烧毁】该航天器已脱轨坠毁并结束运行，轨道根数保留供历史科普参考。\n\n";
+                } else if (currL == LANG_JA) {
+                    deorbPrefix = "【大気圏再突入済】本目標は大気圏に再突入し運用終了、軌道要素は参考保存されています。\n\n";
+                } else if (currL == LANG_ES) {
+                    deorbPrefix = "[DESORBITADO] Ha reentrado en la atmosfera terrestre. Orbita historica para referencia.\n\n";
+                } else {
+                    deorbPrefix = "[DECAYED/DEORBITED] Re-entered Earth's atmosphere. Historical orbit kept for reference.\n\n";
+                }
+                finalDesc = deorbPrefix + finalDesc;
             }
             
             // 2. 拼接轨道参数与遥测细节 (COSPAR/周期/速度/倾角/高度/方位/仰角/频率)

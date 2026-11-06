@@ -435,8 +435,8 @@ void getRepresentativeOrbitParams(const String& line2, float& inclination, float
 }
 String recentLaunchErrorMsg = "";
 bool recentLaunchBypassed = false;
-// Set to 72 (59 curated builtin + 13 custom) to ensure all entries fit while keeping ample internal RAM
-const int MAX_SATELLITES = 72;
+// Set to 80 (63 curated builtin + 17 custom) to ensure all entries fit while keeping ample internal RAM
+const int MAX_SATELLITES = 80;
 SatRealtimeCache g_satCaches[MAX_SATELLITES];
 int NUM_BUILTIN_SATELLITES = 0;
 int NUM_SATELLITES = 0;
@@ -1560,6 +1560,13 @@ void forceRefreshSingleSatTask(void* parameter) {
         uint32_t targetId = g_satellites[targetIdx].noradId;
         LOG_I("APP", "Force refreshing TLE for sat index %d, norad %u", targetIdx, (unsigned int)targetId);
         
+        if (g_satellites[targetIdx].opsStatus == 'D') {
+            downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "卫星已脱轨/再入，保留历史" : "Satellite Decayed (Offline)";
+            downloadFinishedMs = millis();
+            vTaskDelete(NULL);
+            return;
+        }
+        
         bool wifiReady = true;
         // 提前释放过境预测缓存与三级子列表缓存（联网同步完成后 predictorTask 会自动重新计算），立省 ~6KB 连续堆内存供 WiFi/lwIP 使用
     g_level3Objects.clear();
@@ -1930,8 +1937,8 @@ void networkTaskImpl(void* parameter) {
 
         for (int i = 0; i < NUM_SATELLITES; i++) {
             uint32_t noradId = g_satellites[i].noradId;
-            if (g_satellites[i].type == SAT_TYPE_GEO_TV || g_satellites[i].type == SAT_TYPE_DEEP_SPACE) {
-                // GEO broadcast satellites and Deep Space / Interplanetary / Classified probes skip CelesTrak GP queries
+            if (g_satellites[i].type == SAT_TYPE_GEO_TV || g_satellites[i].type == SAT_TYPE_DEEP_SPACE || g_satellites[i].opsStatus == 'D') {
+                // GEO broadcast satellites, Deep Space probes, and Decayed/Deorbited satellites skip CelesTrak GP queries
                 continue;
             }
             if (noradId == 50463) {
@@ -2444,6 +2451,7 @@ void setup() {
                 g_satellites[i].uplinkFreq = entries[i].uplinkFreq;
                 g_satellites[i].tone = entries[i].tone;
                 g_satellites[i].type = entries[i].type;
+                g_satellites[i].opsStatus = entries[i].opsStatus;
             }
 
             // -----------------------------------------------------------------

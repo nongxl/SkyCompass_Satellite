@@ -67,6 +67,13 @@ static const BuiltinTLEItem g_builtin_tle_database[] = {
         "1 34937U 09026A   26310.00000000  .00000000  00000-0  00000-0 0  9995",
         "2 34937  23.4392   0.0000 0000000   0.0000   0.0000  0.00273700    00"
     },
+    // 28485 Swift
+    {
+        28485,
+        "Swift",
+        "1 28485U 04047A   26299.49197303  .00651344  17912-3  81420-3 0  9990",
+        "2 28485  20.5495 236.3414 0003893 244.5844 115.4206 16.06267308207648"
+    },
     // 53807 BlueWalker 3
     {
         53807,
@@ -454,7 +461,7 @@ static const BuiltinTLEItem g_builtin_tle_database[] = {
     },
 };
 
-static const size_t g_builtin_tle_count = 62;
+static const size_t g_builtin_tle_count = sizeof(g_builtin_tle_database) / sizeof(g_builtin_tle_database[0]);
 
 inline bool getBuiltinTLE(uint32_t noradId, TLEData& outTle) {
     for (size_t i = 0; i < g_builtin_tle_count; i++) {

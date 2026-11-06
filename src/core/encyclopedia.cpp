@@ -23,7 +23,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "FM/SSTV",
         "",
         "",
-        true  // defaultSelected
+        true, // defaultSelected
+        '+'  // opsStatus
     },
     // 48274 Tiangong
     {
@@ -44,7 +45,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        true  // defaultSelected
+        true, // defaultSelected
+        '+'  // opsStatus
     },
     // 20580 Hubble
     {
@@ -65,7 +67,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        true  // defaultSelected
+        true, // defaultSelected
+        '+'  // opsStatus
     },
     // 33591 NOAA 19
     {
@@ -86,7 +89,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "APT",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '-'  // opsStatus
     },
     // 50463 JWST
     {
@@ -107,7 +111,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 100532 NGRST (Roman Space Telescope)
     {
@@ -128,7 +133,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 34937 HERSCHEL (Herschel Space Observatory)
     {
@@ -149,7 +155,30 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        'P'  // opsStatus
+    },
+        // 28485 Swift (尼尔·格雷尔斯雨燕天文台)
+    {
+        28485,
+        "Swift",
+        Category::ASTRONOMY,
+        ICON_TELESCOPE,
+        "NASA联合英意研制的多波段空间天文台(尼尔·格雷尔斯雨燕天文台)。搭载爆发警示望远镜(BAT)、X射线望远镜(XRT)及紫外光学望远镜(UVOT)。服役近22年，观测超2000次伽马射线暴与1400次超新星，2026年11月4日再入大气层烧毁。",
+        "NASA Neil Gehrels Swift Observatory, a multi-wavelength space telescope with BAT, XRT, and UVOT instruments. Observed >2000 GRBs and >1400 supernovae over 22 years before deorbiting on Nov 4, 2026.",
+        "NASA開発のガンマ線バースト観測衛星(ニール・ゲーレルス・スウィフト天文台)。BAT・XRT・UVOTを搭載し22年間で2000回以上のGRBを観測。2026年11月4日に大気圏再突入。",
+        "Observatorio espacial Swift de la NASA con instrumentos BAT, XRT y UVOT. Observo mas de 2000 brotes de rayos gamma en casi 22 anos antes de desorbitarse el 4 de nov de 2026.",
+        FLAG_VISIBLE | FLAG_SCIENCE,
+        TFT_MAGENTA,
+        0,
+        6.5,
+        SAT_TYPE_VISUAL,
+        "",
+        "",
+        "",
+        "",
+        false, // defaultSelected
+        'D'  // opsStatus: Decayed
     },
     // 53807 BlueWalker 3
     {
@@ -170,7 +199,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        true  // defaultSelected
+        true, // defaultSelected
+        'P'  // opsStatus
     },
     // 118 Ablestar R/B
     {
@@ -191,7 +221,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '-'  // opsStatus
     },
     // 25732 CZ-4B R/B
     {
@@ -212,7 +243,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '-'  // opsStatus
     },
     // 6155 Centaur R/B
     {
@@ -233,7 +265,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '-'  // opsStatus
     },
     // 28499 Ariane 5 R/B
     {
@@ -254,7 +287,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '-'  // opsStatus
     },
     // 41882 Fengyun-4A
     {
@@ -275,7 +309,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 43001 BeiDou-3 (M1)
     {
@@ -296,7 +331,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 27386 Envisat
     {
@@ -317,7 +353,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '-'  // opsStatus
     },
     // 25730 FengYun-1C
     {
@@ -338,7 +375,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '-'  // opsStatus
     },
     // 4382 DFH-1
     {
@@ -359,7 +397,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        true  // defaultSelected
+        true, // defaultSelected
+        '-'  // opsStatus
     },
     // 25994 Terra
     {
@@ -380,7 +419,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        'X'  // opsStatus
     },
     // 27424 Aqua
     {
@@ -401,7 +441,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 42956 Iridium 100 (NEXT)
     {
@@ -422,7 +463,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 57166 Meteor-M2-3
     {
@@ -443,7 +485,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LRPT",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 27607 SO-50
     {
@@ -464,7 +507,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "FM",
         "436.795",
         "67.0",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 43017 AO-91
     {
@@ -485,7 +529,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "FM",
         "435.250",
         "67.0",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // ── 业余无线电 ──
@@ -509,7 +554,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "USB/CW",
         "432.125",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        'P'  // opsStatus
     },
 
     // 43700 QO-100 (Es'hail-2)
@@ -531,7 +577,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "SSB/CW",
         "2400.050",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // 46494 NORBI (LoRa 科学立方星)
@@ -553,7 +600,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LoRa (SF9/BW125/SW18)",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // 62676 FOSSASAT-2E (开源 LoRa 星座)
@@ -575,7 +623,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LoRa (SF10/BW125/SW18)",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // 61751 Vladivostok-1 (符拉迪沃斯托克一号)
@@ -597,7 +646,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LoRa (SF10/BW125/SW18)",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // 57179 NORBY-2 (诺尔比二号)
@@ -619,7 +669,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LoRa (SF9/BW125/SW18)",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // 57172 UMKA-1 (RS40S 乌姆卡一号)
@@ -641,7 +692,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "SSTV/LoRa (SF8/BW125)",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // 69795 PROVES-Electra (加州大学圣克鲁兹分校开源立方星)
@@ -663,7 +715,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LoRa (SF8/BW125/CR4:5)",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // 54754 HADES-D (西班牙开源业余 LoRa 卫星)
@@ -685,7 +738,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LoRa (SF10/BW125/CR4:5)",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // 47963 VR3X-A (NASA 艾姆斯研究中心开源 LoRa 编队卫星)
@@ -707,7 +761,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LoRa (SF9/BW125/CR4:5)",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        'D'  // opsStatus
     },
 
     // 40908 LilacSat-2 (哈工大 CAS-3H 紫丁香二号)
@@ -729,7 +784,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "4800 GFSK",
         "144.350",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // 50466 XW-3 (CAS-9 希望三号)
@@ -751,7 +807,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "4800 GMSK",
         "145.870",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // 59112 SONATE-2 (高速 GFSK 遥测与星载 AI)
@@ -773,7 +830,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "9600 GFSK",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // ── 地球观测 ──
@@ -797,7 +855,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // 40697 Sentinel-2A
@@ -819,7 +878,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // 62261 Sentinel-1C (launched Dec 5, 2024)
@@ -841,7 +901,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // 43613 ICESat-2
@@ -863,7 +924,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // ── 历史性首次 ──
@@ -887,7 +949,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '-'  // opsStatus
     },
 
     // ── 天文科学 ──
@@ -911,7 +974,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '-'  // opsStatus
     },
 
     // ── 最快/最远 ──
@@ -935,7 +999,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // ── 行星防御 ──
@@ -959,7 +1024,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // ── 神秘与传奇 ──
@@ -983,7 +1049,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        'D'  // opsStatus
     },
 
     // ── 地球观测（最实用）──
@@ -1007,7 +1074,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
 
     // ── 导航 ──
@@ -1031,7 +1099,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "",
         "",
         "",
-        false // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 49125 Chinasat 9B
     {
@@ -1052,7 +1121,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LHCP / RHCP",
         "101.4°E",
         "LNB: 10750 MHz",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 52255 Chinasat 6D
     {
@@ -1073,7 +1143,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "H / V Linear",
         "125.0°E",
         "LNB: 5150 MHz",
-        false  // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 45863 APStar 6D
     {
@@ -1094,7 +1165,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "H / V Linear",
         "134.0°E",
         "LNB: 10750 MHz",
-        false // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 29055 Astra 1KR
     {
@@ -1115,7 +1187,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "H / V Linear",
         "19.2°E",
         "LNB: 9750/10600 MHz",
-        false // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 33376 Galaxy 19
     {
@@ -1136,7 +1209,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "H / V Linear",
         "97.0°W",
         "LNB: 10750 MHz",
-        false // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 33051 Chinasat 9
     {
@@ -1157,7 +1231,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LHCP / RHCP",
         "92.2°E",
         "LNB: 10750 MHz",
-        false // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 42763 Chinasat 9A
     {
@@ -1178,7 +1253,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "LHCP / RHCP",
         "101.4°E",
         "LNB: 10750 MHz",
-        false // defaultSelected
+        false, // defaultSelected
+        '-'  // opsStatus
     },
     // 31800 Chinasat 6B
     {
@@ -1199,7 +1275,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "H / V Linear",
         "115.5°E",
         "LNB: 5150 MHz",
-        false // defaultSelected
+        false, // defaultSelected
+        '-'  // opsStatus
     },
     // 58253 Chinasat 6E
     {
@@ -1220,7 +1297,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "H / V Linear",
         "115.5°E",
         "LNB: 5150 MHz",
-        false // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 29272 JCSAT-3A
     {
@@ -1241,7 +1319,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "H / V Linear",
         "128.0°E",
         "LNB: 10750 MHz",
-        false // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 42951 BSAT-4A
     {
@@ -1262,7 +1341,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "RHCP / LHCP",
         "110.0°E",
         "LNB: 10600 MHz",
-        false // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 37265 KoreaSat 6
     {
@@ -1283,7 +1363,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "H / V Linear",
         "116.0°E",
         "LNB: 10750 MHz",
-        false // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 39500 Thaicom 6
     {
@@ -1304,7 +1385,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "H / V Linear",
         "78.5°E",
         "LNB: 5150 MHz",
-        false // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 52904 Measat 3d
     {
@@ -1325,7 +1407,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "H / V Linear",
         "91.5°E",
         "LNB: 10750 MHz",
-        false // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     },
     // 36830 Nilesat 201
     {
@@ -1346,7 +1429,8 @@ static const EncyclopediaEntry g_encyclopedia_data[] = {
         "H / V Linear",
         "7.0°W",
         "LNB: 10750 MHz",
-        false // defaultSelected
+        false, // defaultSelected
+        '+'  // opsStatus
     }
 };
 

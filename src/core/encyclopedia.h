@@ -47,6 +47,7 @@ struct EncyclopediaEntry {
     const char* uplinkFreq;
     const char* tone;
     bool defaultSelected; // 是否在首次启动时默认勾选该卫星
+    char opsStatus;       // SATCAT 运营状态：'+'=在轨正常, 'D'=脱轨坠毁, '-'=退役/非运营, 'P'=部分运行, 'X'=延寿任务等
 };
 
 class Encyclopedia {

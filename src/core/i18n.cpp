@@ -39,6 +39,14 @@ static const char* const t_en[TXT_MAX] = {
     "Custom added satellite.\n\n",
     "AOS: ",
     "LOS: ",
+    "[+] Operational",
+    "[D] Decayed",
+    "[-] Inactive",
+    "[P] Partial",
+    "[X] Ext Mission",
+    "[B] Backup",
+    "[S] Spare",
+    "[?] Unknown",
     
     // Recent Launch Page
     "Downloading GP JSONs...",
@@ -242,6 +250,14 @@ static const char* const t_zh[TXT_MAX] = {
     "自定义添加的卫星。\n\n",
     "过境开始: ",
     "过境结束: ",
+    "[+] 正常运行",
+    "[D] 已脱轨坠毁",
+    "[-] 已退役失效",
+    "[P] 部分工作",
+    "[X] 延寿任务",
+    "[B] 备份待命",
+    "[S] 预备待激活",
+    "[?] 状态未知",
     
     // Recent Launch Page
     "正在下载发射数据...",
@@ -445,6 +461,14 @@ static const char* const t_ja[TXT_MAX] = {
     "カスタム追加衛星。\n\n",
     "AOS: ",
     "LOS: ",
+    "[+] 運用中",
+    "[D] 再突入減衰",
+    "[-] 運用終了",
+    "[P] 一部運用",
+    "[X] 延長運用",
+    "[B] 予備待機",
+    "[S] 待機中",
+    "[?] 不明",
     
     // Recent Launch Page
     "GP JSONをダウンロード中...",
@@ -648,6 +672,14 @@ static const char* const t_es[TXT_MAX] = {
     "Satelite personalizado.\n\n",
     "AOS: ",
     "LOS: ",
+    "[+] Operativo",
+    "[D] Desorbitado",
+    "[-] Inactivo",
+    "[P] Parcial",
+    "[X] Mision Ext",
+    "[B] Reserva",
+    "[S] Repuesto",
+    "[?] Desconocido",
     
     // Recent Launch Page
     "Descargando JSONs GP...",
@@ -873,4 +905,30 @@ void I18N::setFirstStartDone() {
 
 const char* I18N::getSatDescription(int noradId) {
     return Encyclopedia::getDescription(noradId);
+}
+
+const char* I18N::getOpsStatusStr(char status) {
+    switch (status) {
+        case '+': return get(TXT_OPS_OPERATIONAL);
+        case 'D': return get(TXT_OPS_DECAYED);
+        case '-': return get(TXT_OPS_NONOP);
+        case 'P': return get(TXT_OPS_PARTIAL);
+        case 'X': return get(TXT_OPS_EXT_MISSION);
+        case 'B': return get(TXT_OPS_BACKUP);
+        case 'S': return get(TXT_OPS_SPARE);
+        default:  return get(TXT_OPS_UNKNOWN);
+    }
+}
+
+uint16_t I18N::getOpsStatusColor(char status) {
+    switch (status) {
+        case '+': return 0x2589; // TFT_GREEN (鲜绿)
+        case 'D': return 0xF800; // TFT_RED (醒目红)
+        case '-': return 0x94B2; // TFT_SILVER (退役灰)
+        case 'P': return 0xFFE0; // TFT_YELLOW (部分工作黄)
+        case 'X': return 0xF81F; // TFT_MAGENTA (延寿洋红)
+        case 'B': return 0x07FF; // TFT_CYAN (备份青)
+        case 'S': return 0x07FF; // TFT_CYAN (预备青)
+        default:  return 0xC618; // TFT_LIGHTGRAY (未知灰)
+    }
 }

@@ -46,6 +46,7 @@ struct SatProfile {
     TLEData tle;
     std::shared_ptr<SGP4Calc> calc;
     SatelliteType type = SAT_TYPE_VISUAL;
+    char opsStatus = '+'; // SATCAT Operational Status: '+' Op, 'D' Decayed, '-' Inactive, 'P' Partial, 'X' Ext, 'B' Backup, 'S' Spare, '?' Unknown
 };
 
 struct SatRealtimeCache {

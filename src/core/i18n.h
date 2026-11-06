@@ -43,6 +43,16 @@ enum TextId {
     TXT_AOS,
     TXT_LOS,
     
+    // SATCAT Ops Status
+    TXT_OPS_OPERATIONAL,
+    TXT_OPS_DECAYED,
+    TXT_OPS_NONOP,
+    TXT_OPS_PARTIAL,
+    TXT_OPS_EXT_MISSION,
+    TXT_OPS_BACKUP,
+    TXT_OPS_SPARE,
+    TXT_OPS_UNKNOWN,
+    
     // Recent Launch Page
     TXT_DOWNLOADING_GP_JSONS,
     TXT_RL_ONLINE_FEATURE,
@@ -251,6 +261,12 @@ public:
      * @brief 获取百科卫星的本地化简介。如果是未知或动态添加的返回 nullptr。
      */
     static const char* getSatDescription(int noradId);
+
+    /**
+     * @brief 获取 SATCAT Operational Status 的多语言文本与标准显示颜色
+     */
+    static const char* getOpsStatusStr(char status);
+    static uint16_t    getOpsStatusColor(char status);
 
     /**
      * @brief 判断是否为首次启动（即NVS中未设置语言）
