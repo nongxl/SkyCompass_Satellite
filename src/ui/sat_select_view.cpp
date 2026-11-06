@@ -1148,39 +1148,33 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                     canvas->setClipRect(rightX, descY, width - rightX, descAreaHeight);
                     
                     // 1. 绘制简介与属性细节文本
-                    bool inDeorbWarningBlock = (selSat.opsStatus == 'D');
+                    bool inOpsStatusContinuation = false;
                     for (int idx = 0; idx < totalLines; idx++) {
                         int lineY = descY + idx * 13 - yOffset;
                         if (lineY >= descY - 13 && lineY <= descY + descAreaHeight) {
                             String line = g_descWrappedLines[idx];
                             
-                            // 脱轨烧毁科普警示段落特殊色彩高亮（标签鲜红，说明文字警示橙）
-                            if (inDeorbWarningBlock) {
-                                if (line.length() == 0) {
-                                    inDeorbWarningBlock = false; // 空行结束警示段落
+                            // 脱轨烧毁科普警示行（无状态依赖，按内容特征匹配）
+                            if (line.startsWith("【已再入烧毁】") || line.startsWith("【大気圏再突入済】") || 
+                                line.startsWith("[DESORBITADO]") || line.startsWith("[DECAYED/DEORBITED]")) {
+                                int tagEnd = -1;
+                                int closeZh = line.indexOf("】");
+                                if (closeZh != -1) {
+                                    tagEnd = closeZh + strlen("】");
                                 } else {
-                                    int tagEnd = -1;
-                                    int closeZh = line.indexOf("】");
-                                    if (closeZh != -1) {
-                                        tagEnd = closeZh + strlen("】");
-                                    } else {
-                                        int closeEn = line.indexOf(']');
-                                        if (closeEn != -1) tagEnd = closeEn + 1;
-                                    }
-                                    if (tagEnd != -1) {
-                                        String tagPart = line.substring(0, tagEnd);
-                                        String restPart = line.substring(tagEnd);
-                                        canvas->setTextColor(TFT_RED);
-                                        canvas->drawString(tagPart.c_str(), rightX, lineY);
-                                        int tagW = canvas->textWidth(tagPart.c_str());
-                                        canvas->setTextColor(TFT_ORANGE);
-                                        canvas->drawString(restPart.c_str(), rightX + tagW, lineY);
-                                        continue;
-                                    } else {
-                                        canvas->setTextColor(TFT_ORANGE);
-                                        canvas->drawString(line.c_str(), rightX, lineY);
-                                        continue;
-                                    }
+                                    int closeEn = line.indexOf(']');
+                                    if (closeEn != -1) tagEnd = closeEn + 1;
+                                }
+                                if (tagEnd != -1) {
+                                    String tagPart = line.substring(0, tagEnd);
+                                    String restPart = line.substring(tagEnd);
+                                    canvas->setTextColor(TFT_RED);
+                                    canvas->drawString(tagPart.c_str(), rightX, lineY);
+                                    int tagW = canvas->textWidth(tagPart.c_str());
+                                    canvas->setTextColor(TFT_ORANGE);
+                                    canvas->drawString(restPart.c_str(), rightX + tagW, lineY);
+                                    inOpsStatusContinuation = false;
+                                    continue;
                                 }
                             }
 
@@ -1199,16 +1193,34 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                                 int nameW = canvas->textWidth(namePart.c_str());
                                 
                                 // 运行状态的值部分应用专属 SATCAT 运营色彩
-                                uint16_t valColor = TFT_LIGHTGRAY;
-                                if (namePart.startsWith("运行状态") || namePart.startsWith("運用状態") || 
-                                    namePart.startsWith("Status") || namePart.startsWith("Estado")) {
-                                    valColor = I18N::getOpsStatusColor(selSat.opsStatus);
-                                }
+                                bool isStatusField = (namePart.startsWith("运行状态") || namePart.startsWith("運用状態") || 
+                                                      namePart.startsWith("Status") || namePart.startsWith("Estado"));
+                                uint16_t valColor = isStatusField ? I18N::getOpsStatusColor(selSat.opsStatus) : TFT_LIGHTGRAY;
+                                inOpsStatusContinuation = isStatusField;
+                                
                                 canvas->setTextColor(valColor);
                                 canvas->drawString(valuePart.c_str(), rightX + nameW, lineY);
                             } else {
-                                canvas->setTextColor(TFT_LIGHTGRAY);
+                                // 没有冒号的延续行：若上一行是运行状态字段，则继承状态专属颜色；否则普通文本
+                                if (inOpsStatusContinuation && line.length() > 0) {
+                                    canvas->setTextColor(I18N::getOpsStatusColor(selSat.opsStatus));
+                                } else {
+                                    inOpsStatusContinuation = false;
+                                    canvas->setTextColor(TFT_LIGHTGRAY);
+                                }
                                 canvas->drawString(line.c_str(), rightX, lineY);
+                            }
+                        } else {
+                            // 视口外行亦保持状态标记同步，避免翻页回滚时状态断层
+                            String line = g_descWrappedLines[idx];
+                            int colonIdx = line.indexOf(':');
+                            if (colonIdx == -1) colonIdx = line.indexOf("：");
+                            if (colonIdx != -1) {
+                                String namePart = line.substring(0, colonIdx + 1);
+                                inOpsStatusContinuation = (namePart.startsWith("运行状态") || namePart.startsWith("運用状態") || 
+                                                           namePart.startsWith("Status") || namePart.startsWith("Estado"));
+                            } else if (line.length() == 0) {
+                                inOpsStatusContinuation = false;
                             }
                         }
                     }
