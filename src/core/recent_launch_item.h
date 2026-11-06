@@ -12,6 +12,12 @@ struct OrbitCache {
     uint32_t lastCalcTime = 0;
     std::vector<GeodeticCoord> past;
     std::vector<GeodeticCoord> future;
+
+    void clearAndShrink() {
+        lastCalcTime = 0;
+        std::vector<GeodeticCoord>().swap(past);
+        std::vector<GeodeticCoord>().swap(future);
+    }
 };
 
 enum SatelliteType {
@@ -25,22 +31,21 @@ enum SatelliteType {
 };
 
 struct SatProfile {
-    int noradId;
+    int noradId = 0;
     String name;
-    uint16_t color;
-    int baseScore;
-    double stdMag;
-    bool selected;
-    SatIconType iconType;
-    const char* description;
+    uint16_t color = 0xFFFF;
+    int baseScore = 0;
+    double stdMag = 3.0;
+    bool selected = false;
+    SatIconType iconType = ICON_SATELLITE;
+    const char* description = nullptr;
     String downlinkFreq;
     String radioMode;
     String uplinkFreq;
     String tone;
     TLEData tle;
-    SGP4Calc calc;
-    OrbitCache cache;
-    SatelliteType type;
+    std::shared_ptr<SGP4Calc> calc;
+    SatelliteType type = SAT_TYPE_VISUAL;
 };
 
 struct SatRealtimeCache {
@@ -94,11 +99,20 @@ struct RecentLaunchItem {
 struct LazyObjectItem {
     String name;
     OrbitRecord orbit;
-    SGP4Calc calc;
+    std::shared_ptr<SGP4Calc> calc;
     GeodeticCoord lastGeo;
     bool lastGeoValid = false;
     bool isVisible = false;
     OrbitCache cache;
+
+    void release() {
+        name = String();
+        orbit = OrbitRecord();
+        calc.reset();
+        lastGeoValid = false;
+        isVisible = false;
+        cache.clearAndShrink();
+    }
 };
 
 struct Level3ObjectList {
@@ -108,8 +122,17 @@ struct Level3ObjectList {
     
     size_t size() const { return count; }
     bool empty() const { return count == 0; }
-    void clear() { count = 0; }
-    void shrink_to_fit() {}
+    void clear() {
+        count = 0;
+        for (size_t i = 0; i < MAX_ITEMS; i++) {
+            items[i].release();
+        }
+    }
+    void shrink_to_fit() {
+        for (size_t i = count; i < MAX_ITEMS; i++) {
+            items[i].release();
+        }
+    }
     LazyObjectItem& operator[](size_t idx) { return items[idx]; }
     const LazyObjectItem& operator[](size_t idx) const { return items[idx]; }
     

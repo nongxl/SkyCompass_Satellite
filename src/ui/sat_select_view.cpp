@@ -98,7 +98,19 @@ const FilterCategoryItem g_filterCategories[12] = {
     {"重置全部", "Reset All", "全解除", "Restablec", Category::UNKNOWN, 0, 40, 50, 65, 0xCE79, 3}
 };
 
+static std::unique_ptr<SGP4Calc> s_previewSatCalc;
+static int s_previewSatNorad = -1;
+static String s_previewSatLine1;
+
 SatSelectView::SatSelectView() {
+}
+
+void SatSelectView::releasePreviewCalc() {
+    s_previewSatCalc.reset();
+    s_previewSatNorad = -1;
+    s_previewSatLine1 = String();
+    std::vector<String>().swap(g_descWrappedLines);
+    g_descLastSatIndex = -1;
 }
 
 void SatSelectView::updateFilteredList() {
@@ -727,11 +739,32 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             
             descY += 36;
             
+            // 联网期间主动释放未勾选预览算子，为 WiFi/Socket 腾出连续堆空间（纯 Core 1 线程安全）
+            if (g_networkActive || recentLaunchDownloading || isDownloadingCustom) {
+                s_previewSatCalc.reset();
+                s_previewSatNorad = -1;
+            }
+            // 已勾选卫星直接复用 selSat.calc；未勾选卫星按需懒加载单个预览算子（退出百科或联网时自动释放，0 永久静态开销）
+            SGP4Calc* activePreviewCalc = selSat.calc.get();
+            if (!activePreviewCalc && !g_networkActive && !recentLaunchDownloading && !isDownloadingCustom &&
+                selSat.type != SAT_TYPE_GEO_TV &&
+                selSat.tle.line1.length() >= 68 && selSat.tle.line2.length() >= 68) {
+                if (!s_previewSatCalc || s_previewSatNorad != selSat.noradId || s_previewSatLine1 != selSat.tle.line1) {
+                    if (!s_previewSatCalc) {
+                        s_previewSatCalc.reset(new SGP4Calc());
+                    }
+                    s_previewSatCalc->init(selSat.tle);
+                    s_previewSatNorad = selSat.noradId;
+                    s_previewSatLine1 = selSat.tle.line1;
+                }
+                activePreviewCalc = s_previewSatCalc.get();
+            }
+
             double tx, ty, tz;
             bool isTracking = false;
             double az = 0, el = 0, dist = 0;
             
-            if (selSat.calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
+            if (activePreviewCalc && activePreviewCalc->getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
                 ECEFCoord satEcef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
                 GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
@@ -804,7 +837,7 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                 // 实时 SGP4 速度计算 (km/s)
                 double tx, ty, tz, vx, vy, vz;
                 double realSpeed = 0.0;
-                if (selSat.calc.getTEME(current_unix + timeMachineOffset, tx, ty, tz, vx, vy, vz)) {
+                if (activePreviewCalc && activePreviewCalc->getTEME(current_unix + timeMachineOffset, tx, ty, tz, vx, vy, vz)) {
                     realSpeed = sqrt(vx * vx + vy * vy + vz * vz);
                 }
                 

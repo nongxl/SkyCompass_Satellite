@@ -43,6 +43,8 @@ extern int predictionProgress;
 extern volatile bool g_timeSynced;
 extern void lockPassMutex();
 extern void unlockPassMutex();
+extern void lockSatMutex();
+extern void unlockSatMutex();
 extern std::vector<PassEvent> recommendedPasses;
 extern std::vector<TreeItem> displayTree;
 extern uint32_t lastPredictionBaseTime;
@@ -404,6 +406,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                         if (g_satellites[i].name == p.satName) { sIdx = i; break; }
                     }
                     
+                    std::shared_ptr<SGP4Calc> satCalcHolder;
                     SGP4Calc* satCalc = nullptr;
                     SatelliteType satType = SAT_TYPE_VISUAL;
                     int noradId = 0;
@@ -412,12 +415,15 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     String tone = "";
                     
                     if (sIdx != -1) {
-                        satCalc = &(g_satellites[sIdx].calc);
+                        lockSatMutex();
+                        satCalcHolder = g_satellites[sIdx].calc;
+                        satCalc = satCalcHolder.get();
                         satType = g_satellites[sIdx].type;
                         noradId = g_satellites[sIdx].noradId;
                         downlinkFreq = g_satellites[sIdx].downlinkFreq;
                         uplinkFreq = g_satellites[sIdx].uplinkFreq;
                         tone = g_satellites[sIdx].tone;
+                        unlockSatMutex();
                     } else if (g_recentLaunchFocusMode) {
                         satCalc = &g_repSatCalc;
                     }

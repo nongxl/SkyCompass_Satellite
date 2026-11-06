@@ -19,6 +19,8 @@ extern SatRealtimeCache g_satCaches[];
 
 extern void lockPassMutex();
 extern void unlockPassMutex();
+extern void lockSatMutex();
+extern void unlockSatMutex();
 extern std::vector<PassEvent> recommendedPasses;
 
 void GimbalTrackingPipeline::update(uint32_t currentSimTime) {
@@ -35,10 +37,14 @@ void GimbalTrackingPipeline::update(uint32_t currentSimTime) {
             // 辅助 Lambda：解算指定卫星在特定时刻在天平面的真实飞行航向角 Track Heading
             auto getSatTrackHeading = [&](int satIdx, uint32_t t) -> float {
                 if (satIdx < 0 || satIdx >= NUM_SATELLITES) return 90.0f;
+                std::shared_ptr<SGP4Calc> cPtr;
+                lockSatMutex();
+                cPtr = g_satellites[satIdx].calc;
+                unlockSatMutex();
                 double x0 = 0, y0 = 0, z0 = 0;
                 double x1 = 0, y1 = 0, z1 = 0;
-                if (g_satellites[satIdx].calc.getTEME(t, x0, y0, z0) &&
-                    g_satellites[satIdx].calc.getTEME(t + 15, x1, y1, z1)) {
+                if (cPtr && cPtr->getTEME(t, x0, y0, z0) &&
+                    cPtr->getTEME(t + 15, x1, y1, z1)) {
                     double g0 = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
                     double g1 = CoordTransform::getGMST(CoordTransform::unixToJulian(t + 15));
                     ECEFCoord ec0 = CoordTransform::temeToECEF(x0, y0, z0, g0);
@@ -163,11 +169,15 @@ void GimbalTrackingPipeline::update(uint32_t currentSimTime) {
                         s_lockedPass.maxElevation = max((float)topo.el, 15.0f);
                         s_lockedPass.maxAz = topo.az;
                         
+                        std::shared_ptr<SGP4Calc> trackCalc;
+                        lockSatMutex();
+                        trackCalc = g_satellites[targetTrackSat].calc;
+                        unlockSatMutex();
                         uint32_t tAos = currentSimTime;
                         for (int k = 1; k <= 45; k++) {
                             uint32_t tb = currentSimTime - k * 20;
                             double bx=0, by=0, bz=0;
-                            if (g_satellites[targetTrackSat].calc.getTEME(tb, bx, by, bz)) {
+                            if (trackCalc && trackCalc->getTEME(tb, bx, by, bz)) {
                                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(tb));
                                 ECEFCoord bec = CoordTransform::temeToECEF(bx, by, bz, gmst);
                                 TopocentricCoord btp = CoordTransform::ecefToTopocentric(observerPos, bec);
@@ -179,7 +189,7 @@ void GimbalTrackingPipeline::update(uint32_t currentSimTime) {
                         for (int k = 1; k <= 45; k++) {
                             uint32_t tf = currentSimTime + k * 20;
                             double fx=0, fy=0, fz=0;
-                            if (g_satellites[targetTrackSat].calc.getTEME(tf, fx, fy, fz)) {
+                            if (trackCalc && trackCalc->getTEME(tf, fx, fy, fz)) {
                                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(tf));
                                 ECEFCoord fec = CoordTransform::temeToECEF(fx, fy, fz, gmst);
                                 TopocentricCoord ftp = CoordTransform::ecefToTopocentric(observerPos, fec);

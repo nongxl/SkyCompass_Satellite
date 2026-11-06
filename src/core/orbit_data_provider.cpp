@@ -846,13 +846,14 @@ bool OrbitDataProvider::loadLevel3ObjectsPage(const RecentLaunchItem& item, int 
                             if (g_level3Objects.count < Level3ObjectList::MAX_ITEMS) {
                                 auto& obj = g_level3Objects.items[g_level3Objects.count++];
                                 obj.name = record.name;
-                                obj.orbit = record; 
-                                obj.calc.init(obj.orbit);
+                                obj.orbit = record;
+                                if (!obj.calc) {
+                                    obj.calc = std::make_shared<SGP4Calc>();
+                                }
+                                obj.calc->init(obj.orbit);
                                 obj.lastGeoValid = false;
                                 obj.isVisible = false;
-                                obj.cache.lastCalcTime = 0;
-                                obj.cache.past.clear();
-                                obj.cache.future.clear();
+                                obj.cache.clearAndShrink();
                                 loadCount++;
                             }
                         }

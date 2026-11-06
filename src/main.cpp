@@ -333,6 +333,10 @@ inline void calculateFormationsForItems(std::vector<RecentLaunchItem>& items, co
 void initRecentLaunchCalcs(RecentLaunchItem& item) {
     if (!item.selected) {
         item.calc.reset();
+        item.cache.lastGeoValid = false;
+        item.cache.isVisible = false;
+        item.cache.isRadioPassing = false;
+        item.cache.cache.clearAndShrink();
         return;
     }
     
@@ -434,6 +438,34 @@ int NUM_BUILTIN_SATELLITES = 0;
 int NUM_SATELLITES = 0;
 
 SatProfile g_satellites[MAX_SATELLITES];
+
+// 按需同步指定百科/自定义卫星的 SGP4 运算器与轨迹缓存生命周期（调用前须持有 lockSatMutex）
+void syncSatCalcAndCacheLocked(int idx) {
+    if (idx < 0 || idx >= NUM_SATELLITES) return;
+    SatProfile& sat = g_satellites[idx];
+    if (!sat.selected || sat.type == SAT_TYPE_GEO_TV) {
+        sat.calc.reset();
+        g_satCaches[idx].lastGeoValid = false;
+        g_satCaches[idx].isVisible = false;
+        g_satCaches[idx].isRadioPassing = false;
+        g_satCaches[idx].cache.clearAndShrink();
+        return;
+    }
+    if (sat.tle.line1.length() >= 68 && sat.tle.line2.length() >= 68) {
+        if (!sat.calc) {
+            sat.calc = std::make_shared<SGP4Calc>();
+        }
+        sat.calc->init(sat.tle);
+    }
+}
+
+void syncAllSatCalcs() {
+    lockSatMutex();
+    for (int i = 0; i < NUM_SATELLITES; i++) {
+        syncSatCalcAndCacheLocked(i);
+    }
+    unlockSatMutex();
+}
 
 // We use a simulated time starting near the TLE epoch for Phase 3 offline testing
 volatile uint32_t current_unix = 0; // Will be set in setup()
@@ -1514,7 +1546,7 @@ void forceRefreshSingleSatTask(void* parameter) {
             if (success && fetchError.length() == 0) {
                 lockSatMutex();
                 g_satellites[targetIdx].tle = new_tle;
-                g_satellites[targetIdx].calc.init(new_tle);
+                syncSatCalcAndCacheLocked(targetIdx);
                 if (targetIdx >= NUM_BUILTIN_SATELLITES) {
                     if (new_tle.name.length() > 0) {
                         g_satellites[targetIdx].name = new_tle.name;
@@ -1572,10 +1604,9 @@ void downloadCustomSatTask(void* parameter) {
                 p.color = TFT_WHITE;
                 p.baseScore = 0;
                 p.stdMag = 3.0;
-                p.selected = true;
+                p.selected = (getTotalSelectedSatelliteCount() < MAX_TOTAL_SELECTED_SATS);
                 p.iconType = ICON_SATELLITE;
                 p.tle = loaded_tle;
-                p.calc.init(p.tle);
                 p.description = "Custom added satellite.\n\n";
                 p.type = SAT_TYPE_VISUAL;
                 if (p.noradId == 57172 || p.name.indexOf("UMKA") != -1 || p.name.indexOf("RS40S") != -1) {
@@ -1592,7 +1623,7 @@ void downloadCustomSatTask(void* parameter) {
                         if (g_satellites[i].noradId == id) {
                             exists = true;
                             g_satellites[i].tle = loaded_tle;
-                            g_satellites[i].calc.init(g_satellites[i].tle);
+                            syncSatCalcAndCacheLocked(i);
                             if (loaded_tle.name.length() > 0) {
                                 g_satellites[i].name = loaded_tle.name;
                             }
@@ -1606,7 +1637,9 @@ void downloadCustomSatTask(void* parameter) {
                         }
                     }
                     if (!exists) {
-                        g_satellites[NUM_SATELLITES++] = p;
+                        int newIdx = NUM_SATELLITES++;
+                        g_satellites[newIdx] = p;
+                        syncSatCalcAndCacheLocked(newIdx);
                     }
                 }
                 unlockSatMutex();
@@ -1863,7 +1896,7 @@ void networkTaskImpl(void* parameter) {
                 TLEData wTle = TLEManager::getJWST_TLE();
                 lockSatMutex();
                 g_satellites[i].tle  = wTle;
-                g_satellites[i].calc.init(wTle);
+                syncSatCalcAndCacheLocked(i);
                 unlockSatMutex();
                 updated = true;
                 continue;
@@ -1873,7 +1906,7 @@ void networkTaskImpl(void* parameter) {
                 TLEData rTle = TLEManager::getNGRST_TLE();
                 lockSatMutex();
                 g_satellites[i].tle  = rTle;
-                g_satellites[i].calc.init(rTle);
+                syncSatCalcAndCacheLocked(i);
                 unlockSatMutex();
                 updated = true;
                 continue;
@@ -1883,7 +1916,7 @@ void networkTaskImpl(void* parameter) {
                 TLEData hTle = TLEManager::getHerschel_TLE();
                 lockSatMutex();
                 g_satellites[i].tle  = hTle;
-                g_satellites[i].calc.init(hTle);
+                syncSatCalcAndCacheLocked(i);
                 unlockSatMutex();
                 updated = true;
                 continue;
@@ -1902,7 +1935,7 @@ void networkTaskImpl(void* parameter) {
                     // Cache and TLE epoch are both fresh — use cache directly
                     lockSatMutex();
                     g_satellites[i].tle  = cached;
-                    g_satellites[i].calc.init(cached);
+                    syncSatCalcAndCacheLocked(i);
                     unlockSatMutex();
                     continue;
                 }
@@ -1940,7 +1973,7 @@ void networkTaskImpl(void* parameter) {
 
                     lockSatMutex();
                     g_satellites[i].tle = newTle;
-                    g_satellites[i].calc.init(newTle);
+                    syncSatCalcAndCacheLocked(i);
                     if (i >= NUM_BUILTIN_SATELLITES && newTle.name.length() > 0) {
                         g_satellites[i].name = newTle.name;
                         autoAssignIconAndColor(g_satellites[i].name, g_satellites[i].iconType, g_satellites[i].color);
@@ -2605,11 +2638,7 @@ void setup() {
                     unlockSatMutex();
                 }
                 
-                if (g_satellites[i].tle.line1.length() >= 68 && g_satellites[i].tle.line2.length() >= 68) {
-                    lockSatMutex();
-                    g_satellites[i].calc.init(g_satellites[i].tle);
-                    unlockSatMutex();
-                }
+                // 开机阶段仅加载轻量级 TLE 文本，待 loadSelectedSatellites() 后仅对实际勾选的卫星实例化 SGP4Calc
                 
                 // Slowly progress progress to 65%
                 g_loadingProgress = 30 + (int)(35.0f * (float)(i + 1) / (float)NUM_SATELLITES);
@@ -2681,9 +2710,6 @@ void setup() {
                             p.iconType = ICON_SATELLITE;
                             p.description = "Custom added satellite.\n\n";
                             p.tle = loaded_tle;
-                            if (p.tle.line1.length() >= 68 && p.tle.line2.length() >= 68) {
-                                p.calc.init(p.tle);
-                            }
                             p.type = SAT_TYPE_VISUAL;
                             if (p.noradId == 57172 || p.name.indexOf("UMKA") != -1 || p.name.indexOf("RS40S") != -1) {
                                 p.downlinkFreq = "437.625";
@@ -2714,6 +2740,7 @@ void setup() {
                 saveCustomSatellites();
             }
             loadSelectedSatellites();
+            syncAllSatCalcs();
             updateEncyclopediaFilteredList();
             
             Language currL_boot = I18N::getLanguage();
@@ -2825,12 +2852,20 @@ void drawSatSelectPage() {
 // 快速解算所有已选卫星在当前连续模拟时间的 SGP4 实时地心/大地坐标 (专用于射频巡天与浑仪舵机追焦)
 void updateSelectedSatRealtimePositions(double continuousSimTime, double current_gmst) {
     for (int i = 0; i < NUM_SATELLITES; i++) {
+        bool selectedCopy = false;
+        std::shared_ptr<SGP4Calc> calcPtr;
+        SatelliteType typeCopy = SAT_TYPE_VISUAL;
+        uint32_t noradIdCopy = 0;
+        String uplinkFreqCopy;
+
         lockSatMutex();
-        bool selectedCopy = g_satellites[i].selected;
-        SGP4Calc calcCopy = g_satellites[i].calc;
-        SatelliteType typeCopy = g_satellites[i].type;
-        uint32_t noradIdCopy = g_satellites[i].noradId;
-        String uplinkFreqCopy = g_satellites[i].uplinkFreq;
+        selectedCopy = g_satellites[i].selected;
+        if (selectedCopy) {
+            calcPtr = g_satellites[i].calc;
+            typeCopy = g_satellites[i].type;
+            noradIdCopy = g_satellites[i].noradId;
+            uplinkFreqCopy = g_satellites[i].uplinkFreq;
+        }
         unlockSatMutex();
 
         if (!selectedCopy) {
@@ -2850,7 +2885,7 @@ void updateSelectedSatRealtimePositions(double continuousSimTime, double current
             g_satCaches[i].lastGeoValid = true;
         } else {
             double tx, ty, tz;
-            if (calcCopy.getTEME(continuousSimTime, tx, ty, tz)) {
+            if (calcPtr && calcPtr->getTEME(continuousSimTime, tx, ty, tz)) {
                 ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                 GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
                 g_satCaches[i].lastGeo = geo;
@@ -4232,10 +4267,19 @@ void loop() {
                         deleteConfirmIndex = -1;
                     } else if (justY) {
                         if (deleteConfirmIndex >= NUM_BUILTIN_SATELLITES && deleteConfirmIndex < NUM_SATELLITES) {
+                            lockSatMutex();
                             for (int i = deleteConfirmIndex; i < NUM_SATELLITES - 1; i++) {
                                 g_satellites[i] = g_satellites[i + 1];
+                                g_satCaches[i] = std::move(g_satCaches[i + 1]);
                             }
+                            g_satellites[NUM_SATELLITES - 1] = SatProfile();
+                            g_satCaches[NUM_SATELLITES - 1].lastGeoValid = false;
+                            g_satCaches[NUM_SATELLITES - 1].isVisible = false;
+                            g_satCaches[NUM_SATELLITES - 1].isRadioPassing = false;
+                            g_satCaches[NUM_SATELLITES - 1].cache.clearAndShrink();
                             NUM_SATELLITES--;
+                            unlockSatMutex();
+                            sat_select_view.releasePreviewCalc();
                             if (focusSatIndex == deleteConfirmIndex) focusSatIndex = -1;
                             else if (focusSatIndex > deleteConfirmIndex) focusSatIndex--;
                             if (satSelectedIndex >= NUM_SATELLITES) satSelectedIndex = NUM_SATELLITES;
@@ -4248,6 +4292,7 @@ void loop() {
                         deleteConfirmIndex = -1;
                     }
                 } else if (justComma || justSlash) {
+                    sat_select_view.releasePreviewCalc();
                     currentSatTab = (currentSatTab == TAB_ENCYCLOPEDIA) ? TAB_RECENT_LAUNCH : TAB_ENCYCLOPEDIA;
                     noradInput = "";
                     downloadErrorMsg = "";
@@ -4380,6 +4425,7 @@ void loop() {
                         } else {
                             g_selectedCategoryMask = 0;
                             g_showCategoryFilterDialog = false;
+                            sat_select_view.releasePreviewCalc();
                             updateEncyclopediaFilteredList();
                             appState = STATE_MAIN;
                             validateSatViewFocusState();
@@ -4430,6 +4476,7 @@ void loop() {
                                 }
                             } else {
                                 targetItem.selected = false;
+                                initRecentLaunchCalcs(targetItem);
                                 recentLaunchErrorMsg = "";
                                 if (recentLaunchActiveBatchId == targetItem.batchId) {
                                     bool foundOther = false;
@@ -4543,6 +4590,7 @@ void loop() {
                         if (justBack || justEsc || justTick) {
                             g_selectedCategoryMask = 0;
                             g_showCategoryFilterDialog = false;
+                            sat_select_view.releasePreviewCalc();
                             updateEncyclopediaFilteredList();
                             appState = STATE_MAIN;
                             validateSatViewFocusState();
@@ -4583,11 +4631,17 @@ void loop() {
                                         downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选15颗" : "Limit reached: Max 15 sats total";
                                         g_satLimitShakeTrigger = 6;
                                     } else {
+                                        lockSatMutex();
                                         g_satellites[realIdx].selected = true;
+                                        syncSatCalcAndCacheLocked(realIdx);
+                                        unlockSatMutex();
                                         downloadErrorMsg = "";
                                     }
                                 } else {
+                                    lockSatMutex();
                                     g_satellites[realIdx].selected = false;
+                                    syncSatCalcAndCacheLocked(realIdx);
+                                    unlockSatMutex();
                                     downloadErrorMsg = "";
                                 }
                             }
@@ -4758,8 +4812,12 @@ void loop() {
                     focalGeo = {0.0, slotLon, 35785.863};
                     hasFocalPos = true;
                 } else {
+                    std::shared_ptr<SGP4Calc> fCalc;
+                    lockSatMutex();
+                    fCalc = g_satellites[focusSatIndex].calc;
+                    unlockSatMutex();
                     double tx, ty, tz;
-                    if (g_satellites[focusSatIndex].calc.getTEME(continuousSimTime, tx, ty, tz)) {
+                    if (fCalc && fCalc->getTEME(continuousSimTime, tx, ty, tz)) {
                         ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                         focalGeo = CoordTransform::ecefToGeodetic(ecef);
                         hasFocalPos = true;
@@ -5206,7 +5264,7 @@ void loop() {
                     
                     if (runCalculation) {
                         double tx, ty, tz;
-                        if (obj.calc.getTEME(continuousSimTime, tx, ty, tz)) {
+                        if (obj.calc && obj.calc->getTEME(continuousSimTime, tx, ty, tz)) {
                             ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                             GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
                             obj.lastGeo = geo;
@@ -5224,8 +5282,8 @@ void loop() {
                         data.color = TFT_GREEN;
                         data.isVisible = true;
                         
-                        if (appState == STATE_MAIN) {
-                            calculateOrbit(obj.calc, simTime, obj.cache, orbitsCalculatedThisFrame, lastTimeAdjustMillis != 0, false);
+                        if (appState == STATE_MAIN && obj.calc) {
+                            calculateOrbit(*(obj.calc), simTime, obj.cache, orbitsCalculatedThisFrame, lastTimeAdjustMillis != 0, false);
                             data.pastOrbit = &(obj.cache.past);
                             data.futureOrbit = &(obj.cache.future);
                         } else {
@@ -5253,17 +5311,32 @@ void loop() {
         }
         
         // Always compute and load selected encyclopedia satellites
-        static String s_encSatNameCache[MAX_SATELLITES];
+        static String s_activeSatNames[MAX_TOTAL_SELECTED_SATS + 5];
+        int activeSatNameSlot = 0;
+        std::shared_ptr<SGP4Calc> focusCalcKeepAlive;
         for (int i = 0; i < NUM_SATELLITES; i++) {
+                bool selectedCopy = false;
+                std::shared_ptr<SGP4Calc> calcPtr;
+                String nameCopy;
+                SatIconType iconCopy = ICON_SATELLITE;
+                uint16_t colorCopy = TFT_WHITE;
+                SatelliteType typeCopy = SAT_TYPE_VISUAL;
+                uint32_t noradIdCopy = 0;
+                String uplinkFreqCopy;
+                bool hasDownlink = false;
+
                 lockSatMutex();
-                bool selectedCopy = g_satellites[i].selected;
-                SGP4Calc calcCopy = g_satellites[i].calc;
-                String nameCopy = g_satellites[i].name;
-                SatIconType iconCopy = g_satellites[i].iconType;
-                uint16_t colorCopy = g_satellites[i].color;
-                SatelliteType typeCopy = g_satellites[i].type;
-                uint32_t noradIdCopy = g_satellites[i].noradId;
-                String uplinkFreqCopy = g_satellites[i].uplinkFreq;
+                selectedCopy = g_satellites[i].selected;
+                if (selectedCopy) {
+                    calcPtr = g_satellites[i].calc;
+                    nameCopy = g_satellites[i].name;
+                    iconCopy = g_satellites[i].iconType;
+                    colorCopy = g_satellites[i].color;
+                    typeCopy = g_satellites[i].type;
+                    noradIdCopy = g_satellites[i].noradId;
+                    uplinkFreqCopy = g_satellites[i].uplinkFreq;
+                    hasDownlink = (g_satellites[i].downlinkFreq.length() > 0 && g_satellites[i].downlinkFreq.toFloat() > 0.0f);
+                }
                 unlockSatMutex();
 
                 if (!selectedCopy) {
@@ -5272,7 +5345,12 @@ void loop() {
                     continue;
                 }
 
-                s_encSatNameCache[i] = nameCopy;
+                const char* displaySatNamePtr = "";
+                if (activeSatNameSlot < (int)(sizeof(s_activeSatNames) / sizeof(s_activeSatNames[0]))) {
+                    s_activeSatNames[activeSatNameSlot] = nameCopy;
+                    displaySatNamePtr = s_activeSatNames[activeSatNameSlot].c_str();
+                    activeSatNameSlot++;
+                }
 
                 bool runCalculation = (timeChanged || !g_satCaches[i].lastGeoValid);
                 
@@ -5305,7 +5383,7 @@ void loop() {
                         g_satCaches[i].lastGeoValid = true;
                     } else {
                         double tx, ty, tz;
-                        if (calcCopy.getTEME(continuousSimTime, tx, ty, tz)) {
+                        if (calcPtr && calcPtr->getTEME(continuousSimTime, tx, ty, tz)) {
                             ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
                             GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
                             
@@ -5348,7 +5426,7 @@ void loop() {
                         }
 
                         // 无线电卫星过境状态判定：具备有效下行频率或无线电/空间站类型，且当前仰角高于地平线
-                        bool hasRadio = (g_satellites[i].downlinkFreq.length() > 0 && g_satellites[i].downlinkFreq.toFloat() > 0.0f) ||
+                        bool hasRadio = hasDownlink ||
                                         (typeCopy == SAT_TYPE_HAM) || (typeCopy == SAT_TYPE_WEATHER) || (noradIdCopy == 25544);
                         if (hasRadio && el >= 0.0f) {
                             isRadioPassing = true;
@@ -5376,7 +5454,7 @@ void loop() {
                     
                     if (shouldLogNow && appState == STATE_MAIN) {
                         log_i("[%s] Lat: %.2f, Lon: %.2f, Alt: %.1f km, Shadow: %s, Visible: %s, Radio: %s", 
-                              s_encSatNameCache[i].c_str(), 
+                              displaySatNamePtr, 
                               g_satCaches[i].lastGeo.lat, 
                               g_satCaches[i].lastGeo.lon, 
                               g_satCaches[i].lastGeo.alt, 
@@ -5386,7 +5464,7 @@ void loop() {
                     }
                     
                     SatRenderData data;
-                    data.name = s_encSatNameCache[i].c_str();
+                    data.name = displaySatNamePtr;
                     data.iconType = iconCopy;
                     data.currentPos = g_satCaches[i].lastGeo;
                     data.color = colorCopy;
@@ -5395,10 +5473,9 @@ void loop() {
                     
                     // Visual effects fields
                     data.isSelected = (isSatViewMode && (focusSatIndex == i));
-                    static SGP4Calc s_focusCalcCopy;
-                    if (data.isSelected) {
-                        s_focusCalcCopy = calcCopy;
-                        data.calc = &s_focusCalcCopy;
+                    if (data.isSelected && calcPtr) {
+                        focusCalcKeepAlive = calcPtr;
+                        data.calc = focusCalcKeepAlive.get();
                     } else {
                         data.calc = nullptr;
                     }
@@ -5407,13 +5484,21 @@ void loop() {
                     if (appState == STATE_MAIN) {
                         if (typeCopy == SAT_TYPE_GEO_TV) {
                             double slotLon = getGeoSlotLongitude(noradIdCopy, uplinkFreqCopy);
+                            if (g_satCaches[i].cache.past.capacity() > 2) {
+                                std::vector<GeodeticCoord>().swap(g_satCaches[i].cache.past);
+                            }
+                            if (g_satCaches[i].cache.future.capacity() > 2) {
+                                std::vector<GeodeticCoord>().swap(g_satCaches[i].cache.future);
+                            }
                             g_satCaches[i].cache.past.clear();
                             g_satCaches[i].cache.future.clear();
+                            if (g_satCaches[i].cache.past.capacity() < 1) g_satCaches[i].cache.past.reserve(1);
+                            if (g_satCaches[i].cache.future.capacity() < 1) g_satCaches[i].cache.future.reserve(1);
                             GeodeticCoord p = {0.0, slotLon, 35785.863};
                             g_satCaches[i].cache.past.push_back(p);
                             g_satCaches[i].cache.future.push_back(p);
-                        } else {
-                            calculateOrbit(calcCopy, simTime, g_satCaches[i].cache, orbitsCalculatedThisFrame, lastTimeAdjustMillis != 0, (isSatViewMode && (focusSatIndex == i) && !g_recentLaunchFocusMode));
+                        } else if (calcPtr) {
+                            calculateOrbit(*calcPtr, simTime, g_satCaches[i].cache, orbitsCalculatedThisFrame, lastTimeAdjustMillis != 0, (isSatViewMode && (focusSatIndex == i) && !g_recentLaunchFocusMode));
                         }
                         data.pastOrbit = &(g_satCaches[i].cache.past);
                         data.futureOrbit = &(g_satCaches[i].cache.future);
@@ -5428,6 +5513,11 @@ void loop() {
                     g_satCaches[i].isRadioPassing = false;
                 }
             }
+        for (int k = activeSatNameSlot; k < (int)(sizeof(s_activeSatNames) / sizeof(s_activeSatNames[0])); k++) {
+            if (s_activeSatNames[k].length() > 0) {
+                s_activeSatNames[k] = String();
+            }
+        }
         
         // =======================================================================
         // 自动过境无线电监听与调度 (RadioManager Autonomous Satellite Radio Patrol)
@@ -5524,18 +5614,22 @@ void loop() {
                 uint16_t satColor = TFT_WHITE;
                 bool hasSatInfo = false;
                 
+                std::shared_ptr<SGP4Calc> currentCalcHolder;
                 SGP4Calc* currentCalc = nullptr;
                 SatelliteType currentType = SAT_TYPE_VISUAL;
                 int currentNoradId = 0;
                 String downlinkFreq = "";
                 
                 if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES) {
+                    lockSatMutex();
                     satName = g_satellites[focusSatIndex].name;
                     satColor = g_satellites[focusSatIndex].color;
-                    currentCalc = &(g_satellites[focusSatIndex].calc);
+                    currentCalcHolder = g_satellites[focusSatIndex].calc;
+                    currentCalc = currentCalcHolder.get();
                     currentType = g_satellites[focusSatIndex].type;
                     currentNoradId = g_satellites[focusSatIndex].noradId;
                     downlinkFreq = g_satellites[focusSatIndex].downlinkFreq;
+                    unlockSatMutex();
                     hasSatInfo = true;
                 } else if (g_recentLaunchFocusMode) {
                     satName = g_repSatName;
@@ -5564,7 +5658,7 @@ void loop() {
                     hasSatInfo = true;
                 }
                 
-                if (hasSatInfo && currentCalc != nullptr) {
+                if (hasSatInfo && (currentCalc != nullptr || currentType == SAT_TYPE_GEO_TV)) {
                     Language currL = I18N::getLanguage();
                     bool isZh = (currL == LANG_ZH);
                     bool isCjk = (currL == LANG_ZH || currL == LANG_JA);

@@ -476,8 +476,19 @@ void OrbitUtils::calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& c
             calcCount++;
         }
         
+        int targetStepsPreview = forceUpdate ? 48 : 12;
+        size_t targetCap = (size_t)(targetStepsPreview + 1);
+        // 若此前作为焦点星扩容至 49 点，退回背景星（13 点）时主动收缩归还堆内存，防止堆碎片累积
+        if (cache.past.capacity() > targetCap * 2) {
+            std::vector<GeodeticCoord>().swap(cache.past);
+        }
+        if (cache.future.capacity() > targetCap * 2) {
+            std::vector<GeodeticCoord>().swap(cache.future);
+        }
         cache.past.clear();
         cache.future.clear();
+        if (cache.past.capacity() < targetCap) cache.past.reserve(targetCap);
+        if (cache.future.capacity() < targetCap) cache.future.reserve(targetCap);
         
         double teme_x = 0, teme_y = 0, teme_z = 0;
         double vx = 0, vy = 0, vz = 0;

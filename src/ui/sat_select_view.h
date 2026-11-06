@@ -31,6 +31,7 @@ public:
     void draw(LGFX_Sprite* canvas);
     void drawCategoryFilterDialog(LGFX_Sprite* canvas);
     void updateFilteredList();
+    void releasePreviewCalc();
 };
 
 #endif // SAT_SELECT_VIEW_H

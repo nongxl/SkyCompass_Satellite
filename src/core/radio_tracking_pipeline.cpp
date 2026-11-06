@@ -20,6 +20,8 @@ extern SatRealtimeCache g_satCaches[];
 
 extern void lockPassMutex();
 extern void unlockPassMutex();
+extern void lockSatMutex();
+extern void unlockSatMutex();
 extern std::vector<PassEvent> recommendedPasses;
 extern unsigned long lastTimeAdjustMillis;
 
@@ -48,8 +50,12 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
                 TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
                 el = tp.el;
             } else {
+                std::shared_ptr<SGP4Calc> cPtr;
+                lockSatMutex();
+                cPtr = g_satellites[i].calc;
+                unlockSatMutex();
                 double x = 0, y = 0, z = 0;
-                if (g_satellites[i].calc.getTEME(currentSimTime, x, y, z)) {
+                if (cPtr && cPtr->getTEME(currentSimTime, x, y, z)) {
                     ECEFCoord ec = CoordTransform::temeToECEF(x, y, z, gmst);
                     TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
                     el = tp.el;
@@ -107,8 +113,12 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
     trackInfo.timeOffsetSec = tmOffset;
 
     if (chosenRadioSat >= 0 && chosenRadioSat < NUM_SATELLITES) {
+        std::shared_ptr<SGP4Calc> radioCalc;
+        lockSatMutex();
         rNorad = g_satellites[chosenRadioSat].noradId;
         rName = g_satellites[chosenRadioSat].name;
+        radioCalc = g_satellites[chosenRadioSat].calc;
+        unlockSatMutex();
         float rAz = 0.0f;
         if (tmOffset == 0 && g_satCaches[chosenRadioSat].lastGeoValid) {
             ECEFCoord ec = CoordTransform::geodeticToECEF(g_satCaches[chosenRadioSat].lastGeo);
@@ -117,7 +127,7 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
             rAz = tp.az;
         } else {
             double curX = 0, curY = 0, curZ = 0;
-            if (g_satellites[chosenRadioSat].calc.getTEME(currentSimTime, curX, curY, curZ)) {
+            if (radioCalc && radioCalc->getTEME(currentSimTime, curX, curY, curZ)) {
                 double curGmst = CoordTransform::getGMST(CoordTransform::unixToJulian(currentSimTime));
                 ECEFCoord curEc = CoordTransform::temeToECEF(curX, curY, curZ, curGmst);
                 TopocentricCoord curTp = CoordTransform::ecefToTopocentric(obsRadio, curEc);
@@ -152,14 +162,14 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
         // 1. 实时对地斜距 (Slant Range) 与多普勒频移计算 (基于 1 秒微分离散差分)
         double curX0 = 0, curY0 = 0, curZ0 = 0;
         double curX1 = 0, curY1 = 0, curZ1 = 0;
-        if (g_satellites[chosenRadioSat].calc.getTEME(currentSimTime, curX0, curY0, curZ0)) {
+        if (radioCalc && radioCalc->getTEME(currentSimTime, curX0, curY0, curZ0)) {
             double g0 = CoordTransform::getGMST(CoordTransform::unixToJulian(currentSimTime));
             ECEFCoord satEcef0 = CoordTransform::temeToECEF(curX0, curY0, curZ0, g0);
             ECEFCoord obsEcef = CoordTransform::geodeticToECEF(obsRadio);
             double d0 = sqrt(sq(satEcef0.x - obsEcef.x) + sq(satEcef0.y - obsEcef.y) + sq(satEcef0.z - obsEcef.z));
             trackInfo.distanceKm = (float)d0;
 
-            if (rFreq > 0.0f && g_satellites[chosenRadioSat].calc.getTEME(currentSimTime + 1, curX1, curY1, curZ1)) {
+            if (rFreq > 0.0f && radioCalc->getTEME(currentSimTime + 1, curX1, curY1, curZ1)) {
                 double g1 = CoordTransform::getGMST(CoordTransform::unixToJulian(currentSimTime + 1));
                 ECEFCoord satEcef1 = CoordTransform::temeToECEF(curX1, curY1, curZ1, g1);
                 double d1 = sqrt(sq(satEcef1.x - obsEcef.x) + sq(satEcef1.y - obsEcef.y) + sq(satEcef1.z - obsEcef.z));
@@ -171,7 +181,7 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
 
         auto getEl = [&](uint32_t t) -> float {
             double x, y, z;
-            if (g_satellites[chosenRadioSat].calc.getTEME(t, x, y, z)) {
+            if (radioCalc && radioCalc->getTEME(t, x, y, z)) {
                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
                 ECEFCoord ec = CoordTransform::temeToECEF(x, y, z, gmst);
                 TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
@@ -182,7 +192,7 @@ void RadioTrackingPipeline::update(uint32_t currentSimTime, int32_t tmOffset) {
 
         auto getAz = [&](uint32_t t) -> float {
             double x, y, z;
-            if (g_satellites[chosenRadioSat].calc.getTEME(t, x, y, z)) {
+            if (radioCalc && radioCalc->getTEME(t, x, y, z)) {
                 double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
                 ECEFCoord ec = CoordTransform::temeToECEF(x, y, z, gmst);
                 TopocentricCoord tp = CoordTransform::ecefToTopocentric(obsRadio, ec);
