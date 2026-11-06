@@ -708,13 +708,6 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             canvas->setTextColor(TFT_LIGHTGRAY);
             canvas->drawString((String(I18N::get(TXT_ID)) + String(selSat.noradId)).c_str(), rightX + 48, descY + 20);
             
-            // Draw SATCAT Ops Status badge
-            const char* opsStr = I18N::getOpsStatusStr(selSat.opsStatus);
-            uint16_t opsCol = I18N::getOpsStatusColor(selSat.opsStatus);
-            canvas->setTextColor(opsCol);
-            int opsW = canvas->textWidth(opsStr);
-            canvas->drawString(opsStr, width - opsW - 4, descY + 20);
-            
             if (selSat.tle.line1.length() >= 32) {
                 uint32_t currentSimTime = current_unix + timeMachineOffset;
                 uint32_t satEpoch = TLEUpdater::parseTleEpochPublic(selSat.tle.line1);
@@ -817,6 +810,31 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             
             // 2. 拼接轨道参数与遥测细节 (COSPAR/周期/速度/倾角/高度/方位/仰角/频率)
             String specBlock = "";
+            
+            // 运行状态：置于百科词条下方、“国际标识”字段之前
+            {
+                char opsBuf[128];
+                const char* opsTitle = "运行状态:";
+                if (currL == LANG_JA) opsTitle = "運用状態:";
+                else if (currL == LANG_ES) opsTitle = "Estado:";
+                else if (currL == LANG_EN) opsTitle = "Status:";
+                
+                if (selSat.noradId == 100532) {
+                    if (currL == LANG_ZH) snprintf(opsBuf, sizeof(opsBuf), "\n\n%s [+] 往L2转移轨道巡航中", opsTitle);
+                    else if (currL == LANG_JA) snprintf(opsBuf, sizeof(opsBuf), "\n\n%s [+] L2遷移軌道巡航中", opsTitle);
+                    else if (currL == LANG_ES) snprintf(opsBuf, sizeof(opsBuf), "\n\n%s [+] En transito a L2", opsTitle);
+                    else snprintf(opsBuf, sizeof(opsBuf), "\n\n%s [+] In-transit to L2", opsTitle);
+                } else if (selSat.noradId == 34937) {
+                    if (currL == LANG_ZH) snprintf(opsBuf, sizeof(opsBuf), "\n\n%s [P] 已退役(液氦耗尽)", opsTitle);
+                    else if (currL == LANG_JA) snprintf(opsBuf, sizeof(opsBuf), "\n\n%s [P] 退役(液ヘリウム枯渇)", opsTitle);
+                    else if (currL == LANG_ES) snprintf(opsBuf, sizeof(opsBuf), "\n\n%s [P] Retirado (Helio agotado)", opsTitle);
+                    else snprintf(opsBuf, sizeof(opsBuf), "\n\n%s [P] Retired (Helium depleted)", opsTitle);
+                } else {
+                    snprintf(opsBuf, sizeof(opsBuf), "\n\n%s %s", opsTitle, I18N::getOpsStatusStr(selSat.opsStatus));
+                }
+                specBlock += String(opsBuf);
+            }
+            
             if (selSat.tle.line1.length() >= 60 && selSat.tle.line2.length() >= 60) {
                 // 解析 COSPAR 国际标识
                 String cospar = "";
@@ -986,49 +1004,6 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                 specBlock += String(radioBuf);
             }
             
-            // 运行状态与无线电频段细节
-            if (selSat.type == SAT_TYPE_HISTORICAL || selSat.noradId == 4382 || selSat.noradId == 5 || selSat.noradId == 27386 || selSat.noradId == 25576) {
-                char statusBuf[64];
-                if (currL == LANG_ZH) {
-                    snprintf(statusBuf, sizeof(statusBuf), "\n运行状态: 已失效/默音在轨");
-                } else if (currL == LANG_JA) {
-                    snprintf(statusBuf, sizeof(statusBuf), "\n運用状態: 非運用/静寂");
-                } else if (currL == LANG_ES) {
-                    snprintf(statusBuf, sizeof(statusBuf), "\nEstado: Inactivo/Silencioso");
-                } else {
-                    snprintf(statusBuf, sizeof(statusBuf), "\nStatus: Inactive/Silent");
-                }
-                specBlock += String(statusBuf);
-            }
-            
-            if (selSat.noradId == 100532) {
-                char statusBuf[96];
-                if (currL == LANG_ZH) {
-                    snprintf(statusBuf, sizeof(statusBuf), "\n运行状态: 往L2转移轨道巡航中(预计9月底入轨)");
-                } else if (currL == LANG_JA) {
-                    snprintf(statusBuf, sizeof(statusBuf), "\n運用状態: 地球-L2遷移軌道巡航中(9月下旬投入予定)");
-                } else if (currL == LANG_ES) {
-                    snprintf(statusBuf, sizeof(statusBuf), "\nEstado: En transito a L2 (Llegada fin de sep 2026)");
-                } else {
-                    snprintf(statusBuf, sizeof(statusBuf), "\nStatus: In-transit to L2 (Arrival late Sep 2026)");
-                }
-                specBlock += String(statusBuf);
-            }
-            
-            if (selSat.noradId == 34937) {
-                char statusBuf[96];
-                if (currL == LANG_ZH) {
-                    snprintf(statusBuf, sizeof(statusBuf), "\n运行状态: 已退役(液氦耗尽停止工作)");
-                } else if (currL == LANG_JA) {
-                    snprintf(statusBuf, sizeof(statusBuf), "\n運用状態: 退役(液体ヘリウム枯渇)");
-                } else if (currL == LANG_ES) {
-                    snprintf(statusBuf, sizeof(statusBuf), "\nEstado: Retirado (Helio agotado)");
-                } else {
-                    snprintf(statusBuf, sizeof(statusBuf), "\nStatus: Retired (Helium depleted)");
-                }
-                specBlock += String(statusBuf);
-            }
-            
             // 无线电频段细节 (下行 / 上行 / 亚音 / 调制模式)
             if (selSat.downlinkFreq.length() > 0) {
                 char freqBuf[128];
@@ -1173,10 +1148,42 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                     canvas->setClipRect(rightX, descY, width - rightX, descAreaHeight);
                     
                     // 1. 绘制简介与属性细节文本
+                    bool inDeorbWarningBlock = (selSat.opsStatus == 'D');
                     for (int idx = 0; idx < totalLines; idx++) {
                         int lineY = descY + idx * 13 - yOffset;
                         if (lineY >= descY - 13 && lineY <= descY + descAreaHeight) {
                             String line = g_descWrappedLines[idx];
+                            
+                            // 脱轨烧毁科普警示段落特殊色彩高亮（标签鲜红，说明文字警示橙）
+                            if (inDeorbWarningBlock) {
+                                if (line.length() == 0) {
+                                    inDeorbWarningBlock = false; // 空行结束警示段落
+                                } else {
+                                    int tagEnd = -1;
+                                    int closeZh = line.indexOf("】");
+                                    if (closeZh != -1) {
+                                        tagEnd = closeZh + strlen("】");
+                                    } else {
+                                        int closeEn = line.indexOf(']');
+                                        if (closeEn != -1) tagEnd = closeEn + 1;
+                                    }
+                                    if (tagEnd != -1) {
+                                        String tagPart = line.substring(0, tagEnd);
+                                        String restPart = line.substring(tagEnd);
+                                        canvas->setTextColor(TFT_RED);
+                                        canvas->drawString(tagPart.c_str(), rightX, lineY);
+                                        int tagW = canvas->textWidth(tagPart.c_str());
+                                        canvas->setTextColor(TFT_ORANGE);
+                                        canvas->drawString(restPart.c_str(), rightX + tagW, lineY);
+                                        continue;
+                                    } else {
+                                        canvas->setTextColor(TFT_ORANGE);
+                                        canvas->drawString(line.c_str(), rightX, lineY);
+                                        continue;
+                                    }
+                                }
+                            }
+
                             int colonIdx = line.indexOf(':');
                             if (colonIdx == -1) {
                                 colonIdx = line.indexOf("：");
@@ -1190,7 +1197,14 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                                 canvas->drawString(namePart.c_str(), rightX, lineY);
                                 
                                 int nameW = canvas->textWidth(namePart.c_str());
-                                canvas->setTextColor(TFT_LIGHTGRAY);
+                                
+                                // 运行状态的值部分应用专属 SATCAT 运营色彩
+                                uint16_t valColor = TFT_LIGHTGRAY;
+                                if (namePart.startsWith("运行状态") || namePart.startsWith("運用状態") || 
+                                    namePart.startsWith("Status") || namePart.startsWith("Estado")) {
+                                    valColor = I18N::getOpsStatusColor(selSat.opsStatus);
+                                }
+                                canvas->setTextColor(valColor);
                                 canvas->drawString(valuePart.c_str(), rightX + nameW, lineY);
                             } else {
                                 canvas->setTextColor(TFT_LIGHTGRAY);
