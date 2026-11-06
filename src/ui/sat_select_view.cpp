@@ -101,6 +101,7 @@ const FilterCategoryItem g_filterCategories[12] = {
 static std::unique_ptr<SGP4Calc> s_previewSatCalc;
 static int s_previewSatNorad = -1;
 static String s_previewSatLine1;
+static int s_deorbWarningLineCount = 0;
 
 SatSelectView::SatSelectView() {
 }
@@ -794,8 +795,8 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             }
             
             // 已脱轨航天器科普特别前缀
+            String deorbPrefix = "";
             if (selSat.opsStatus == 'D') {
-                String deorbPrefix = "";
                 if (currL == LANG_ZH) {
                     deorbPrefix = "【已再入烧毁】该航天器已脱轨坠毁并结束运行，轨道根数保留供历史科普参考。\n\n";
                 } else if (currL == LANG_JA) {
@@ -1068,6 +1069,12 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                     g_descManualScrolled = false;
                     g_descManualYOffset = 0;
                     g_descWrappedLines.clear();
+                    s_deorbWarningLineCount = 0;
+                    if (selSat.opsStatus == 'D' && deorbPrefix.length() > 0) {
+                        std::vector<String> deorbLines;
+                        TextUtils::wrapTextIntoLines(canvas, deorbPrefix, width - rightX - 5, deorbLines);
+                        s_deorbWarningLineCount = deorbLines.size();
+                    }
                     TextUtils::wrapTextIntoLines(canvas, fullTextToRender, width - rightX - 5, g_descWrappedLines);
                     
                     // 动态计算底部标签组占用的高度
@@ -1154,9 +1161,8 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                         if (lineY >= descY - 13 && lineY <= descY + descAreaHeight) {
                             String line = g_descWrappedLines[idx];
                             
-                            // 脱轨烧毁科普警示行（无状态依赖，按内容特征匹配）
-                            if (line.startsWith("【已再入烧毁】") || line.startsWith("【大気圏再突入済】") || 
-                                line.startsWith("[DESORBITADO]") || line.startsWith("[DECAYED/DEORBITED]")) {
+                            // 脱轨烧毁科普警示行（以确切行范围 idx < s_deorbWarningLineCount 驱动，无条件严格着色）
+                            if (selSat.opsStatus == 'D' && idx < s_deorbWarningLineCount) {
                                 int tagEnd = -1;
                                 int closeZh = line.indexOf("】");
                                 if (closeZh != -1) {
@@ -1165,7 +1171,9 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                                     int closeEn = line.indexOf(']');
                                     if (closeEn != -1) tagEnd = closeEn + 1;
                                 }
+                                
                                 if (tagEnd != -1) {
+                                    // 包含闭合括号的行：括号及内部标签为红色，后续描述文字为橙色
                                     String tagPart = line.substring(0, tagEnd);
                                     String restPart = line.substring(tagEnd);
                                     canvas->setTextColor(TFT_RED);
@@ -1173,9 +1181,13 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                                     int tagW = canvas->textWidth(tagPart.c_str());
                                     canvas->setTextColor(TFT_ORANGE);
                                     canvas->drawString(restPart.c_str(), rightX + tagW, lineY);
-                                    inOpsStatusContinuation = false;
-                                    continue;
+                                } else {
+                                    // 该段落后续折行：整行均为橙色
+                                    canvas->setTextColor(TFT_ORANGE);
+                                    canvas->drawString(line.c_str(), rightX, lineY);
                                 }
+                                inOpsStatusContinuation = false;
+                                continue;
                             }
 
                             int colonIdx = line.indexOf(':');
