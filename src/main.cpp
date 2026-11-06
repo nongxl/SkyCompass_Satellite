@@ -2457,7 +2457,7 @@ void setup() {
                 hw.isEnabled(HW_MOD_CHAIN_MONO) || hw.isEnabled(HW_MOD_UNIT_8SERVOS)) {
                 LOG_I("APP", "[HW] Enabling external 5V power bus for Grove/Cap peripherals...");
                 M5Cardputer.Power.setExtOutput(true);
-                delay(60); // 留出外部外设上电启动及电压稳定时间
+                delay(25); // 留出外部外设上电启动及电压稳定时间 (25ms 满足电气规格，省 35ms)
             }
 
             // 1. GNSS 模块定向点火
@@ -2528,9 +2528,9 @@ void setup() {
                     int rxPin = pinPairs[p][0];
                     int txPin = pinPairs[p][1];
                     M5Chain.begin(&Serial2, 115200, rxPin, txPin);
-                    delay(30);
+                    delay(15);
                     
-                    if (M5Chain.getDeviceNum(&device_nums, 80) == CHAIN_OK && device_nums > 0) {
+                    if (M5Chain.getDeviceNum(&device_nums, 35) == CHAIN_OK && device_nums > 0) {
                         LOG_I("APP", "[HW] Chain Mono detected on Grove (RX=%d, TX=%d)! Devices: %d", rxPin, txPin, device_nums);
                         detected = true;
                         break;
@@ -2620,70 +2620,40 @@ void setup() {
             // Setup LittleFS for TLE Cache
             TLEUpdater::begin();
             
-            // One-off cache cleanup to clear the previous stale cache bug
-            if (!LittleFS.exists("/cache_cleared_v2.txt")) {
-                for (int i = 0; i < NUM_SATELLITES; i++) {
-                    String tlePath = "/tle_" + String(g_satellites[i].noradId) + ".txt";
-                    String catPath = "/cat_" + String(g_satellites[i].noradId) + ".json";
-                    if (LittleFS.exists(tlePath)) LittleFS.remove(tlePath);
-                    if (LittleFS.exists(catPath)) LittleFS.remove(catPath);
-                }
-                File f = LittleFS.open("/cache_cleared_v2.txt", "w", true);
-                if (f) {
-                    f.println("cleared");
-                    f.close();
-                }
-            }
-            
             // Set default offline time first so getTLE works properly if needed
             current_unix = 0; // We start at 0 so TLEUpdater uses cache regardless of age
             
-            // Offline TLE Cache Loading
+            // 极速离线 TLE 载入：优先使用 ROM 内置 TLE（纳秒级内存访问，绕过 60+ 次 Flash 磁盘查找与解析）
             Language currL_parse = I18N::getLanguage();
             for (int i = 0; i < NUM_SATELLITES; i++) {
-                vTaskDelay(pdMS_TO_TICKS(1)); // 出让调度片，避免多核心密集竞争及保证看门狗稳定
+                if ((i & 7) == 0) {
+                    vTaskDelay(pdMS_TO_TICKS(1)); // 每 8 颗卫星出让一次调度片喂狗，避免每颗星休眠耗时
+                }
                 if (g_satellites[i].type == SAT_TYPE_GEO_TV || g_satellites[i].type == SAT_TYPE_DEEP_SPACE) {
                     continue;
                 }
-                setLoadingStatusText((currL_parse == LANG_ZH) ? ("解析轨道: " + g_satellites[i].name) : ((currL_parse == LANG_JA) ? ("軌道解析中: " + g_satellites[i].name) : ((currL_parse == LANG_ES) ? ("Analizando órbita: " + g_satellites[i].name) : ("Parsing Orbit: " + g_satellites[i].name))));
                 uint32_t norad = g_satellites[i].noradId;
-                TLEData loaded_tle;
-                bool hasCache = TLEUpdater::getTLE(norad, loaded_tle);
-                
                 TLEData builtinTle;
                 bool hasBuiltin = TLEManager::getBuiltinTLE(norad, builtinTle);
                 
-                bool useBuiltin = false;
                 if (hasBuiltin) {
-                    if (!hasCache) {
-                        useBuiltin = true;
-                    } else {
-                        // 当固件重新编译并烘焙进更新的 TLE (Epoch 更晚) 时，优先采用内置 TLE 并同步更新 LittleFS 闪存缓存
-                        uint32_t builtinEpoch = parseTleEpoch(builtinTle.line1);
-                        uint32_t cacheEpoch = parseTleEpoch(loaded_tle.line1);
-                        if (builtinEpoch > cacheEpoch) {
-                            useBuiltin = true;
-                        }
-                    }
-                }
-                
-                if (useBuiltin) {
+                    // 内置命中：直接使用 ROM 内置最新固化 TLE（0 毫秒，无磁盘 I/O）
                     builtinTle.baseScore = g_satellites[i].baseScore;
                     lockSatMutex();
                     g_satellites[i].tle = builtinTle;
                     unlockSatMutex();
-                    // 同步持久化至 LittleFS 闪存缓存
-                    TLEUpdater::saveToCache(norad, builtinTle, 0);
-                } else if (hasCache) {
-                    loaded_tle.baseScore = g_satellites[i].baseScore;
-                    lockSatMutex();
-                    g_satellites[i].tle = loaded_tle;
-                    unlockSatMutex();
+                } else {
+                    // 内置未命中时（如未来扩展的目标）才检查 LittleFS 闪存缓存
+                    TLEData loaded_tle;
+                    if (TLEUpdater::getTLE(norad, loaded_tle)) {
+                        loaded_tle.baseScore = g_satellites[i].baseScore;
+                        lockSatMutex();
+                        g_satellites[i].tle = loaded_tle;
+                        unlockSatMutex();
+                    }
                 }
                 
                 // 开机阶段仅加载轻量级 TLE 文本，待 loadSelectedSatellites() 后仅对实际勾选的卫星实例化 SGP4Calc
-                
-                // Slowly progress progress to 65%
                 g_loadingProgress = 30 + (int)(35.0f * (float)(i + 1) / (float)NUM_SATELLITES);
             }
             
@@ -2820,7 +2790,6 @@ void setup() {
 
             setLoadingStatusText((currL_boot == LANG_ZH) ? "加载完成，准备就绪！" : ((currL_boot == LANG_JA) ? "ロード完了、準備完了！" : ((currL_boot == LANG_ES) ? "¡Listo!" : "Ready!")));
             g_loadingProgress = 100;
-            delay(100);
             g_loadingFinished = true;
             vTaskDelete(NULL);
         },
@@ -2862,12 +2831,11 @@ void setup() {
         }
         drawStartupScreen(g_loadingProgress, needsLangSelect, selectedLangIdx);
         updateChainMonoDisplay();
-        delay(25);
+        delay(10);
     }
     
-    // Draw the final complete state and pause slightly to show completion
+    // Draw the final complete state
     drawStartupScreen(100, false, 0);
-    delay(50);
     
     // Restore decorations for main system view
     if (earth_renderer) {
