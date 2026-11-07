@@ -81,6 +81,7 @@ void WifiSetupView::draw(LGFX_Sprite* canvas) {
     // Set font matching current language
     canvas->setFont(I18N::getFont());
     canvas->setTextSize(1);
+    canvas->setTextDatum(TL_DATUM);
     
     // Background
     canvas->fillRect(0, 0, width, height, canvas->color565(15, 20, 25));
@@ -178,6 +179,7 @@ void WifiSetupView::draw(LGFX_Sprite* canvas) {
             }
         }
     }
+    canvas->setTextDatum(TL_DATUM);
 }
 
 bool WifiSetupView::handleInput(bool justEsc, bool justTick, bool justBack, bool justEnter, 

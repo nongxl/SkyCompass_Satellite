@@ -18,6 +18,7 @@ void DialogViews::resetLangSelectAnim(int initialIndex) {
 
 void DialogViews::drawHelpDialog(LGFX_Sprite* canvas) {
     if (!canvas) return;
+    canvas->setTextDatum(TL_DATUM);
 
     uint16_t w = 216, h = 127;
     int x = (canvas->width() - w) / 2;
@@ -121,6 +122,7 @@ void DialogViews::drawHelpDialog(LGFX_Sprite* canvas) {
 
 void DialogViews::drawLangSelectDialog(LGFX_Sprite* canvas, int selectedLangIndex) {
     if (!canvas) return;
+    canvas->setTextDatum(TL_DATUM);
     
     // 更新高亮光标物理弹簧目标
     s_langCursorY.set((float)(selectedLangIndex * 15));

@@ -81,6 +81,7 @@ void StartupView::draw(int progressPercentage, bool showLangSelect, int selected
     
     LGFX_Sprite* canvas = earth_renderer->getCanvas();
     if (!canvas) return;
+    canvas->setTextDatum(TL_DATUM);
 
     if (s_triviaIndex < 0) {
         s_triviaIndex = (int)(esp_random() % TriviaManager::getCount());
@@ -140,6 +141,7 @@ void StartupView::draw(int progressPercentage, bool showLangSelect, int selected
     
     // Draw language selection dialog if needed
     if (showLangSelect) {
+        canvas->setTextDatum(TL_DATUM);
         int dialogW = 164;
         int dialogH = 84;
         int dialogX = 120 - dialogW / 2;
@@ -178,4 +180,5 @@ void StartupView::draw(int progressPercentage, bool showLangSelect, int selected
         ImageUtils::applyNightVisionFilter(canvas);
     }
     canvas->pushSprite(0, 0);
+    canvas->setTextDatum(TL_DATUM);
 }

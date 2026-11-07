@@ -193,6 +193,7 @@ bool RecommendationView::isVisible() const {
 
 void RecommendationView::draw(LGFX_Sprite* canvas) {
     if (!canvas) return;
+    canvas->setTextDatum(TL_DATUM);
     float drawerF = s_drawerX.get();
     if (!showRecommendations && drawerF <= -144.0f) {
         return; // 完全收起状态，零 CPU 消耗

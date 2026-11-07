@@ -279,6 +279,7 @@ void SatSelectView::drawCategoryFilterDialog(LGFX_Sprite* canvas) {
 void SatSelectView::draw(LGFX_Sprite* canvas) {
     if (!canvas && earth_renderer) canvas = earth_renderer->getCanvas();
     if (!canvas) return;
+    canvas->setTextDatum(TL_DATUM);
 
     auto getBannerTextColor = [](const String& msg) -> uint16_t {
         String lower = msg;
