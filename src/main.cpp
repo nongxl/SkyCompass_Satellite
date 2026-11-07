@@ -340,18 +340,21 @@ void initRecentLaunchCalcs(RecentLaunchItem& item) {
         item.cache.lastGeoValid = false;
         item.cache.isVisible = false;
         item.cache.isRadioPassing = false;
+        item.cache.prop.reset();
         item.cache.cache.clearAndShrink();
         return;
     }
     
-    // 极速内存路径：若已有代表星 TLE，直接在内存瞬时初始化 SGP4 运算器（0 毫秒、0 磁盘 I/O）
+    // 极速内存路径：若已有代表星 TLE，使用 Copy-on-Write 在内存瞬时初始化独立 SGP4 运算器（0 磁盘 I/O，无锁线程安全）
     if (item.repTLE.line1.length() >= 14 && item.repTLE.line2.length() >= 14) {
         if (!item.calc) {
-            item.calc = std::make_shared<SGP4Calc>();
-            item.calc->init(item.repTLE);
+            auto newCalc = std::make_shared<SGP4Calc>();
+            newCalc->init(item.repTLE);
+            item.calc = newCalc;
         }
         item.cache.lastGeoValid = false;
         item.cache.isVisible = false;
+        item.cache.prop.reset();
         if (item.batchId == recentLaunchActiveBatchId) {
             g_repSatTLE = item.repTLE;
             if (item.calc) {
@@ -381,10 +384,12 @@ void initRecentLaunchCalcs(RecentLaunchItem& item) {
             OrbitRecord record;
             if (parser.parse(singleLine, record)) {
                 if (record.getBatchId() == item.batchId) {
-                    item.calc = std::make_shared<SGP4Calc>();
-                    item.calc->init(record);
+                    auto newCalc = std::make_shared<SGP4Calc>();
+                    newCalc->init(record);
+                    item.calc = newCalc;
                     item.cache.lastGeoValid = false;
                     item.cache.isVisible = false;
+                    item.cache.prop.reset();
                     item.repTLE.name = record.name;
                     item.repTLE.baseScore = 0;
                     SGP4Calc::buildPseudoTle(record, item.repTLE.line1, item.repTLE.line2);
@@ -452,14 +457,17 @@ void syncSatCalcAndCacheLocked(int idx) {
         g_satCaches[idx].lastGeoValid = false;
         g_satCaches[idx].isVisible = false;
         g_satCaches[idx].isRadioPassing = false;
+        g_satCaches[idx].prop.reset();
         g_satCaches[idx].cache.clearAndShrink();
         return;
     }
     if (sat.tle.line1.length() >= 68 && sat.tle.line2.length() >= 68) {
-        if (!sat.calc) {
-            sat.calc = std::make_shared<SGP4Calc>();
-        }
-        sat.calc->init(sat.tle);
+        // Copy-on-Write: 构建全新的 SGP4Calc 实例完成后再替换共享指针，使 Core 1 渲染线程可无锁独占调用 getTEMEFast
+        auto newCalc = std::make_shared<SGP4Calc>();
+        newCalc->init(sat.tle);
+        sat.calc = newCalc;
+        g_satCaches[idx].prop.reset();
+        g_satCaches[idx].cache.clearAndShrink();
     }
 }
 
@@ -644,7 +652,7 @@ void predictorTask(void* parameter) {
     while (true) {
         static unsigned long lastLoopPrintMs = 0;
         // Heartbeat print disabled to prevent Serial multi-core deadlocks
-        if (!triggerPrediction || g_networkActive || !g_timeSynced) {
+        if (!triggerPrediction || g_networkActive || !g_timeSynced || lastTimeAdjustMillis != 0) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
@@ -738,6 +746,10 @@ void predictorTask(void* parameter) {
             
             // Phase 1 - 候选高亮度目视与业余无线电卫星
             for (int satIdx : candidateSatIndices) {
+                while (lastTimeAdjustMillis != 0 && !triggerPrediction && !cancelPrediction && !g_networkActive) {
+                    esp_task_wdt_reset();
+                    vTaskDelay(pdMS_TO_TICKS(30));
+                }
                 vTaskDelay(1);
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
@@ -901,6 +913,10 @@ void predictorTask(void* parameter) {
 
             // Phase 2 - 候选高亮度目视收录卫星
             for (int satIdx : candidateSatIndices) {
+                while (lastTimeAdjustMillis != 0 && !triggerPrediction && !cancelPrediction && !g_networkActive) {
+                    esp_task_wdt_reset();
+                    vTaskDelay(pdMS_TO_TICKS(30));
+                }
                 vTaskDelay(1);
                 esp_task_wdt_reset();
                 if (triggerPrediction || cancelPrediction || g_networkActive) break;
@@ -2868,50 +2884,149 @@ void drawSatSelectPage() {
     sat_select_view.draw(earth_renderer->getCanvas());
 }
 
+// 四阶二体开普勒 f&g 级数 + getTEMEFast 混合轨道推进引擎（背景星每 4 帧分片精算，其余帧 0.35us 单精度外推）
+static bool propagateSatFast(
+    SGP4Calc& calc,
+    TemePropState& prop,
+    double continuousSimTime,
+    float cosGmst,
+    float sinGmst,
+    bool forceExactSgp4,
+    GeodeticCoord& outGeo)
+{
+    double dt = continuousSimTime - prop.sgp4Time;
+    float rx = 0.0f, ry = 0.0f, rz = 0.0f;
+    float vx = 0.0f, vy = 0.0f, vz = 0.0f;
+    bool ok = false;
+
+    if (!forceExactSgp4 && prop.valid && fabs(dt) <= 240.0) {
+        float r0Sq = prop.tx * prop.tx + prop.ty * prop.ty + prop.tz * prop.tz;
+        if (r0Sq > 4.0e6f) {
+            float fdt = (float)dt;
+            float invR0 = 1.0f / sqrtf(r0Sq);
+            float invR0_2 = invR0 * invR0;
+            const float mu = 398600.44f;
+            float u = mu * invR0 * invR0_2;
+            float rDotV = prop.tx * prop.vx + prop.ty * prop.vy + prop.tz * prop.vz;
+            float v0Sq = prop.vx * prop.vx + prop.vy * prop.vy + prop.vz * prop.vz;
+            float p = rDotV * invR0_2;
+            float q = v0Sq * invR0_2 - u;
+
+            float dt2 = fdt * fdt;
+            float dt3 = dt2 * fdt;
+            float dt4 = dt2 * dt2;
+            float k4 = u * (3.0f * q - 15.0f * p * p + u);
+
+            float f = 1.0f - 0.5f * u * dt2 + 0.5f * u * p * dt3 + (1.0f / 24.0f) * k4 * dt4;
+            float g = fdt - (1.0f / 6.0f) * u * dt3 + 0.25f * u * p * dt4;
+            float fdot = -u * fdt + 1.5f * u * p * dt2 + (1.0f / 6.0f) * k4 * dt3;
+            float gdot = 1.0f - 0.5f * u * dt2 + u * p * dt3;
+
+            rx = f * prop.tx + g * prop.vx;
+            ry = f * prop.ty + g * prop.vy;
+            rz = f * prop.tz + g * prop.vz;
+            vx = fdot * prop.tx + gdot * prop.vx;
+            vy = fdot * prop.ty + gdot * prop.vy;
+            vz = fdot * prop.tz + gdot * prop.vz;
+            ok = true;
+        }
+    }
+
+    if (!ok) {
+        double dtx, dty, dtz, dvx, dvy, dvz;
+        if (!calc.getTEMEFast(continuousSimTime, dtx, dty, dtz, dvx, dvy, dvz)) {
+            prop.valid = false;
+            return false;
+        }
+        if (std::isnan(dtx) || std::isnan(dty) || std::isnan(dtz) ||
+            std::isinf(dtx) || std::isinf(dty) || std::isinf(dtz)) {
+            prop.valid = false;
+            return false;
+        }
+        rx = (float)dtx; ry = (float)dty; rz = (float)dtz;
+        vx = (float)dvx; vy = (float)dvy; vz = (float)dvz;
+        prop.tx = rx; prop.ty = ry; prop.tz = rz;
+        prop.vx = vx; prop.vy = vy; prop.vz = vz;
+        prop.sgp4Time = continuousSimTime;
+        prop.valid = true;
+    }
+
+    float ex = rx * cosGmst + ry * sinGmst;
+    float ey = -rx * sinGmst + ry * cosGmst;
+    float ez = rz;
+    const float omegaE = 7.2921159e-5f;
+    prop.ecefX = ex;
+    prop.ecefY = ey;
+    prop.ecefZ = ez;
+    prop.ecefVx = (vx * cosGmst + vy * sinGmst) + omegaE * ey;
+    prop.ecefVy = (-vx * sinGmst + vy * cosGmst) - omegaE * ex;
+    prop.ecefVz = vz;
+
+    float latDeg, lonDeg, altKm;
+    CoordTransform::ecefToGeodeticFast(ex, ey, ez, latDeg, lonDeg, altKm);
+    outGeo.lat = (double)latDeg;
+    outGeo.lon = (double)lonDeg;
+    outGeo.alt = (double)altKm;
+    return true;
+}
+
 // 快速解算所有已选卫星在当前连续模拟时间的 SGP4 实时地心/大地坐标 (专用于射频巡天与浑仪舵机追焦)
 void updateSelectedSatRealtimePositions(double continuousSimTime, double current_gmst) {
+    struct FastSnap {
+        int idx;
+        std::shared_ptr<SGP4Calc> calc;
+        SatelliteType type;
+        uint32_t noradId;
+        double geoSlotLon;
+    };
+    FastSnap snaps[MAX_TOTAL_SELECTED_SATS + 8];
+    int snapCount = 0;
+
+    lockSatMutex();
     for (int i = 0; i < NUM_SATELLITES; i++) {
-        bool selectedCopy = false;
-        std::shared_ptr<SGP4Calc> calcPtr;
-        SatelliteType typeCopy = SAT_TYPE_VISUAL;
-        uint32_t noradIdCopy = 0;
-        String uplinkFreqCopy;
-
-        lockSatMutex();
-        selectedCopy = g_satellites[i].selected;
-        if (selectedCopy) {
-            calcPtr = g_satellites[i].calc;
-            typeCopy = g_satellites[i].type;
-            noradIdCopy = g_satellites[i].noradId;
-            uplinkFreqCopy = g_satellites[i].uplinkFreq;
-        }
-        unlockSatMutex();
-
-        if (!selectedCopy) {
+        if (!g_satellites[i].selected) {
             g_satCaches[i].lastGeoValid = false;
             g_satCaches[i].isVisible = false;
             continue;
         }
+        if (snapCount < (int)(sizeof(snaps) / sizeof(snaps[0]))) {
+            FastSnap& s = snaps[snapCount++];
+            s.idx = i;
+            s.calc = g_satellites[i].calc;
+            s.type = g_satellites[i].type;
+            s.noradId = g_satellites[i].noradId;
+            s.geoSlotLon = (s.type == SAT_TYPE_GEO_TV) ? getGeoSlotLongitude(s.noradId, g_satellites[i].uplinkFreq) : 0.0;
+        }
+    }
+    unlockSatMutex();
 
-        if (typeCopy == SAT_TYPE_GEO_TV) {
-            double slotLon = getGeoSlotLongitude(noradIdCopy, uplinkFreqCopy);
+    static uint8_t s_rfShard = 0;
+    s_rfShard++;
+    float cosGmst = cosf((float)current_gmst);
+    float sinGmst = sinf((float)current_gmst);
+
+    for (int k = 0; k < snapCount; k++) {
+        const FastSnap& s = snaps[k];
+        int i = s.idx;
+        if (s.type == SAT_TYPE_GEO_TV) {
             GeodeticCoord geo;
             ECEFCoord ecef;
             TopocentricCoord topo;
             double skew = 0.0;
-            calculateGeoSatPosition(slotLon, baseUserLat, baseUserLon, baseUserAlt, geo, ecef, topo, skew);
+            calculateGeoSatPosition(s.geoSlotLon, baseUserLat, baseUserLon, baseUserAlt, geo, ecef, topo, skew);
             g_satCaches[i].lastGeo = geo;
             g_satCaches[i].lastGeoValid = true;
-        } else {
-            double tx, ty, tz;
-            if (calcPtr && calcPtr->getTEME(continuousSimTime, tx, ty, tz)) {
-                ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
-                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+        } else if (s.calc) {
+            bool forceExact = ((k & 3) == (s_rfShard & 3));
+            GeodeticCoord geo;
+            if (propagateSatFast(*s.calc, g_satCaches[i].prop, continuousSimTime, cosGmst, sinGmst, forceExact, geo)) {
                 g_satCaches[i].lastGeo = geo;
                 g_satCaches[i].lastGeoValid = true;
             } else {
                 g_satCaches[i].lastGeoValid = false;
             }
+        } else {
+            g_satCaches[i].lastGeoValid = false;
         }
     }
 }
@@ -2931,8 +3046,8 @@ void loop() {
     if (HardwareConfig::getInstance().isEnabled(HW_MOD_UNIT_8SERVOS)) {
         gimbal.tick();
     }
-    // Resume suspended predictorTask after 500ms debounce of time machine adjustments
-    if (lastTimeAdjustMillis != 0 && millis() - lastTimeAdjustMillis > 500) {
+    // 时间机器松手 250ms 后敏捷恢复后台巡天与跨天过境检测
+    if (lastTimeAdjustMillis != 0 && millis() - lastTimeAdjustMillis > 250) {
         lastTimeAdjustMillis = 0;
         if (predictorTaskHandle != NULL) {
             // Suspended check removed in cooperative mode
@@ -3302,9 +3417,20 @@ void loop() {
         }
     }
 
-    // Render at 30 FPS (33ms)
-    if (millis() - last_update >= 33) {
-        last_update = millis();
+    // 主地球仪视图解锁 ~60 FPS (16ms)，二级菜单保持 30 FPS (33ms) 兼顾响应与功耗
+    const unsigned long targetFrameIntervalMs = (appState == STATE_MAIN && !showRecommendations && !showHelp && !RfConsoleView::getInstance().isActive()) ? 16UL : 33UL;
+    unsigned long nowRenderMs = millis();
+    if (nowRenderMs - last_update < targetFrameIntervalMs) {
+        if (targetFrameIntervalMs - (nowRenderMs - last_update) > 2UL) {
+            delay(1); // 抑制空闲空转时数千 Hz 的键盘总线高频扫描噪音
+        }
+        return;
+    }
+    if (true) {
+        float renderFrameDt = (last_update == 0) ? 0.016f : ((nowRenderMs - last_update) / 1000.0f);
+        if (renderFrameDt < 0.005f) renderFrameDt = 0.005f;
+        if (renderFrameDt > 0.100f) renderFrameDt = 0.100f;
+        last_update = nowRenderMs;
         
         // Action keys state from last frame (for edge detection / single-press action)
         static bool lastSemi = false;
@@ -3556,6 +3682,10 @@ void loop() {
         static unsigned long keyHoldStartTime = 0;
         static char lastKey = 0;
         static unsigned long lastKeyRepeat = 0;
+        static double s_continuousTmTarget = 0.0;
+        if (lastTimeAdjustMillis == 0 && fabs(s_continuousTmTarget - (double)timeMachineOffset) > 1.0) {
+            s_continuousTmTarget = (double)timeMachineOffset;
+        }
         isFastForwarding = (lastTimeAdjustMillis != 0) || showRecommendations;
         static double targetFocusAlt = 0.0;
         
@@ -3573,21 +3703,16 @@ void loop() {
             else if (M5Cardputer.Keyboard.isKeyPressed(' ')) currentKey = ' ';
             else if (M5Cardputer.Keyboard.isKeyPressed('[')) currentKey = '[';
             else if (M5Cardputer.Keyboard.isKeyPressed(']')) currentKey = ']';
+
+            const bool isTimeMachineKeyMode = ((isSatViewMode || (!isManualLocationMode)) && !showRecommendations);
             
             auto handleContinuousKey = [&](char key) {
-                if ((isSatViewMode || (!isManualLocationMode)) && !showRecommendations) {
+                if (isTimeMachineKeyMode) {
                     if (key == ',' || key == '/') {
                         lastTimeAdjustMillis = millis();
-                        if (predictorTaskHandle != NULL) {
-                            // Suspended check removed in cooperative mode
-                        }
-                    }
-                    if (key == ',') {
-                        timeMachineOffset -= 60;
-                        g_smoothTimeMachineOffset.set((float)timeMachineOffset);
-                    } else if (key == '/') {
-                        timeMachineOffset += 60;
-                        g_smoothTimeMachineOffset.set((float)timeMachineOffset);
+                        timeMachineOffset += (key == '/') ? 60 : -60;
+                        s_continuousTmTarget = (double)timeMachineOffset;
+                        g_smoothTimeMachineOffset.set((float)s_continuousTmTarget);
                     }
                     else if (key == '[') {
                         if (currentBrightness >= 32) currentBrightness -= 16;
@@ -3650,20 +3775,45 @@ void loop() {
                 }
 
             };
+
+            // 连续帧率自适应时间机器积分器：消除 30Hz 阶梯拍频抖动，长按平滑无级加速
+            auto advanceContinuousTimeMachine = [&](char key, unsigned long holdMs) {
+                lastTimeAdjustMillis = millis();
+                float holdSec = (float)holdMs * 0.001f;
+                float rateSecPerSec = 1800.0f; // 初段 30 分钟/秒，与原手感无缝衔接
+                if (holdSec > 1.2f && holdSec <= 3.0f) {
+                    float t = (holdSec - 1.2f) / 1.8f;
+                    rateSecPerSec = 1800.0f + t * 5400.0f; // 1.2s~3.0s 柔顺升至 2 小时/秒
+                } else if (holdSec > 3.0f) {
+                    float t = (holdSec - 3.0f) / 2.0f;
+                    if (t > 1.0f) t = 1.0f;
+                    rateSecPerSec = 7200.0f + t * 7200.0f; // 3.0s 后平滑升至最高 4 小时/秒
+                }
+                double dir = (key == '/') ? 1.0 : -1.0;
+                s_continuousTmTarget += dir * (double)rateSecPerSec * (double)renderFrameDt;
+                if (s_continuousTmTarget > 315360000.0) s_continuousTmTarget = 315360000.0;
+                if (s_continuousTmTarget < -315360000.0) s_continuousTmTarget = -315360000.0;
+                timeMachineOffset = (int32_t)llround(s_continuousTmTarget);
+                g_smoothTimeMachineOffset.set((float)s_continuousTmTarget);
+            };
             
             static unsigned long keyReleaseTime = 0;
             if (currentKey != 0) {
                 keyReleaseTime = 0;
                 if (lastKey != currentKey) {
-                    // Initial press
+                    // Initial press (单次点按精确步进 ±60 秒)
                     lastKey = currentKey;
                     keyHoldStartTime = millis();
                     lastKeyRepeat = millis();
                     handleContinuousKey(currentKey);
                 } else {
-                    // Held down
-                    if (millis() - keyHoldStartTime > 300) { // 300ms delay before repeat
-                        if (millis() - lastKeyRepeat > 33) { // ~30Hz repeat rate
+                    unsigned long holdMs = millis() - keyHoldStartTime;
+                    if (isTimeMachineKeyMode && (currentKey == ',' || currentKey == '/')) {
+                        if (holdMs > 250) {
+                            advanceContinuousTimeMachine(currentKey, holdMs);
+                        }
+                    } else if (holdMs > 300) {
+                        if (millis() - lastKeyRepeat > 33) {
                             lastKeyRepeat = millis();
                             handleContinuousKey(currentKey);
                         }
@@ -3672,9 +3822,14 @@ void loop() {
             } else {
                 if (lastKey != 0) {
                     if (keyReleaseTime == 0) keyReleaseTime = millis();
-                    if (millis() - keyReleaseTime < 120) {
-                        // 在 120ms 的 I2C 消抖窗口内，平滑保持上一有效按键的连续响应，防止 UART 中断导致断线卡顿
-                        if (millis() - keyHoldStartTime > 300) {
+                    if (millis() - keyReleaseTime < 45) {
+                        // 45ms 微消抖桥接按键矩阵瞬态漏扫，松手无拖泥带水感
+                        unsigned long holdMs = millis() - keyHoldStartTime;
+                        if (isTimeMachineKeyMode && (lastKey == ',' || lastKey == '/')) {
+                            if (holdMs > 250) {
+                                advanceContinuousTimeMachine(lastKey, holdMs);
+                            }
+                        } else if (holdMs > 300) {
                             if (millis() - lastKeyRepeat > 33) {
                                 lastKeyRepeat = millis();
                                 handleContinuousKey(lastKey);
@@ -4800,8 +4955,10 @@ void loop() {
         // 亚秒级连续模拟时间与弹簧时间平滑引擎 (消除每秒跳帧顿挫与时间机器跳跃)
         double subsecondFraction = g_subsecondFraction;
         double continuousSimTime = (double)current_unix + subsecondFraction + (double)g_smoothTimeMachineOffset.get();
-        uint32_t simTime = (uint32_t)((int64_t)current_unix + (int64_t)round(g_smoothTimeMachineOffset.get()));
+        uint32_t simTime = (uint32_t)((int64_t)current_unix + (int64_t)llround(g_smoothTimeMachineOffset.get()));
         double current_gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(continuousSimTime));
+        const float cosGmst = cosf((float)current_gmst);
+        const float sinGmst = sinf((float)current_gmst);
 
         // Target camera values for smooth transitions
         double targetViewLat = 0.0;
@@ -4818,10 +4975,9 @@ void loop() {
             bool hasFocalPos = false;
             GeodeticCoord focalGeo;
             if (g_recentLaunchFocusMode && focusSatIndex == -1) {
-                double tx, ty, tz;
-                if (g_repSatCalc.getTEME(continuousSimTime, tx, ty, tz)) {
-                    ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
-                    focalGeo = CoordTransform::ecefToGeodetic(ecef);
+                if (propagateSatFast(g_repSatCalc, g_repSatCache.prop, continuousSimTime, cosGmst, sinGmst, true, focalGeo)) {
+                    g_repSatCache.lastGeo = focalGeo;
+                    g_repSatCache.lastGeoValid = true;
                     hasFocalPos = true;
                 }
             }
@@ -4835,10 +4991,9 @@ void loop() {
                     lockSatMutex();
                     fCalc = g_satellites[focusSatIndex].calc;
                     unlockSatMutex();
-                    double tx, ty, tz;
-                    if (fCalc && fCalc->getTEME(continuousSimTime, tx, ty, tz)) {
-                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
-                        focalGeo = CoordTransform::ecefToGeodetic(ecef);
+                    if (fCalc && propagateSatFast(*fCalc, g_satCaches[focusSatIndex].prop, continuousSimTime, cosGmst, sinGmst, true, focalGeo)) {
+                        g_satCaches[focusSatIndex].lastGeo = focalGeo;
+                        g_satCaches[focusSatIndex].lastGeoValid = true;
                         hasFocalPos = true;
                     }
                 }
@@ -4854,8 +5009,6 @@ void loop() {
                 
                 prevSatViewMode = true;
 
-
-                
                 if (!(attitude && imu)) {
                     targetViewLat = focalGeo.lat;
                     targetViewLon = focalGeo.lon;
@@ -4943,8 +5096,9 @@ void loop() {
             }
         }
         
-        // Smoothly interpolate currentZoom to targetZoom
-        currentZoom += (targetZoom - currentZoom) * 0.15f;
+        // 帧率无关指数阻尼插值（60 FPS 与 30 FPS 保持严格一致的物理阻尼时间常数）
+        float zoomAlpha = 1.0f - powf(0.85f, renderFrameDt * 30.0f);
+        currentZoom += (targetZoom - currentZoom) * zoomAlpha;
         earth_renderer->setZoom(currentZoom);
         
         static double smoothViewLat = baseUserLat;
@@ -4981,7 +5135,7 @@ void loop() {
         if (lonDiff > 180.0) targetViewLon -= 360.0;
         else if (lonDiff < -180.0) targetViewLon += 360.0;
         
-        float dt = 0.20f;
+        float dt = 1.0f - powf(0.80f, renderFrameDt * 30.0f);
         if (isSatViewMode && !isCameraTransitioning) {
             dt = 1.0f; // 锁定特定卫星视角时直接跟随机位
         }
@@ -5000,7 +5154,6 @@ void loop() {
             }
         }
 
-        
         smoothPitch += (targetPitch - smoothPitch) * dt;
         smoothRoll += (targetRoll - smoothRoll) * dt;
         smoothYaw += (targetYaw - smoothYaw) * dt;
@@ -5017,11 +5170,53 @@ void loop() {
         double viewLat = smoothViewLat;
         double viewLon = smoothViewLon;
 
-        // Update Sun Position
+        // 太阳直射点帧级缓存（10秒内太阳赤纬/时角仅移动 0.04°，消除每帧 3 次重复天文解算）
+        static SunPositionData s_cachedSunPos = {0.0, 0.0, 0.0, 0.0};
+        static int64_t s_lastSunSimTime = -9999999LL;
+        float sunEx = 1.0f, sunEy = 0.0f, sunEz = 0.0f;
+        bool observerIsNight = true;
         if (sun_calc) {
-            SunPositionData sunPos = sun_calc->calculatePosition(simTime, viewLat, viewLon);
-            earth_renderer->setSunPosition(sunPos.subsolarLat, sunPos.subsolarLon);
+            if (llabs((int64_t)simTime - s_lastSunSimTime) >= 10) {
+                s_cachedSunPos = sun_calc->calculatePosition(simTime, baseUserLat, baseUserLon);
+                s_lastSunSimTime = (int64_t)simTime;
+            }
+            earth_renderer->setSunPosition(s_cachedSunPos.subsolarLat, s_cachedSunPos.subsolarLon);
+
+            float subLatR = (float)s_cachedSunPos.subsolarLat * (float)DEG_TO_RAD;
+            float subLonR = (float)s_cachedSunPos.subsolarLon * (float)DEG_TO_RAD;
+            float cosSubLat = cosf(subLatR);
+            float sinSubLat = sinf(subLatR);
+            sunEx = cosSubLat * cosf(subLonR);
+            sunEy = cosSubLat * sinf(subLonR);
+            sunEz = sinSubLat;
+
+            float uLatR = (float)baseUserLat * (float)DEG_TO_RAD;
+            float uLonR = (float)baseUserLon * (float)DEG_TO_RAD;
+            float sunCosDist = sinf(uLatR) * sinSubLat + cosf(uLatR) * cosSubLat * cosf(uLonR - subLonR);
+            // 民用晨昏蒙影线 (-6°): sin(-6°) = -0.10452846f
+            observerIsNight = (sunCosDist < -0.10452846f);
         }
+
+        // 帧级预计算地面观察者 ECEF 与东北天旋转基底（省去每颗卫星的 geodeticToECEF 与三角函数开销）
+        ObserverFrame obsFrame;
+        CoordTransform::initObserverFrame(baseUserLat, baseUserLon, baseUserAlt * 0.001, obsFrame);
+
+        auto checkEarthShadowEcef = [&](float ex, float ey, float ez) -> bool {
+            if (!sun_calc) return false;
+            float rDotS = ex * sunEx + ey * sunEy + ez * sunEz;
+            if (rDotS >= 0.0f) return false;
+            float rSq = ex * ex + ey * ey + ez * ez;
+            return (rSq - rDotS * rDotS) < (6371.0f * 6371.0f);
+        };
+
+        auto computeApparentElFast = [&](float ex, float ey, float ez) -> float {
+            float el = CoordTransform::ecefToElevationFast(obsFrame, ex, ey, ez);
+            if (el > -5.0f && el < 15.0f) {
+                float refr = 1.02f / tanf((el + 10.3f / (el + 5.11f)) * (float)DEG_TO_RAD);
+                el += refr * (1.0f / 60.0f);
+            }
+            return el;
+        };
 
         static uint32_t lastLogTime = 0;
         static bool lastWasFastForwarding = false;
@@ -5030,10 +5225,6 @@ void loop() {
         bool stopFastForwarding = (lastWasFastForwarding && !isFastForwarding);
         lastWasFastForwarding = isFastForwarding;
 
-        // 日志触发条件：
-        // 1. 正常运行（非快进）且模拟时间改变，且到了10秒整除时间
-        // 2. 刚刚停止快进的瞬间，立即输出一次以显示最新模拟时间结果
-        // 3. 第一次运行 (lastLogTime == 0)
         bool shouldLogNow = (simTime != lastLogTime && (
             (!isFastForwarding && (simTime % 10 == 0)) ||
             stopFastForwarding ||
@@ -5042,7 +5233,7 @@ void loop() {
 
         if (shouldLogNow && appState == STATE_MAIN) {
             lastLogTime = simTime;
-            int offset = 8; // Nanning uses China Standard Time (UTC+8), while simple geo math gave +7
+            int offset = 8;
             time_t local_unix = simTime + offset * 3600;
             struct tm *ti = gmtime(&local_unix);
             log_i("--- Satellite Positions at Local Time: %04d-%02d-%02d %02d:%02d:%02d ---", 
@@ -5050,116 +5241,79 @@ void loop() {
         }
 
         static double lastContinuousSimTime = 0.0;
-        bool timeChanged = (fabs(continuousSimTime - lastContinuousSimTime) > 0.005);
+        bool timeChanged = (fabs(continuousSimTime - lastContinuousSimTime) > 0.002);
         if (timeChanged) {
             lastContinuousSimTime = continuousSimTime;
         }
 
-        SunPositionData view_sun_pos;
-        SunPositionData observer_sun_pos;
-        if (sun_calc) {
-            view_sun_pos = sun_calc->calculatePosition(simTime, viewLat, viewLon);
-            observer_sun_pos = sun_calc->calculatePosition(simTime, baseUserLat, baseUserLon);
-        }
+        static uint8_t s_mainPropShard = 0;
+        s_mainPropShard++;
+
         static std::vector<SatRenderData> sats;
         sats.clear();
         int orbitsCalculatedThisFrame = 0;
+        int rlSlotIdx = 0;
         if (g_recentLaunchFocusMode) {
             for (auto& item : g_recentLaunches) {
                 if (!item.selected) continue;
+                rlSlotIdx++;
                 
                 if (item.batchId == recentLaunchActiveBatchId) {
                     if (g_repSatInitialized) {
-                        bool runCalculation = (timeChanged || !g_repSatCache.lastGeoValid);
+                        bool alreadyUpdatedFocal = (isSatViewMode && focusSatIndex == -1 && g_repSatCache.prop.valid && g_repSatCache.prop.sgp4Time == continuousSimTime);
+                        bool runCalculation = (!alreadyUpdatedFocal) && (timeChanged || !g_repSatCache.lastGeoValid);
                         
                         if (runCalculation) {
-                            double tx, ty, tz;
-                            if (g_repSatCalc.getTEME(continuousSimTime, tx, ty, tz)) {
-                                ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
-                                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
-                                
-                                bool inShadow = false;
-                                if (sun_calc) {
-                                    SunPositionData& sPos = view_sun_pos;
-                                    float latR = geo.lat * DEG_TO_RAD;
-                                    float lonR = geo.lon * DEG_TO_RAD;
-                                    float subLatR = sPos.subsolarLat * DEG_TO_RAD;
-                                    float subLonR = sPos.subsolarLon * DEG_TO_RAD;
-                                    float cos_theta = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
-                                    if (cos_theta < 0) {
-                                        float r = 6371.0f + (float)geo.alt;
-                                        float dist_sq = r * r * (1.0f - cos_theta * cos_theta);
-                                        inShadow = (dist_sq < 6371.0f * 6371.0f);
-                                    }
-                                }
-                                
+                            GeodeticCoord geo;
+                            if (propagateSatFast(g_repSatCalc, g_repSatCache.prop, continuousSimTime, cosGmst, sinGmst, true, geo)) {
                                 g_repSatCache.lastGeo = geo;
-                                g_repSatCache.lastInShadow = inShadow;
                                 g_repSatCache.lastGeoValid = true;
                             } else {
                                 g_repSatCache.lastGeoValid = false;
                             }
                         }
+                        if (g_repSatCache.lastGeoValid && g_repSatCache.prop.valid) {
+                            g_repSatCache.lastInShadow = checkEarthShadowEcef(g_repSatCache.prop.ecefX, g_repSatCache.prop.ecefY, g_repSatCache.prop.ecefZ);
+                        }
                         
                         if (g_repSatCache.lastGeoValid) {
                             bool isVisible = false;
-                            bool isRadioPassing = false;
                             if (sun_calc) {
-                                GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                                ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_repSatCache.lastGeo);
-                                TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
-                                float el = topo.el;
-                                
-                                if (el > -5.0f && el < 15.0f) {
-                                    float r = 1.02f / tanf((el + 10.3f / (el + 5.11f)) * DEG_TO_RAD);
-                                    el += r / 60.0f;
-                                }
-                                
-                                SunPositionData& sPos = observer_sun_pos;
-                                float uLatR = baseUserLat * DEG_TO_RAD;
-                                float uLonR = baseUserLon * DEG_TO_RAD;
-                                float subLatR = sPos.subsolarLat * DEG_TO_RAD;
-                                float subLonR = sPos.subsolarLon * DEG_TO_RAD;
-                                float sun_cos_dist = sinf(uLatR)*sinf(subLatR) + cosf(uLatR)*cosf(subLatR)*cosf(uLonR - subLonR);
-                                float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
-                                bool isNight = sun_alt < -6.0f;
-                                
                                 if (isSatViewMode) {
                                     isVisible = !g_repSatCache.lastInShadow;
                                 } else {
-                                    isVisible = (isNight && (el >= 10.0f) && !g_repSatCache.lastInShadow);
+                                    float el = computeApparentElFast(g_repSatCache.prop.ecefX, g_repSatCache.prop.ecefY, g_repSatCache.prop.ecefZ);
+                                    isVisible = (observerIsNight && (el >= 10.0f) && !g_repSatCache.lastInShadow);
                                 }
                             }
                             g_repSatCache.isVisible = isVisible;
-                            g_repSatCache.isRadioPassing = isRadioPassing;
+                            g_repSatCache.isRadioPassing = false;
                             
                             SatRenderData data;
                             data.name = g_repSatName.c_str();
                             data.iconType = item.iconType;
                             data.currentPos = g_repSatCache.lastGeo;
+                            data.continuousSimTime = continuousSimTime;
+                            data.gmstRad = current_gmst;
                             data.color = TFT_CYAN;
                             data.isVisible = g_repSatCache.isVisible;
-                            data.isRadioTransmitting = g_repSatCache.isRadioPassing;
+                            data.isRadioTransmitting = false;
                             data.isRecentLaunchBatch = true;
                             data.totalSatellitesInBatch = item.satelliteCount;
                             data.launchEpoch = item.epoch;
                             data.simTime = simTime;
                             
-                            // Visual effects fields
                             data.isSelected = (isSatViewMode && g_recentLaunchFocusMode);
                             data.calc = &g_repSatCalc;
                             
                             if (appState == STATE_MAIN) {
                                 calculateOrbit(g_repSatCalc, simTime, g_repSatCache.cache, orbitsCalculatedThisFrame, lastTimeAdjustMillis != 0, (isSatViewMode && g_recentLaunchFocusMode));
-                                data.pastOrbit = &(g_repSatCache.cache.past);
-                                data.futureOrbit = &(g_repSatCache.cache.future);
+                                data.orbitCache = &(g_repSatCache.cache);
                             } else {
-                                data.pastOrbit = nullptr;
-                                data.futureOrbit = nullptr;
+                                data.orbitCache = nullptr;
                             }
                             data.lastCalcTime = g_repSatCache.cache.lastCalcTime;
                             
-                            // Set mission formation fields
                             data.proxyFormation = &(item.proxyFormation);
                             data.occupancy = item.occupancy;
                             data.occupancyStartPhase = item.occupancyStartPhase;
@@ -5175,30 +5329,12 @@ void loop() {
                 } else {
                     if (item.calc) {
                         bool runCalculation = (timeChanged || !item.cache.lastGeoValid);
-                        
                         if (runCalculation) {
-                            double tx, ty, tz;
-                            if (item.calc->getTEME(continuousSimTime, tx, ty, tz)) {
-                                ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
-                                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
-                                
-                                bool inShadow = false;
-                                if (sun_calc) {
-                                    SunPositionData& sPos = view_sun_pos;
-                                    float latR = geo.lat * DEG_TO_RAD;
-                                    float lonR = geo.lon * DEG_TO_RAD;
-                                    float subLatR = sPos.subsolarLat * DEG_TO_RAD;
-                                    float subLonR = sPos.subsolarLon * DEG_TO_RAD;
-                                    float cos_theta = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
-                                    if (cos_theta < 0) {
-                                        float r = 6371.0f + (float)geo.alt;
-                                        float dist_sq = r * r * (1.0f - cos_theta * cos_theta);
-                                        inShadow = (dist_sq < 6371.0f * 6371.0f);
-                                    }
-                                }
-                                
+                            bool forceExact = ((rlSlotIdx & 3) == (s_mainPropShard & 3));
+                            GeodeticCoord geo;
+                            if (propagateSatFast(*(item.calc), item.cache.prop, continuousSimTime, cosGmst, sinGmst, forceExact, geo)) {
                                 item.cache.lastGeo = geo;
-                                item.cache.lastInShadow = inShadow;
+                                item.cache.lastInShadow = checkEarthShadowEcef(item.cache.prop.ecefX, item.cache.prop.ecefY, item.cache.prop.ecefZ);
                                 item.cache.lastGeoValid = true;
                             } else {
                                 item.cache.lastGeoValid = false;
@@ -5207,43 +5343,26 @@ void loop() {
                         
                         if (item.cache.lastGeoValid) {
                             bool isVisible = false;
-                            bool isRadioPassing = false;
                             if (sun_calc) {
-                                GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                                ECEFCoord satEcef = CoordTransform::geodeticToECEF(item.cache.lastGeo);
-                                TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
-                                float el = topo.el;
-                                
-                                if (el > -5.0f && el < 15.0f) {
-                                    float r = 1.02f / tanf((el + 10.3f / (el + 5.11f)) * DEG_TO_RAD);
-                                    el += r / 60.0f;
-                                }
-                                
-                                SunPositionData& sPos = observer_sun_pos;
-                                float uLatR = baseUserLat * DEG_TO_RAD;
-                                float uLonR = baseUserLon * DEG_TO_RAD;
-                                float subLatR = sPos.subsolarLat * DEG_TO_RAD;
-                                float subLonR = sPos.subsolarLon * DEG_TO_RAD;
-                                float sun_cos_dist = sinf(uLatR)*sinf(subLatR) + cosf(uLatR)*cosf(subLatR)*cosf(uLonR - subLonR);
-                                float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
-                                bool isNight = sun_alt < -6.0f;
-                                
                                 if (isSatViewMode) {
                                     isVisible = !item.cache.lastInShadow;
                                 } else {
-                                    isVisible = (isNight && (el >= 10.0f) && !item.cache.lastInShadow);
+                                    float el = computeApparentElFast(item.cache.prop.ecefX, item.cache.prop.ecefY, item.cache.prop.ecefZ);
+                                    isVisible = (observerIsNight && (el >= 10.0f) && !item.cache.lastInShadow);
                                 }
                             }
                             item.cache.isVisible = isVisible;
-                            item.cache.isRadioPassing = isRadioPassing;
+                            item.cache.isRadioPassing = false;
                             
                             SatRenderData data;
                             data.name = item.repSatName.c_str();
                             data.iconType = ICON_SATELLITE;
                             data.currentPos = item.cache.lastGeo;
+                            data.continuousSimTime = continuousSimTime;
+                            data.gmstRad = current_gmst;
                             data.color = TFT_CYAN;
                             data.isVisible = item.cache.isVisible;
-                            data.isRadioTransmitting = item.cache.isRadioPassing;
+                            data.isRadioTransmitting = false;
                             data.isRecentLaunchBatch = true;
                             data.totalSatellitesInBatch = item.satelliteCount;
                             data.launchEpoch = item.epoch;
@@ -5251,15 +5370,12 @@ void loop() {
                             
                             if (appState == STATE_MAIN) {
                                 calculateOrbit(*(item.calc), simTime, item.cache.cache, orbitsCalculatedThisFrame, lastTimeAdjustMillis != 0, false);
-                                data.pastOrbit = &(item.cache.cache.past);
-                                data.futureOrbit = &(item.cache.cache.future);
+                                data.orbitCache = &(item.cache.cache);
                             } else {
-                                data.pastOrbit = nullptr;
-                                data.futureOrbit = nullptr;
+                                data.orbitCache = nullptr;
                             }
                             data.lastCalcTime = item.cache.cache.lastCalcTime;
                             
-                            // Set mission formation fields for non-focus representitive sat render
                             data.proxyFormation = &(item.proxyFormation);
                             data.occupancy = item.occupancy;
                             data.occupancyStartPhase = item.occupancyStartPhase;
@@ -5281,16 +5397,17 @@ void loop() {
                     auto& obj = g_level3Objects[i];
                     bool runCalculation = (timeChanged || !obj.lastGeoValid);
                     
-                    if (runCalculation) {
-                        double tx, ty, tz;
-                        if (obj.calc && obj.calc->getTEME(continuousSimTime, tx, ty, tz)) {
-                            ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
-                            GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                    if (runCalculation && obj.calc) {
+                        bool forceExact = (((int)i & 3) == (s_mainPropShard & 3));
+                        GeodeticCoord geo;
+                        if (propagateSatFast(*(obj.calc), obj.prop, continuousSimTime, cosGmst, sinGmst, forceExact, geo)) {
                             obj.lastGeo = geo;
                             obj.lastGeoValid = true;
                         } else {
                             obj.lastGeoValid = false;
                         }
+                    } else if (!obj.calc) {
+                        obj.lastGeoValid = false;
                     }
                     
                     if (obj.lastGeoValid) {
@@ -5298,19 +5415,19 @@ void loop() {
                         data.name = obj.name.c_str();
                         data.iconType = ICON_SATELLITE;
                         data.currentPos = obj.lastGeo;
+                        data.continuousSimTime = continuousSimTime;
+                        data.gmstRad = current_gmst;
                         data.color = TFT_GREEN;
                         data.isVisible = true;
+                        data.simTime = simTime;
                         
                         if (appState == STATE_MAIN && obj.calc) {
                             calculateOrbit(*(obj.calc), simTime, obj.cache, orbitsCalculatedThisFrame, lastTimeAdjustMillis != 0, false);
-                            data.pastOrbit = &(obj.cache.past);
-                            data.futureOrbit = &(obj.cache.future);
+                            data.orbitCache = &(obj.cache);
                         } else {
-                            data.pastOrbit = nullptr;
-                            data.futureOrbit = nullptr;
+                            data.orbitCache = nullptr;
                         }
                         
-                        // Uniform display names for all launch target objects with its launch epoch dates
                         static String sNameCache[8];
                         if (i < 8) {
                             if (recentLaunchSelectedIndex < (int)g_recentLaunches.size()) {
@@ -5329,223 +5446,166 @@ void loop() {
             }
         }
         
-        // Always compute and load selected encyclopedia satellites
-        static String s_activeSatNames[MAX_TOTAL_SELECTED_SATS + 5];
-        int activeSatNameSlot = 0;
+        // 单次加锁提取所有已勾选百科/自定义卫星快照（消除每帧 63 次互斥锁争抢、String 堆拷贝与 toFloat 解析）
+        static String s_activeSatNames[MAX_TOTAL_SELECTED_SATS + 8];
+        struct ActiveSatSnap {
+            int idx;
+            std::shared_ptr<SGP4Calc> calc;
+            const char* namePtr;
+            SatIconType icon;
+            uint16_t color;
+            SatelliteType type;
+            uint32_t noradId;
+            double geoSlotLon;
+            bool hasRadio;
+        };
+        ActiveSatSnap activeSnaps[MAX_TOTAL_SELECTED_SATS + 8];
+        int activeSatCount = 0;
         std::shared_ptr<SGP4Calc> focusCalcKeepAlive;
+
+        lockSatMutex();
         for (int i = 0; i < NUM_SATELLITES; i++) {
-                bool selectedCopy = false;
-                std::shared_ptr<SGP4Calc> calcPtr;
-                String nameCopy;
-                SatIconType iconCopy = ICON_SATELLITE;
-                uint16_t colorCopy = TFT_WHITE;
-                SatelliteType typeCopy = SAT_TYPE_VISUAL;
-                uint32_t noradIdCopy = 0;
-                String uplinkFreqCopy;
-                bool hasDownlink = false;
-
-                lockSatMutex();
-                selectedCopy = g_satellites[i].selected;
-                if (selectedCopy) {
-                    calcPtr = g_satellites[i].calc;
-                    nameCopy = g_satellites[i].name;
-                    iconCopy = g_satellites[i].iconType;
-                    colorCopy = g_satellites[i].color;
-                    typeCopy = g_satellites[i].type;
-                    noradIdCopy = g_satellites[i].noradId;
-                    uplinkFreqCopy = g_satellites[i].uplinkFreq;
-                    hasDownlink = (g_satellites[i].downlinkFreq.length() > 0 && g_satellites[i].downlinkFreq.toFloat() > 0.0f);
-                }
-                unlockSatMutex();
-
-                if (!selectedCopy) {
-                    g_satCaches[i].lastGeoValid = false;
-                    g_satCaches[i].isVisible = false;
-                    continue;
-                }
-
-                const char* displaySatNamePtr = "";
-                if (activeSatNameSlot < (int)(sizeof(s_activeSatNames) / sizeof(s_activeSatNames[0]))) {
-                    s_activeSatNames[activeSatNameSlot] = nameCopy;
-                    displaySatNamePtr = s_activeSatNames[activeSatNameSlot].c_str();
-                    activeSatNameSlot++;
-                }
-
-                bool runCalculation = (timeChanged || !g_satCaches[i].lastGeoValid);
-                
-                if (runCalculation) {
-                    if (typeCopy == SAT_TYPE_GEO_TV) {
-                        double slotLon = getGeoSlotLongitude(noradIdCopy, uplinkFreqCopy);
-                        GeodeticCoord geo;
-                        ECEFCoord ecef;
-                        TopocentricCoord topo;
-                        double skew = 0.0;
-                        calculateGeoSatPosition(slotLon, baseUserLat, baseUserLon, baseUserAlt, geo, ecef, topo, skew);
-                        
-                        bool inShadow = false;
-                        if (sun_calc) {
-                            SunPositionData& sPos = view_sun_pos;
-                            float latR = geo.lat * DEG_TO_RAD;
-                            float lonR = geo.lon * DEG_TO_RAD;
-                            float subLatR = sPos.subsolarLat * DEG_TO_RAD;
-                            float subLonR = sPos.subsolarLon * DEG_TO_RAD;
-                            float cos_theta = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
-                            if (cos_theta < 0) {
-                                float r = 6371.0f + (float)geo.alt;
-                                float dist_sq = r * r * (1.0f - cos_theta * cos_theta);
-                                inShadow = (dist_sq < 6371.0f * 6371.0f);
-                            }
-                        }
-                        
-                        g_satCaches[i].lastGeo = geo;
-                        g_satCaches[i].lastInShadow = inShadow;
-                        g_satCaches[i].lastGeoValid = true;
-                    } else {
-                        double tx, ty, tz;
-                        if (calcPtr && calcPtr->getTEME(continuousSimTime, tx, ty, tz)) {
-                            ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, current_gmst);
-                            GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
-                            
-                            bool inShadow = false;
-                            if (sun_calc) {
-                                SunPositionData& sPos = view_sun_pos;
-                                float latR = geo.lat * DEG_TO_RAD;
-                                float lonR = geo.lon * DEG_TO_RAD;
-                                float subLatR = sPos.subsolarLat * DEG_TO_RAD;
-                                float subLonR = sPos.subsolarLon * DEG_TO_RAD;
-                                float cos_theta = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
-                                if (cos_theta < 0) {
-                                    float r = 6371.0f + (float)geo.alt;
-                                    float dist_sq = r * r * (1.0f - cos_theta * cos_theta);
-                                    inShadow = (dist_sq < 6371.0f * 6371.0f);
-                                }
-                            }
-                            
-                            g_satCaches[i].lastGeo = geo;
-                            g_satCaches[i].lastInShadow = inShadow;
-                            g_satCaches[i].lastGeoValid = true;
-                        } else {
-                            g_satCaches[i].lastGeoValid = false;
-                        }
-                    }
-                }
-                
-                if (g_satCaches[i].lastGeoValid) {
-                    bool isVisible = false;
-                    bool isRadioPassing = false;
-                    if (sun_calc) {
-                        GeodeticCoord observerPos = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                        ECEFCoord satEcef = CoordTransform::geodeticToECEF(g_satCaches[i].lastGeo);
-                        TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, satEcef);
-                        float el = topo.el;
-                        
-                        if (el > -5.0f && el < 15.0f) {
-                            float r = 1.02f / tanf((el + 10.3f / (el + 5.11f)) * DEG_TO_RAD);
-                            el += r / 60.0f;
-                        }
-
-                        // 无线电卫星过境状态判定：具备有效下行频率或无线电/空间站类型，且当前仰角高于地平线
-                        bool hasRadio = hasDownlink ||
-                                        (typeCopy == SAT_TYPE_HAM) || (typeCopy == SAT_TYPE_WEATHER) || (noradIdCopy == 25544);
-                        if (hasRadio && el >= 0.0f) {
-                            isRadioPassing = true;
-                        }
-                        
-                        SunPositionData& sPos = observer_sun_pos;
-                        float uLatR = baseUserLat * DEG_TO_RAD;
-                        float uLonR = baseUserLon * DEG_TO_RAD;
-                        float subLatR = sPos.subsolarLat * DEG_TO_RAD;
-                        float subLonR = sPos.subsolarLon * DEG_TO_RAD;
-                        float sun_cos_dist = sinf(uLatR)*sinf(subLatR) + cosf(uLatR)*cosf(subLatR)*cosf(uLonR - subLonR);
-                        float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
-                        bool isNight = sun_alt < -6.0f;
-                        
-                        if (typeCopy == SAT_TYPE_GEO_TV) {
-                            isVisible = true;
-                        } else if (isSatViewMode) {
-                            isVisible = !g_satCaches[i].lastInShadow;
-                        } else {
-                            isVisible = (isNight && (el >= 10.0f) && !g_satCaches[i].lastInShadow);
-                        }
-                    }
-                    g_satCaches[i].isVisible = isVisible;
-                    g_satCaches[i].isRadioPassing = isRadioPassing;
-                    
-                    if (shouldLogNow && appState == STATE_MAIN) {
-                        log_i("[%s] Lat: %.2f, Lon: %.2f, Alt: %.1f km, Shadow: %s, Visible: %s, Radio: %s", 
-                              displaySatNamePtr, 
-                              g_satCaches[i].lastGeo.lat, 
-                              g_satCaches[i].lastGeo.lon, 
-                              g_satCaches[i].lastGeo.alt, 
-                              g_satCaches[i].lastInShadow ? "YES" : "NO",
-                              g_satCaches[i].isVisible ? "YES" : "NO",
-                              g_satCaches[i].isRadioPassing ? "ACTIVE" : "OFF");
-                    }
-                    
-                    SatRenderData data;
-                    data.name = displaySatNamePtr;
-                    data.iconType = iconCopy;
-                    data.currentPos = g_satCaches[i].lastGeo;
-                    data.color = colorCopy;
-                    data.isVisible = g_satCaches[i].isVisible;
-                    data.isRadioTransmitting = g_satCaches[i].isRadioPassing;
-                    
-                    // Visual effects fields
-                    data.isSelected = (isSatViewMode && (focusSatIndex == i));
-                    if (data.isSelected && calcPtr) {
-                        focusCalcKeepAlive = calcPtr;
-                        data.calc = focusCalcKeepAlive.get();
-                    } else {
-                        data.calc = nullptr;
-                    }
-                    data.simTime = simTime;
-                    
-                    if (appState == STATE_MAIN) {
-                        if (typeCopy == SAT_TYPE_GEO_TV) {
-                            double slotLon = getGeoSlotLongitude(noradIdCopy, uplinkFreqCopy);
-                            if (g_satCaches[i].cache.past.capacity() > 2) {
-                                std::vector<GeodeticCoord>().swap(g_satCaches[i].cache.past);
-                            }
-                            if (g_satCaches[i].cache.future.capacity() > 2) {
-                                std::vector<GeodeticCoord>().swap(g_satCaches[i].cache.future);
-                            }
-                            g_satCaches[i].cache.past.clear();
-                            g_satCaches[i].cache.future.clear();
-                            if (g_satCaches[i].cache.past.capacity() < 1) g_satCaches[i].cache.past.reserve(1);
-                            if (g_satCaches[i].cache.future.capacity() < 1) g_satCaches[i].cache.future.reserve(1);
-                            GeodeticCoord p = {0.0, slotLon, 35785.863};
-                            g_satCaches[i].cache.past.push_back(p);
-                            g_satCaches[i].cache.future.push_back(p);
-                        } else if (calcPtr) {
-                            calculateOrbit(*calcPtr, simTime, g_satCaches[i].cache, orbitsCalculatedThisFrame, lastTimeAdjustMillis != 0, (isSatViewMode && (focusSatIndex == i) && !g_recentLaunchFocusMode));
-                        }
-                        data.pastOrbit = &(g_satCaches[i].cache.past);
-                        data.futureOrbit = &(g_satCaches[i].cache.future);
-                    } else {
-                        data.pastOrbit = nullptr;
-                        data.futureOrbit = nullptr;
-                    }
-                    
-                    sats.push_back(data);
-                } else {
-                    g_satCaches[i].isVisible = false;
-                    g_satCaches[i].isRadioPassing = false;
-                }
+            if (!g_satellites[i].selected) {
+                g_satCaches[i].lastGeoValid = false;
+                g_satCaches[i].isVisible = false;
+                g_satCaches[i].isRadioPassing = false;
+                continue;
             }
-        for (int k = activeSatNameSlot; k < (int)(sizeof(s_activeSatNames) / sizeof(s_activeSatNames[0])); k++) {
+            if (activeSatCount < (int)(sizeof(activeSnaps) / sizeof(activeSnaps[0]))) {
+                int slot = activeSatCount++;
+                ActiveSatSnap& s = activeSnaps[slot];
+                s.idx = i;
+                s.calc = g_satellites[i].calc;
+                if (s_activeSatNames[slot] != g_satellites[i].name) {
+                    s_activeSatNames[slot] = g_satellites[i].name;
+                }
+                s.namePtr = s_activeSatNames[slot].c_str();
+                s.icon = g_satellites[i].iconType;
+                s.color = g_satellites[i].color;
+                s.type = g_satellites[i].type;
+                s.noradId = g_satellites[i].noradId;
+                s.geoSlotLon = (s.type == SAT_TYPE_GEO_TV) ? getGeoSlotLongitude(s.noradId, g_satellites[i].uplinkFreq) : 0.0;
+                const char* dlStr = g_satellites[i].downlinkFreq.c_str();
+                bool validDl = (dlStr && dlStr[0] != '\0' && atof(dlStr) > 0.0);
+                s.hasRadio = validDl || (s.type == SAT_TYPE_HAM) || (s.type == SAT_TYPE_WEATHER) || (s.noradId == 25544);
+            }
+        }
+        unlockSatMutex();
+
+        for (int k = activeSatCount; k < (int)(sizeof(s_activeSatNames) / sizeof(s_activeSatNames[0])); k++) {
             if (s_activeSatNames[k].length() > 0) {
                 s_activeSatNames[k] = String();
+            }
+        }
+
+        for (int slot = 0; slot < activeSatCount; slot++) {
+            const ActiveSatSnap& s = activeSnaps[slot];
+            int i = s.idx;
+            bool isFocusedThisSat = (isSatViewMode && (focusSatIndex == i) && !g_recentLaunchFocusMode);
+
+            if (s.type == SAT_TYPE_GEO_TV) {
+                if (timeChanged || !g_satCaches[i].lastGeoValid) {
+                    GeodeticCoord geo = {0.0, s.geoSlotLon, 35785.863};
+                    ECEFCoord ecef = CoordTransform::geodeticToECEF(geo);
+                    g_satCaches[i].prop.ecefX = (float)ecef.x;
+                    g_satCaches[i].prop.ecefY = (float)ecef.y;
+                    g_satCaches[i].prop.ecefZ = (float)ecef.z;
+                    g_satCaches[i].prop.ecefVx = 0.0f;
+                    g_satCaches[i].prop.ecefVy = 0.0f;
+                    g_satCaches[i].prop.ecefVz = 0.0f;
+                    g_satCaches[i].prop.valid = true;
+                    g_satCaches[i].lastGeo = geo;
+                    g_satCaches[i].lastInShadow = checkEarthShadowEcef((float)ecef.x, (float)ecef.y, (float)ecef.z);
+                    g_satCaches[i].lastGeoValid = true;
+                }
+            } else if (s.calc) {
+                bool alreadyUpdatedFocal = (isFocusedThisSat && g_satCaches[i].prop.valid && g_satCaches[i].prop.sgp4Time == continuousSimTime);
+                if (!alreadyUpdatedFocal && (timeChanged || !g_satCaches[i].lastGeoValid)) {
+                    bool forceExact = isFocusedThisSat || ((slot & 3) == (s_mainPropShard & 3));
+                    GeodeticCoord geo;
+                    if (propagateSatFast(*s.calc, g_satCaches[i].prop, continuousSimTime, cosGmst, sinGmst, forceExact, geo)) {
+                        g_satCaches[i].lastGeo = geo;
+                        g_satCaches[i].lastGeoValid = true;
+                    } else {
+                        g_satCaches[i].lastGeoValid = false;
+                    }
+                }
+                if (g_satCaches[i].lastGeoValid && g_satCaches[i].prop.valid) {
+                    g_satCaches[i].lastInShadow = checkEarthShadowEcef(g_satCaches[i].prop.ecefX, g_satCaches[i].prop.ecefY, g_satCaches[i].prop.ecefZ);
+                }
+            } else {
+                g_satCaches[i].lastGeoValid = false;
+            }
+
+            if (g_satCaches[i].lastGeoValid) {
+                bool isVisible = false;
+                bool isRadioPassing = false;
+                if (sun_calc) {
+                    float el = computeApparentElFast(g_satCaches[i].prop.ecefX, g_satCaches[i].prop.ecefY, g_satCaches[i].prop.ecefZ);
+                    if (s.hasRadio && el >= 0.0f) {
+                        isRadioPassing = true;
+                    }
+                    if (s.type == SAT_TYPE_GEO_TV) {
+                        isVisible = true;
+                    } else if (isSatViewMode) {
+                        isVisible = !g_satCaches[i].lastInShadow;
+                    } else {
+                        isVisible = (observerIsNight && (el >= 10.0f) && !g_satCaches[i].lastInShadow);
+                    }
+                }
+                g_satCaches[i].isVisible = isVisible;
+                g_satCaches[i].isRadioPassing = isRadioPassing;
+
+                if (shouldLogNow && appState == STATE_MAIN) {
+                    log_i("[%s] Lat: %.2f, Lon: %.2f, Alt: %.1f km, Shadow: %s, Visible: %s, Radio: %s", 
+                          s.namePtr, 
+                          g_satCaches[i].lastGeo.lat, 
+                          g_satCaches[i].lastGeo.lon, 
+                          g_satCaches[i].lastGeo.alt, 
+                          g_satCaches[i].lastInShadow ? "YES" : "NO",
+                          g_satCaches[i].isVisible ? "YES" : "NO",
+                          g_satCaches[i].isRadioPassing ? "ACTIVE" : "OFF");
+                }
+
+                SatRenderData data;
+                data.name = s.namePtr;
+                data.iconType = s.icon;
+                data.currentPos = g_satCaches[i].lastGeo;
+                data.continuousSimTime = continuousSimTime;
+                data.gmstRad = current_gmst;
+                data.color = s.color;
+                data.isVisible = g_satCaches[i].isVisible;
+                data.isRadioTransmitting = g_satCaches[i].isRadioPassing;
+                data.isSelected = (isSatViewMode && (focusSatIndex == i));
+                if (data.isSelected && s.calc) {
+                    focusCalcKeepAlive = s.calc;
+                    data.calc = focusCalcKeepAlive.get();
+                } else {
+                    data.calc = nullptr;
+                }
+                data.simTime = simTime;
+
+                if (appState == STATE_MAIN && s.type != SAT_TYPE_GEO_TV && s.calc) {
+                    calculateOrbit(*s.calc, simTime, g_satCaches[i].cache, orbitsCalculatedThisFrame, lastTimeAdjustMillis != 0, isFocusedThisSat);
+                    data.orbitCache = &(g_satCaches[i].cache);
+                } else {
+                    data.orbitCache = nullptr;
+                }
+
+                sats.push_back(data);
+            } else {
+                g_satCaches[i].isVisible = false;
+                g_satCaches[i].isRadioPassing = false;
             }
         }
         
         // =======================================================================
         // 自动过境无线电监听与调度 (RadioManager Autonomous Satellite Radio Patrol)
-        // 无论是否接入舵机云台，系统均持续监测过境卫星并驱动 Cap LoRa-1262 射频监听
         // =======================================================================
         updateRadioTrackingPipeline(current_unix + timeMachineOffset, timeMachineOffset);
 
-        // Update 3-axis Gimbal Targets based on active sat tracking (地表全天自主巡天跟踪站 Autonomous Sky Patrol)
-        if (HardwareConfig::getInstance().isEnabled(HW_MOD_UNIT_8SERVOS) && gimbal.isOnline() && appState != STATE_SERVO_TEST) {
+        // Update 3-axis Gimbal Targets (时间机器滚动调节期间暂停同步巡天扫描，防止 90 步 SGP4 搜索尖峰)
+        if (lastTimeAdjustMillis == 0 && HardwareConfig::getInstance().isEnabled(HW_MOD_UNIT_8SERVOS) && gimbal.isOnline() && appState != STATE_SERVO_TEST) {
             GimbalTrackingPipeline::update(current_unix + timeMachineOffset);
         }
         
@@ -5558,7 +5618,7 @@ void loop() {
         earth_renderer->setGnssSearching(isGnssSearching);
         earth_renderer->setObserverConstrained(!isSatViewMode);
         earth_renderer->setFastForwarding(isFastForwarding);
-        earth_renderer->setUnixTime(current_unix + timeMachineOffset);
+        earth_renderer->setUnixTime(continuousSimTime);
         earth_renderer->render(viewLat, viewLon, renderUserLat, baseUserLon, sats);
         
         // Ensure canvas font and datum matches default state for HUD rendering
@@ -5580,17 +5640,14 @@ void loop() {
             
             char latStr[20], lonStr[20], altStr[16];
             if (isManualLocationMode) {
-                // Manual mode: show in cyan with '*' marker
                 snprintf(latStr, sizeof(latStr), "%c%.2f*", latDir, abs(baseUserLat));
                 snprintf(lonStr, sizeof(lonStr), "%c%.2f*", lonDir, abs(baseUserLon));
                 earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
             } else if (!gnssLocationFixed) {
-                // No GPS fix: show in orange with '?' to warn user predictions may be wrong
                 snprintf(latStr, sizeof(latStr), "%c%.2f?", latDir, abs(baseUserLat));
                 snprintf(lonStr, sizeof(lonStr), "%c%.2f?", lonDir, abs(baseUserLon));
                 earth_renderer->getCanvas()->setTextColor(TFT_ORANGE);
             } else {
-                // GPS fixed: show in green
                 snprintf(latStr, sizeof(latStr), "%c%.2f", latDir, abs(baseUserLat));
                 snprintf(lonStr, sizeof(lonStr), "%c%.2f", lonDir, abs(baseUserLon));
                 earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
@@ -5615,7 +5672,7 @@ void loop() {
         if ((appState == STATE_MAIN || appState == STATE_LANG_SELECT) && showHud && !showHelp && !showRecommendations) {
             char timeStr[32];
             int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
-            time_t local_t = current_unix + timeMachineOffset + tzOffsetSec;
+            time_t local_t = (time_t)simTime + tzOffsetSec;
             struct tm *ptm = gmtime(&local_t);
             snprintf(timeStr, sizeof(timeStr), "%02d-%02d %02d:%02d", ptm->tm_mon+1, ptm->tm_mday, ptm->tm_hour, ptm->tm_min);
             
@@ -5629,37 +5686,39 @@ void loop() {
             earth_renderer->getCanvas()->drawString(timeStr, 238 - textWidth, 125);
             
             if (isSatViewMode) {
-                String satName = "";
                 uint16_t satColor = TFT_WHITE;
                 bool hasSatInfo = false;
                 
                 std::shared_ptr<SGP4Calc> currentCalcHolder;
                 SGP4Calc* currentCalc = nullptr;
+                const TemePropState* focusProp = nullptr;
                 SatelliteType currentType = SAT_TYPE_VISUAL;
                 int currentNoradId = 0;
                 String downlinkFreq = "";
+                String geoUplinkSlot = "";
                 
                 if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES) {
                     lockSatMutex();
-                    satName = g_satellites[focusSatIndex].name;
                     satColor = g_satellites[focusSatIndex].color;
                     currentCalcHolder = g_satellites[focusSatIndex].calc;
                     currentCalc = currentCalcHolder.get();
                     currentType = g_satellites[focusSatIndex].type;
                     currentNoradId = g_satellites[focusSatIndex].noradId;
                     downlinkFreq = g_satellites[focusSatIndex].downlinkFreq;
+                    if (currentType == SAT_TYPE_GEO_TV) {
+                        geoUplinkSlot = g_satellites[focusSatIndex].uplinkFreq;
+                    }
                     unlockSatMutex();
+                    focusProp = &g_satCaches[focusSatIndex].prop;
                     hasSatInfo = true;
                 } else if (g_recentLaunchFocusMode) {
-                    satName = g_repSatName;
-                    
                     double ageDays = 30.0;
                     lockSatMutex();
                     if (!g_recentLaunches.empty()) {
                         for (const auto& item : g_recentLaunches) {
                             if (item.batchId == recentLaunchActiveBatchId) {
-                                if (item.epoch > 0 && (current_unix + timeMachineOffset) >= item.epoch) {
-                                    ageDays = (double)((current_unix + timeMachineOffset) - item.epoch) / 86400.0;
+                                if (item.epoch > 0 && simTime >= item.epoch) {
+                                    ageDays = (double)(simTime - item.epoch) / 86400.0;
                                 }
                                 break;
                             }
@@ -5674,49 +5733,56 @@ void loop() {
                     
                     satColor = baseCol;
                     currentCalc = &g_repSatCalc;
+                    focusProp = &g_repSatCache.prop;
                     hasSatInfo = true;
                 }
                 
                 if (hasSatInfo && (currentCalc != nullptr || currentType == SAT_TYPE_GEO_TV)) {
                     Language currL = I18N::getLanguage();
                     bool isZh = (currL == LANG_ZH);
-                    bool isCjk = (currL == LANG_ZH || currL == LANG_JA);
                     earth_renderer->getCanvas()->setFont(I18N::getFont());
                     earth_renderer->getCanvas()->setTextColor(satColor);
                     const char* satViewStr = (currL == LANG_ZH) ? "视角锁定" : ((currL == LANG_JA) ? "視点固定" : ((currL == LANG_ES) ? "Vista sat" : "Sat View"));
                     earth_renderer->getCanvas()->drawString(satViewStr, 180, 5);
 
-                    
                     double az = 0, el = 0, dist = 0, range_rate = 0, skew = 0;
                     bool hasValidPos = false;
                     
                     if (currentType == SAT_TYPE_GEO_TV) {
-                        String slotStr = (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES) ? g_satellites[focusSatIndex].uplinkFreq : "";
-                        double slotLon = getGeoSlotLongitude(currentNoradId, slotStr);
+                        double slotLon = getGeoSlotLongitude(currentNoradId, geoUplinkSlot);
                         GeodeticCoord geo;
                         ECEFCoord ecef;
                         TopocentricCoord topo;
                         calculateGeoSatPosition(slotLon, baseUserLat, baseUserLon, baseUserAlt, geo, ecef, topo, skew);
                         az = topo.az; el = topo.el; dist = topo.range; range_rate = 0.0;
                         hasValidPos = true;
+                    } else if (focusProp && focusProp->valid) {
+                        // 直接由当帧已解算的 ECEF 位置与科里奥利速度矢量解析计算方位仰角与瞬时径向多普勒，省去 2 次冗余 SGP4
+                        float azF = 0.0f, elF = 0.0f, distF = 0.0f;
+                        CoordTransform::ecefToTopocentricFast(obsFrame, focusProp->ecefX, focusProp->ecefY, focusProp->ecefZ, azF, elF, distF);
+                        az = (double)azF;
+                        el = (double)elF;
+                        dist = (double)distF;
+                        if (distF > 0.001f) {
+                            float dx = focusProp->ecefX - obsFrame.ecefX;
+                            float dy = focusProp->ecefY - obsFrame.ecefY;
+                            float dz = focusProp->ecefZ - obsFrame.ecefZ;
+                            range_rate = (double)((dx * focusProp->ecefVx + dy * focusProp->ecefVy + dz * focusProp->ecefVz) / distF);
+                        }
+                        hasValidPos = true;
                     } else if (currentCalc != nullptr) {
-                        double tx, ty, tz;
-                        if (currentCalc->getTEME(current_unix + timeMachineOffset, tx, ty, tz)) {
-                            double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset));
-                            ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
-                            GeodeticCoord obsGeo = {baseUserLat, baseUserLon, baseUserAlt / 1000.0};
-                            TopocentricCoord topo = CoordTransform::ecefToTopocentric(obsGeo, ecef);
-                            az = topo.az; el = topo.el; dist = topo.range;
-                            
-                            double tx_prev, ty_prev, tz_prev;
-                            double dist_prev = dist;
-                            if (currentCalc->getTEME(current_unix + timeMachineOffset - 1, tx_prev, ty_prev, tz_prev)) {
-                                double gmst_prev = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix + timeMachineOffset - 1));
-                                ECEFCoord ecef_prev = CoordTransform::temeToECEF(tx_prev, ty_prev, tz_prev, gmst_prev);
-                                TopocentricCoord topo_prev = CoordTransform::ecefToTopocentric(obsGeo, ecef_prev);
-                                dist_prev = topo_prev.range;
+                        GeodeticCoord tmpGeo;
+                        TemePropState tmpProp;
+                        if (propagateSatFast(*currentCalc, tmpProp, continuousSimTime, cosGmst, sinGmst, true, tmpGeo)) {
+                            float azF = 0.0f, elF = 0.0f, distF = 0.0f;
+                            CoordTransform::ecefToTopocentricFast(obsFrame, tmpProp.ecefX, tmpProp.ecefY, tmpProp.ecefZ, azF, elF, distF);
+                            az = (double)azF; el = (double)elF; dist = (double)distF;
+                            if (distF > 0.001f) {
+                                float dx = tmpProp.ecefX - obsFrame.ecefX;
+                                float dy = tmpProp.ecefY - obsFrame.ecefY;
+                                float dz = tmpProp.ecefZ - obsFrame.ecefZ;
+                                range_rate = (double)((dx * tmpProp.ecefVx + dy * tmpProp.ecefVy + dz * tmpProp.ecefVz) / distF);
                             }
-                            range_rate = dist - dist_prev;
                             hasValidPos = true;
                         }
                     }

@@ -27,9 +27,11 @@ public:
     bool getTEME(double unix_ts, double& x, double& y, double& z);
     bool getTEME(double unix_ts, double& x, double& y, double& z, double& vx, double& vy, double& vz);
 
-    // 线程私有实例免锁极速解算接口（免临界区与 1.1KB 结构体拷贝，专供预测任务等线程私有 SGP4Calc 实例使用）
+    // 线程私有实例免锁极速解算接口（免临界区与 1.1KB 结构体拷贝，并完整保留 SDP4 深空积分器 atime 状态缓存）
     bool getTEMEFast(uint32_t unix_ts, double& x, double& y, double& z);
     bool getTEMEFast(uint32_t unix_ts, double& x, double& y, double& z, double& vx, double& vy, double& vz);
+    bool getTEMEFast(double unix_ts, double& x, double& y, double& z);
+    bool getTEMEFast(double unix_ts, double& x, double& y, double& z, double& vx, double& vy, double& vz);
 
     // Helper functions for Pseudo TLE generation inside the driver layer
     static void buildPseudoTle(const OrbitRecord& record, String& outL1, String& outL2);

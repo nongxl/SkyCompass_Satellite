@@ -7,16 +7,18 @@
 #include "tle_data.h"
 #include "earth_renderer.h"
 
-// Cache structures to avoid running heavy SGP4 math every frame
-struct OrbitCache {
-    uint32_t lastCalcTime = 0;
-    std::vector<GeodeticCoord> past;
-    std::vector<GeodeticCoord> future;
+// Fast two-body f&g state cache to amortize SGP4 across frames
+struct TemePropState {
+    double sgp4Time = 0.0;
+    float tx = 0.0f, ty = 0.0f, tz = 0.0f;
+    float vx = 0.0f, vy = 0.0f, vz = 0.0f;
+    float ecefX = 0.0f, ecefY = 0.0f, ecefZ = 0.0f;
+    float ecefVx = 0.0f, ecefVy = 0.0f, ecefVz = 0.0f;
+    bool valid = false;
 
-    void clearAndShrink() {
-        lastCalcTime = 0;
-        std::vector<GeodeticCoord>().swap(past);
-        std::vector<GeodeticCoord>().swap(future);
+    void reset() {
+        valid = false;
+        sgp4Time = 0.0;
     }
 };
 
@@ -55,6 +57,7 @@ struct SatRealtimeCache {
     bool lastInShadow = false;
     bool isVisible = false;
     bool isRadioPassing = false;
+    TemePropState prop;
     OrbitCache cache;
 };
 
@@ -69,6 +72,7 @@ struct RecentLaunchRealtimeCache {
     bool lastInShadow = false;
     bool isVisible = false;
     bool isRadioPassing = false;
+    TemePropState prop;
     OrbitCache cache;
 };
 
@@ -104,6 +108,7 @@ struct LazyObjectItem {
     GeodeticCoord lastGeo;
     bool lastGeoValid = false;
     bool isVisible = false;
+    TemePropState prop;
     OrbitCache cache;
 
     void release() {
@@ -112,6 +117,7 @@ struct LazyObjectItem {
         calc.reset();
         lastGeoValid = false;
         isVisible = false;
+        prop.reset();
         cache.clearAndShrink();
     }
 };

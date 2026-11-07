@@ -41,6 +41,7 @@ extern volatile bool g_loadingFinished;
 extern void lockSatMutex();
 extern void unlockSatMutex();
 extern bool g_isScreenOff;
+extern uint32_t lastTimeAdjustMillis;
 
 void ChainMonoView::clearDisplay() {
     if (isMonoInitialized) {
@@ -49,7 +50,7 @@ void ChainMonoView::clearDisplay() {
 }
 
 void ChainMonoView::update() {
-    if (g_isScreenOff) return;
+    if (g_isScreenOff || lastTimeAdjustMillis != 0) return;
     // Update Chain Mono Display (dynamic interval: 100ms normally)
     static unsigned long lastChainMonoTick = 0;
     if (isMonoInitialized && millis() - lastChainMonoTick >= 100) {

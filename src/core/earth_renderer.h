@@ -32,12 +32,38 @@ enum TrainState {
     OPERATIONAL
 };
 
+struct InertialOrbitNode {
+    float tx;
+    float ty;
+    float tz;
+};
+
+// Inertial-frame compact orbit cache (rotates in real time at 60 FPS with zero SGP4 overhead)
+struct OrbitCache {
+    uint32_t lastCalcTime = 0;
+    float periodSec = 5400.0f;
+    float raanRateRadPerSec = 0.0f;
+    bool isClosedLoop = true;
+    bool isFocusRes = false;
+    std::vector<InertialOrbitNode> ring;
+
+    void clearAndShrink() {
+        lastCalcTime = 0;
+        periodSec = 5400.0f;
+        raanRateRadPerSec = 0.0f;
+        isClosedLoop = true;
+        isFocusRes = false;
+        std::vector<InertialOrbitNode>().swap(ring);
+    }
+};
+
 struct SatRenderData {
     const char* name;
     SatIconType iconType;
     GeodeticCoord currentPos;
-    const std::vector<GeodeticCoord>* pastOrbit;
-    const std::vector<GeodeticCoord>* futureOrbit;
+    const OrbitCache* orbitCache = nullptr;
+    double continuousSimTime = 0.0;
+    double gmstRad = 0.0;
     uint16_t color;
     bool isVisible;
     bool isRecentLaunchBatch = false;
@@ -110,7 +136,7 @@ public:
     }
     
     // Set current unix time for sidereal time calculations (like background stars)
-    void setUnixTime(uint32_t unixTime) {
+    void setUnixTime(double unixTime) {
         _unixTime = unixTime;
     }
 
@@ -119,11 +145,15 @@ public:
     static void renderSatelliteIcon(LGFX_Sprite* canvas, int x, int y, SatIconType iconType, uint16_t color, bool renderDark, float intensity = 1.0f);
 
 private:
-    uint32_t _unixTime = 0;
+    double _unixTime = 0.0;
     
     void updateFocusR() {
         _cameraFocusR = _earthRadius;
+        _zLimit = _cameraFocusR * (1.0f - _cosPitch);
     }
+    void updateFrameConstants(double centerLat, double centerLon);
+    bool projectInertial(float tx, float ty, float tz, float cosPsi, float sinPsi, int& outX, int& outY, bool* outInShadow = nullptr) const;
+
     M5GFX* _display;
     LGFX_Sprite* _canvas;
     
@@ -141,11 +171,34 @@ private:
     float _cameraPitch = 0;
     float _cameraRoll = 0;
     float _cameraYaw = 0;
+
+    // Precomputed per-frame camera & sun trig constants
+    double _cachedCenterLat = 999.0;
+    double _cachedCenterLon = 999.0;
+    float _cLatRad = 0.0f;
+    float _cLonRad = 0.0f;
+    float _sinCLat = 0.0f;
+    float _cosCLat = 1.0f;
+    float _sinCLon = 0.0f;
+    float _cosCLon = 1.0f;
+    float _sinPitch = 0.0f;
+    float _cosPitch = 1.0f;
+    float _sinRoll = 0.0f;
+    float _cosRoll = 1.0f;
+    float _zLimit = 0.0f;
     
     // Sun data
     bool _hasSunData = false;
     double _subsolarLat = 0;
     double _subsolarLon = 0;
+    float _subLatRad = 0.0f;
+    float _subLonRad = 0.0f;
+    float _sinSubLat = 0.0f;
+    float _cosSubLat = 1.0f;
+    float _sinSubLon = 0.0f;
+    float _cosSubLon = 1.0f;
+    float _cosSubMinusCLon = 1.0f;
+    float _sinSubMinusCLon = 0.0f;
     
     // Rendering configs
     bool _observerConstrained = true;

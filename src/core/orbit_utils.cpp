@@ -1,3 +1,5 @@
+#pragma GCC optimize ("O3")
+
 #include "core/orbit_utils.h"
 #include <esp_task_wdt.h>
 #include "core/json_parser.h"
@@ -442,135 +444,159 @@ void OrbitUtils::validateSatViewFocusState() {
 }
 
 void OrbitUtils::calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& calcCount, bool isTimeScrolling, bool forceUpdate) {
-    if (isTimeScrolling) {
-        return; // 快进/调节时间期间完全跳过重算，确保极度丝滑
-    }
     static uint32_t lastGlobalCalcMs = 0;
-    
-    // 限制物理时间上的计算频率。如果上一帧刚刚重算过轨道，那么在物理时间 120 毫秒内，
-    // 任何卫星都不能进行轨道线重算（除非是首次计算），确保在任何高速按键或滑动操作下的丝滑帧率。
-    // 如果是焦点卫星强制刷新（forceUpdate），则绕过该物理冷却锁。
-    if (!forceUpdate && cache.lastCalcTime != 0 && millis() - lastGlobalCalcMs < 120) {
-        return;
-    }
-    
-    // Only recalculate orbit path if simulated time has advanced by more than 5 minutes (300 seconds)
-    // 如果是焦点卫星强制刷新，则时间发生微小的 60 秒以上改变（即哪怕点按一下时间微调）就进行重新预测
-    bool needsCalc = false;
-    if (cache.lastCalcTime == 0) {
-        needsCalc = true;
-    } else {
-        if (forceUpdate) {
-            needsCalc = (abs((int)baseTime - (int)cache.lastCalcTime) > 60);
-        } else {
-            needsCalc = (abs((int)baseTime - (int)cache.lastCalcTime) > 300);
+
+    const bool emptyRing = (cache.lastCalcTime == 0 || cache.ring.empty());
+    const bool needUpgradeToFocus = (forceUpdate && !cache.isFocusRes);
+    const bool needDowngradeToBg = (!forceUpdate && cache.isFocusRes && !isTimeScrolling);
+
+    if (!emptyRing && !needUpgradeToFocus) {
+        if (isTimeScrolling) {
+            // 闭合轨道由惯性环 + J2 升交点进动 + 实时 GMST 在渲染端 60FPS 精确投影，快进期间无需重算
+            if (cache.isClosedLoop) {
+                return;
+            }
+            // 非闭合深空/逃逸轨道：仅当快进滑出缓存窗口 40% 时按帧限流补算一次
+            int64_t dt = (int64_t)baseTime - (int64_t)cache.lastCalcTime;
+            if (dt < 0) dt = -dt;
+            if (dt <= (int64_t)(cache.periodSec * 0.40f) || calcCount >= 1) {
+                return;
+            }
+        } else if (!needDowngradeToBg) {
+            if (!forceUpdate && millis() - lastGlobalCalcMs < 150) {
+                return;
+            }
+            int64_t dt = (int64_t)baseTime - (int64_t)cache.lastCalcTime;
+            if (dt < 0) dt = -dt;
+            int64_t refreshThreshold = cache.isClosedLoop ? 3600 : (int64_t)(cache.periodSec * 0.25f);
+            if (refreshThreshold < 600) refreshThreshold = 600;
+            if (dt <= refreshThreshold) {
+                return;
+            }
         }
     }
 
-    if (needsCalc) {
-        if (!forceUpdate && calcCount >= 1) { // Max 1 expensive calculation per frame to prevent lag spikes
-            return;
-        }
-        if (!forceUpdate) {
-            lastGlobalCalcMs = millis();
-            calcCount++;
-        }
-        
-        int targetStepsPreview = forceUpdate ? 48 : 12;
-        size_t targetCap = (size_t)(targetStepsPreview + 1);
-        // 若此前作为焦点星扩容至 49 点，退回背景星（13 点）时主动收缩归还堆内存，防止堆碎片累积
-        if (cache.past.capacity() > targetCap * 2) {
-            std::vector<GeodeticCoord>().swap(cache.past);
-        }
-        if (cache.future.capacity() > targetCap * 2) {
-            std::vector<GeodeticCoord>().swap(cache.future);
-        }
-        cache.past.clear();
-        cache.future.clear();
-        if (cache.past.capacity() < targetCap) cache.past.reserve(targetCap);
-        if (cache.future.capacity() < targetCap) cache.future.reserve(targetCap);
-        
-        double teme_x = 0, teme_y = 0, teme_z = 0;
-        double vx = 0, vy = 0, vz = 0;
-        
-        // 默认周期 90 分钟 (5400秒)
-        double periodSec = 5400.0;
-        if (calc.getTEME(baseTime, teme_x, teme_y, teme_z, vx, vy, vz)) {
-            // 确保位置和速度均不是 NaN 或 Inf
-            if (!std::isnan(teme_x) && !std::isnan(teme_y) && !std::isnan(teme_z) &&
-                !std::isinf(teme_x) && !std::isinf(teme_y) && !std::isinf(teme_z) &&
-                !std::isnan(vx) && !std::isnan(vy) && !std::isnan(vz) &&
-                !std::isinf(vx) && !std::isinf(vy) && !std::isinf(vz)) {
-                
-                double r = sqrt(teme_x * teme_x + teme_y * teme_y + teme_z * teme_z);
-                double v = sqrt(vx * vx + vy * vy + vz * vz);
-                double mu = 398600.4418; // 地球重力常数 km^3/s^2
-                
-                if (r > 0.1) { // 避免除以 0
-                    double inv_a = 2.0 / r - (v * v) / mu;
-                    if (inv_a > 0.0) {
-                        double a = 1.0 / inv_a;
-                        double calculatedPeriod = 2.0 * M_PI * sqrt((a * a * a) / mu);
-                        // 限制周期在 10 秒到 12 小时（43200 秒）之间，防止溢出或深空模型过载
-                        if (!std::isnan(calculatedPeriod) && !std::isinf(calculatedPeriod) && 
-                            calculatedPeriod > 10.0 && calculatedPeriod < 12.0 * 3600.0) {
+    // 限流保护：背景卫星首次加载每帧最多 2 颗，常规后台刷新每帧最多 1 颗，彻底杜绝单帧尖峰
+    int maxAllowed = emptyRing ? 2 : 1;
+    if (!forceUpdate && calcCount >= maxAllowed) {
+        return;
+    }
+    if (!forceUpdate) {
+        lastGlobalCalcMs = millis();
+        calcCount++;
+    }
+
+    double teme_x = 0.0, teme_y = 0.0, teme_z = 0.0;
+    double vx = 0.0, vy = 0.0, vz = 0.0;
+
+    double periodSec = 5400.0;
+    double raanRate = 0.0;
+    bool isClosedLoop = true;
+
+    if (calc.getTEMEFast((double)baseTime, teme_x, teme_y, teme_z, vx, vy, vz)) {
+        if (!std::isnan(teme_x) && !std::isnan(teme_y) && !std::isnan(teme_z) &&
+            !std::isinf(teme_x) && !std::isinf(teme_y) && !std::isinf(teme_z) &&
+            !std::isnan(vx) && !std::isnan(vy) && !std::isnan(vz) &&
+            !std::isinf(vx) && !std::isinf(vy) && !std::isinf(vz)) {
+
+            double r = sqrt(teme_x * teme_x + teme_y * teme_y + teme_z * teme_z);
+            double vSq = vx * vx + vy * vy + vz * vz;
+            const double mu = 398600.4418;
+
+            if (r > 100.0) {
+                double inv_a = 2.0 / r - vSq / mu;
+                if (inv_a > 0.0) {
+                    double a = 1.0 / inv_a;
+                    double calculatedPeriod = 2.0 * M_PI * sqrt((a * a * a) / mu);
+                    if (!std::isnan(calculatedPeriod) && !std::isinf(calculatedPeriod) && calculatedPeriod > 60.0) {
+                        if (calculatedPeriod <= 26.0 * 3600.0) {
                             periodSec = calculatedPeriod;
-                        } else if (calculatedPeriod >= 12.0 * 3600.0) {
-                            periodSec = 12.0 * 3600.0; // 超过 12 小时（如 GEO 24 小时卫星），截断到 12 小时以确保 SDP4 稳定性与性能
+                            isClosedLoop = true;
+
+                            // 计算 J2 长期升交点赤经进动角速度 (rad/s)
+                            double hx = teme_y * vz - teme_z * vy;
+                            double hy = teme_z * vx - teme_x * vz;
+                            double hz = teme_x * vy - teme_y * vx;
+                            double hSq = hx * hx + hy * hy + hz * hz;
+                            if (hSq > 1.0) {
+                                double hMag = sqrt(hSq);
+                                double p = hSq / mu;
+                                double cosI = hz / hMag;
+                                double n = (2.0 * M_PI) / periodSec;
+                                const double J2 = 1.08262668e-3;
+                                const double Re = 6378.137;
+                                double rpRatio = Re / p;
+                                raanRate = -1.5 * J2 * (rpRatio * rpRatio) * n * cosI;
+                            }
+                        } else {
+                            // 超长周期深空轨道（如月球/L2 探测器）：采样前后共 24 小时弧段
+                            periodSec = 24.0 * 3600.0;
+                            isClosedLoop = false;
                         }
                     }
+                } else {
+                    // 双曲线/逃逸轨道：采样前后共 3 小时弧段
+                    periodSec = 10800.0;
+                    isClosedLoop = false;
                 }
             }
         }
-        
-        // 动态点数优化：为了确保高轨与中轨卫星在三维地球上的弧线极其圆滑、无多边形折线，
-        // 焦点卫星使用 48 对点（共 96 点），非焦点/背景卫星使用 12 对点（共 24 点），兼顾视觉效果与堆内存占用。
-        int steps = forceUpdate ? 48 : 12;
-        double stepSizeSec = (periodSec * 0.5) / steps;
-        
-        // 过去半个周期的轨迹 [-T/2, 0]
-        for (int i = steps; i >= 0; i--) {
-            uint32_t sub = (uint32_t)(i * stepSizeSec);
-            uint32_t t = (baseTime >= sub) ? (baseTime - sub) : 0; // 防范下溢至 42 亿秒导致 SDP4 深空异常算力崩溃
-            if (calc.getTEME(t, teme_x, teme_y, teme_z)) {
-                if (std::isnan(teme_x) || std::isnan(teme_y) || std::isnan(teme_z) ||
-                    std::isinf(teme_x) || std::isinf(teme_y) || std::isinf(teme_z)) {
-                    continue;
-                }
-                double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
-                ECEFCoord ecef = CoordTransform::temeToECEF(teme_x, teme_y, teme_z, gmst);
-                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
-                if (!std::isnan(geo.lat) && !std::isnan(geo.lon) && !std::isnan(geo.alt) &&
-                    !std::isinf(geo.lat) && !std::isinf(geo.lon) && !std::isinf(geo.alt)) {
-                    cache.past.push_back(geo);
-                }
-            }
-        }
-        
-        // 未来半个周期的轨迹 [0, +T/2]
-        for (int i = 0; i <= steps; i++) {
-            uint32_t add = (uint32_t)(i * stepSizeSec);
-            uint32_t t = baseTime;
-            if (0xFFFFFFFF - baseTime >= add) {
-                t = baseTime + add;
-            } else {
-                t = 0xFFFFFFFF; // 防范上溢
-            }
-            if (calc.getTEME(t, teme_x, teme_y, teme_z)) {
-                if (std::isnan(teme_x) || std::isnan(teme_y) || std::isnan(teme_z) ||
-                    std::isinf(teme_x) || std::isinf(teme_y) || std::isinf(teme_z)) {
-                    continue;
-                }
-                double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
-                ECEFCoord ecef = CoordTransform::temeToECEF(teme_x, teme_y, teme_z, gmst);
-                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
-                if (!std::isnan(geo.lat) && !std::isnan(geo.lon) && !std::isnan(geo.alt) &&
-                    !std::isinf(geo.lat) && !std::isinf(geo.lon) && !std::isinf(geo.alt)) {
-                    cache.future.push_back(geo);
-                }
-            }
-        }
-        
-        cache.lastCalcTime = baseTime;
     }
+
+    int steps = forceUpdate ? 40 : ((periodSec > 10800.0) ? 18 : 12);
+    size_t targetCount = (size_t)(2 * steps + 1);
+
+    // 焦点退回背景星时主动收缩归还堆内存，防止碎片累积
+    if (cache.ring.capacity() > targetCount + 16) {
+        std::vector<InertialOrbitNode>().swap(cache.ring);
+    }
+    cache.ring.clear();
+    if (cache.ring.capacity() < targetCount) {
+        cache.ring.reserve(targetCount);
+    }
+
+    double stepSizeSec = (periodSec * 0.5) / (double)steps;
+    for (int k = -steps; k <= steps; k++) {
+        double tau = (double)k * stepSizeSec;
+        double tSample = (double)baseTime + tau;
+        if (tSample < 0.0) tSample = 0.0;
+
+        if (calc.getTEMEFast(tSample, teme_x, teme_y, teme_z)) {
+            if (std::isnan(teme_x) || std::isnan(teme_y) || std::isnan(teme_z) ||
+                std::isinf(teme_x) || std::isinf(teme_y) || std::isinf(teme_z)) {
+                continue;
+            }
+            // 解缠单圈内的 J2 升交点漂移，使闭合环严格对齐至 baseTime 惯性参考架
+            double unwindAng = -raanRate * tau;
+            double c = cos(unwindAng);
+            double s = sin(unwindAng);
+            InertialOrbitNode node;
+            node.tx = (float)(teme_x * c - teme_y * s);
+            node.ty = (float)(teme_x * s + teme_y * c);
+            node.tz = (float)teme_z;
+            cache.ring.push_back(node);
+        }
+    }
+
+    // 闭合轨道首尾 C0 无缝缝合，且保持中点 (k = 0) 零扰动
+    if (isClosedLoop && cache.ring.size() == targetCount && targetCount >= 3) {
+        const size_t L = targetCount - 1;
+        float seamX = cache.ring[L].tx - cache.ring[0].tx;
+        float seamY = cache.ring[L].ty - cache.ring[0].ty;
+        float seamZ = cache.ring[L].tz - cache.ring[0].tz;
+        float invL = 1.0f / (float)L;
+        for (size_t j = 0; j <= L; j++) {
+            float factor = ((float)j - (float)steps) * invL;
+            cache.ring[j].tx -= seamX * factor;
+            cache.ring[j].ty -= seamY * factor;
+            cache.ring[j].tz -= seamZ * factor;
+        }
+        cache.ring[L] = cache.ring[0];
+    }
+
+    cache.periodSec = (float)periodSec;
+    cache.raanRateRadPerSec = (float)raanRate;
+    cache.isClosedLoop = isClosedLoop;
+    cache.isFocusRes = forceUpdate;
+    cache.lastCalcTime = baseTime;
 }

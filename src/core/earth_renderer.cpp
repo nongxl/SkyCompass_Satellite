@@ -53,6 +53,7 @@ EarthRenderer::EarthRenderer(M5GFX* display) : _display(display) {
     _centerX = 120; // Cardputer width 240 / 2
     _centerY = 67;  // Cardputer height 135 / 2
     _earthRadius = 55; // Slightly smaller to fit orbits
+    updateFocusR();
 }
 
 EarthRenderer::~EarthRenderer() {
@@ -68,6 +69,15 @@ void EarthRenderer::begin() {
 void EarthRenderer::setSunPosition(double subsolarLat, double subsolarLon) {
     _subsolarLat = subsolarLat;
     _subsolarLon = subsolarLon;
+    _subLatRad = (float)subsolarLat * (float)DEG_TO_RAD;
+    _subLonRad = (float)subsolarLon * (float)DEG_TO_RAD;
+    _sinSubLat = sinf(_subLatRad);
+    _cosSubLat = cosf(_subLatRad);
+    _sinSubLon = sinf(_subLonRad);
+    _cosSubLon = cosf(_subLonRad);
+    float dSubC = _subLonRad - _cLonRad;
+    _cosSubMinusCLon = cosf(dSubC);
+    _sinSubMinusCLon = sinf(dSubC);
     _hasSunData = true;
 }
 
@@ -75,15 +85,41 @@ void EarthRenderer::setCameraAttitude(float pitch, float roll, float yaw) {
     _cameraPitch = pitch;
     _cameraRoll = roll;
     _cameraYaw = yaw;
+    float pitchRad = _cameraPitch * (float)DEG_TO_RAD;
+    _sinPitch = sinf(pitchRad);
+    _cosPitch = cosf(pitchRad);
+    float rollRad = -_cameraRoll * (float)DEG_TO_RAD;
+    _sinRoll = sinf(rollRad);
+    _cosRoll = cosf(rollRad);
+    _zLimit = _cameraFocusR * (1.0f - _cosPitch);
+}
+
+void EarthRenderer::updateFrameConstants(double centerLat, double centerLon) {
+    if (centerLat != _cachedCenterLat || centerLon != _cachedCenterLon) {
+        _cachedCenterLat = centerLat;
+        _cachedCenterLon = centerLon;
+        _cLatRad = (float)centerLat * (float)DEG_TO_RAD;
+        _cLonRad = (float)centerLon * (float)DEG_TO_RAD;
+        _sinCLat = sinf(_cLatRad);
+        _cosCLat = cosf(_cLatRad);
+        _sinCLon = sinf(_cLonRad);
+        _cosCLon = cosf(_cLonRad);
+    }
+    if (_hasSunData) {
+        float dSubC = _subLonRad - _cLonRad;
+        _cosSubMinusCLon = cosf(dSubC);
+        _sinSubMinusCLon = sinf(dSubC);
+    }
+    _zLimit = _cameraFocusR * (1.0f - _cosPitch);
 }
 
 // Check if a point is in the day side (angular distance to sun < 90 deg)
 bool isDaylight(double lat, double lon, double subLat, double subLon, bool hasSun) {
     if (!hasSun) return true;
-    float latR = (float)lat * DEG_TO_RAD;
-    float lonR = (float)lon * DEG_TO_RAD;
-    float subLatR = (float)subLat * DEG_TO_RAD;
-    float subLonR = (float)subLon * DEG_TO_RAD;
+    float latR = (float)lat * (float)DEG_TO_RAD;
+    float lonR = (float)lon * (float)DEG_TO_RAD;
+    float subLatR = (float)subLat * (float)DEG_TO_RAD;
+    float subLonR = (float)subLon * (float)DEG_TO_RAD;
     float cos_dist = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
     return cos_dist > 0;
 }
@@ -91,14 +127,13 @@ bool isDaylight(double lat, double lon, double subLat, double subLon, bool hasSu
 // Check if a satellite is in Earth's shadow (cylindrical shadow model)
 bool isSatelliteInShadow(double lat, double lon, double alt, double subLat, double subLon, bool hasSun) {
     if (!hasSun) return false;
-    if (std::isnan(lat) || std::isnan(lon) || std::isnan(alt) || std::isinf(lat) || std::isinf(lon) || std::isinf(alt) ||
-        std::isnan(subLat) || std::isnan(subLon) || std::isinf(subLat) || std::isinf(subLon)) {
+    if (!(lat >= -90.5 && lat <= 90.5 && lon >= -720.5 && lon <= 720.5 && alt > -6000.0 && alt < 1e9)) {
         return false;
     }
-    float latR = (float)lat * DEG_TO_RAD;
-    float lonR = (float)lon * DEG_TO_RAD;
-    float subLatR = (float)subLat * DEG_TO_RAD;
-    float subLonR = (float)subLon * DEG_TO_RAD;
+    float latR = (float)lat * (float)DEG_TO_RAD;
+    float lonR = (float)lon * (float)DEG_TO_RAD;
+    float subLatR = (float)subLat * (float)DEG_TO_RAD;
+    float subLonR = (float)subLon * (float)DEG_TO_RAD;
     
     float cos_theta = sinf(subLatR)*sinf(latR) + cosf(subLatR)*cosf(latR)*cosf(lonR - subLonR);
     if (cos_theta >= 0) return false; // Day side
@@ -111,84 +146,134 @@ bool isSatelliteInShadow(double lat, double lon, double alt, double subLat, doub
 }
 
 bool EarthRenderer::projectOrthographic(double lat, double lon, double alt, double centerLat, double centerLon, int& outX, int& outY) {
-    if (std::isnan(lat) || std::isnan(lon) || std::isnan(alt) || std::isinf(lat) || std::isinf(lon) || std::isinf(alt) ||
-        std::isnan(centerLat) || std::isnan(centerLon) || std::isinf(centerLat) || std::isinf(centerLon)) {
+    if (!(lat >= -90.5 && lat <= 90.5 && lon >= -1080.0 && lon <= 1080.0 && alt > -6000.0 && alt < 1e9)) {
         return false;
     }
-    float latRad = (float)lat * DEG_TO_RAD;
-    float lonRad = (float)lon * DEG_TO_RAD;
-    float cLatRad = (float)centerLat * DEG_TO_RAD;
-    float cLonRad = (float)centerLon * DEG_TO_RAD;
-
-    // Radius scaling: Earth radius + non-linear altitude scale
-    float r = _earthRadius;
-    if (alt > 0) {
-        float visualAlt = alt;
-        if (visualAlt > 20000.0f) visualAlt = 20000.0f;
-        r += sqrtf(visualAlt) * 0.4f * _zoom; // scale altitude visual with zoom
+    if (centerLat != _cachedCenterLat || centerLon != _cachedCenterLon) {
+        updateFrameConstants(centerLat, centerLon);
     }
 
-    float cos_c = sinf(cLatRad) * sinf(latRad) + cosf(cLatRad) * cosf(latRad) * cosf(lonRad - cLonRad);
+    float latRad = (float)lat * (float)DEG_TO_RAD;
+    float dLonRad = (float)lon * (float)DEG_TO_RAD - _cLonRad;
+    float sinLat = sinf(latRad);
+    float cosLat = cosf(latRad);
+    float sinDLon = sinf(dLonRad);
+    float cosDLon = cosf(dLonRad);
 
-    float x = r * cosf(latRad) * sinf(lonRad - cLonRad);
-    float y = r * (cosf(cLatRad) * sinf(latRad) - sinf(cLatRad) * cosf(latRad) * cosf(lonRad - cLonRad));
-    float z = r * cos_c; // Depth towards camera
+    // Radius scaling: Earth radius + non-linear altitude scale
+    float r = (float)_earthRadius;
+    if (alt > 0.0) {
+        float visualAlt = (float)alt;
+        if (visualAlt > 20000.0f) visualAlt = 20000.0f;
+        r += sqrtf(visualAlt) * 0.4f * _zoom;
+    }
 
-    // AR Camera Effect: True 3D Pitch and Roll
-    float pitchRad = _cameraPitch * DEG_TO_RAD;
-    
-    // Translate pivot center to the visual focus point so that rotation is centered on it
+    float cos_c = _sinCLat * sinLat + _cosCLat * cosLat * cosDLon;
+
+    // Fast back-hemisphere cull when surface point and unpitched camera
+    if (alt <= 0.0 && _cameraPitch == 0.0f && cos_c < 0.0f) {
+        return false;
+    }
+
+    float x = r * cosLat * sinDLon;
+    float y = r * (_cosCLat * sinLat - _sinCLat * cosLat * cosDLon);
+    float z = r * cos_c;
+
     float z_temp = z - _cameraFocusR;
-    
-    float z_pitched = y * sinf(pitchRad) + z_temp * cosf(pitchRad);
-    float y_pitched = y * cosf(pitchRad) - z_temp * sinf(pitchRad);
-    
+    float z_pitched = y * _sinPitch + z_temp * _cosPitch;
+    float y_pitched = y * _cosPitch - z_temp * _sinPitch;
     float z_actual = z_pitched + _cameraFocusR;
-    
-    float z_limit = _cameraFocusR * (1.0f - cosf(pitchRad));
-    if (z_actual < z_limit) {
-        if (alt <= 0) return false; // On or below surface, strictly occluded
-        // For altitude > 0, check if it's occluded by the Earth body
+
+    if (z_actual < _zLimit) {
+        if (alt <= 0.0) return false;
         float distSq = x * x + y_pitched * y_pitched;
-        if (distSq < _earthRadius * _earthRadius) {
+        if (distSq < (float)(_earthRadius * _earthRadius)) {
             return false;
         }
     }
-    
-    // AR Camera Effect: True 3D Roll (rotating the camera around the forward axis)
-    float rollRad = -_cameraRoll * DEG_TO_RAD; // Negative to match natural tilt direction
-    
-    float rotatedX = x * cosf(rollRad) - y_pitched * sinf(rollRad);
-    float rotatedY = x * sinf(rollRad) + y_pitched * cosf(rollRad);
+
+    float rotatedX = x * _cosRoll - y_pitched * _sinRoll;
+    float rotatedY = x * _sinRoll + y_pitched * _cosRoll;
 
     outX = _centerX + _centerOffsetX + (int)rotatedX;
     outY = _centerY + _centerOffsetY - (int)rotatedY;
     return true;
 }
 
+bool EarthRenderer::projectInertial(float tx, float ty, float tz, float cosPsi, float sinPsi, int& outX, int& outY, bool* outInShadow) const {
+    float rSq = tx * tx + ty * ty + tz * tz;
+    if (!(rSq > 1000.0f && rSq < 1e18f)) return false;
+
+    float invR = 1.0f / sqrtf(rSq);
+    float rKm = rSq * invR;
+    float ux = tx * invR;
+    float uy = ty * invR;
+    float uz = tz * invR;
+
+    float earthR = 6378.137f - 21.385f * uz * uz;
+    float alt = rKm - earthR;
+
+    float r = (float)_earthRadius;
+    if (alt > 0.0f) {
+        float vAlt = (alt > 20000.0f) ? 20000.0f : alt;
+        r += sqrtf(vAlt) * 0.4f * _zoom;
+    }
+
+    float term2 = ux * cosPsi + uy * sinPsi;
+    float side  = uy * cosPsi - ux * sinPsi;
+    float cos_c = _sinCLat * uz + _cosCLat * term2;
+
+    float x = r * side;
+    float y = r * (_cosCLat * uz - _sinCLat * term2);
+    float z = r * cos_c;
+
+    float z_temp = z - _cameraFocusR;
+    float z_pitched = y * _sinPitch + z_temp * _cosPitch;
+    float y_pitched = y * _cosPitch - z_temp * _sinPitch;
+    float z_actual = z_pitched + _cameraFocusR;
+
+    if (z_actual < _zLimit) {
+        if (alt <= 0.0f) return false;
+        if (x * x + y_pitched * y_pitched < (float)(_earthRadius * _earthRadius)) {
+            return false;
+        }
+    }
+
+    if (outInShadow) {
+        bool inShadow = false;
+        if (_hasSunData) {
+            float cosTheta = _sinSubLat * uz + _cosSubLat * (term2 * _cosSubMinusCLon + side * _sinSubMinusCLon);
+            if (cosTheta < 0.0f) {
+                float distSq = rKm * rKm * (1.0f - cosTheta * cosTheta);
+                inShadow = (distSq < (6371.0f * 6371.0f));
+            }
+        }
+        *outInShadow = inShadow;
+    }
+
+    float rotatedX = x * _cosRoll - y_pitched * _sinRoll;
+    float rotatedY = x * _sinRoll + y_pitched * _cosRoll;
+    outX = _centerX + _centerOffsetX + (int)rotatedX;
+    outY = _centerY + _centerOffsetY - (int)rotatedY;
+    return true;
+}
+
 void EarthRenderer::drawContinents(double centerLat, double centerLon) {
-    // Pre-calculate constants for this frame to save THOUSANDS of CPU cycles
-    float cLatRad = (float)centerLat * DEG_TO_RAD;
-    float cLonRad = (float)centerLon * DEG_TO_RAD;
-    float sin_cLat = sinf(cLatRad);
-    float cos_cLat = cosf(cLatRad);
-    float sin_cLon = sinf(cLonRad);
-    float cos_cLon = cosf(cLonRad);
-    
-    float rollRad = -_cameraRoll * DEG_TO_RAD;
-    float sin_roll = sinf(rollRad);
-    float cos_roll = cosf(rollRad);
-    
-    float pitchRad = _cameraPitch * DEG_TO_RAD;
-    float sin_pitch = sinf(pitchRad);
-    float cos_pitch = cosf(pitchRad);
-    
-    float subLatR = (float)_subsolarLat * DEG_TO_RAD;
-    float subLonR = (float)_subsolarLon * DEG_TO_RAD;
-    float sin_subLat = sinf(subLatR);
-    float cos_subLat = cosf(subLatR);
-    float sin_subLon = sinf(subLonR);
-    float cos_subLon = cosf(subLonR);
+    const float sin_cLat = _sinCLat;
+    const float cos_cLat = _cosCLat;
+    const float sin_cLon = _sinCLon;
+    const float cos_cLon = _cosCLon;
+    const float sin_roll = _sinRoll;
+    const float cos_roll = _cosRoll;
+    const float sin_pitch = _sinPitch;
+    const float cos_pitch = _cosPitch;
+    const float z_limit = _zLimit;
+    const bool zeroPitch = (_cameraPitch == 0.0f);
+    const float sin_subLat = _sinSubLat;
+    const float cos_subLat = _cosSubLat;
+    const float sin_subLon = _sinSubLon;
+    const float cos_subLon = _cosSubLon;
+    const float r = (float)_earthRadius;
 
     auto drawPath = [&](const MapPoint* pts, int count) {
         int prevX = -1, prevY = -1;
@@ -198,17 +283,15 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
             float cos_lat = pts[j].cosLat;
             float sin_lon = pts[j].sinLon;
             float cos_lon = pts[j].cosLon;
-            float latRad = pts[j].latRad;
             
-            // Using identities:
-            // cos(lon - cLon) = cos_lon * cos_cLon + sin_lon * sin_cLon
-            // sin(lon - cLon) = sin_lon * cos_cLon - cos_lon * sin_cLon
             float cos_dLon = cos_lon * cos_cLon + sin_lon * sin_cLon;
-            float sin_dLon = sin_lon * cos_cLon - cos_lon * sin_cLon;
-            
             float cos_c = sin_cLat * sin_lat + cos_cLat * cos_lat * cos_dLon;
-            
-            float r = (float)_earthRadius;
+            if (zeroPitch && cos_c < 0.0f) {
+                prevVisible = false;
+                continue;
+            }
+
+            float sin_dLon = sin_lon * cos_cLon - cos_lon * sin_cLon;
             float x = r * cos_lat * sin_dLon;
             float y = r * (cos_cLat * sin_lat - sin_cLat * cos_lat * cos_dLon);
             float z = r * cos_c;
@@ -217,7 +300,6 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
             float z_pitched = y * sin_pitch + z_temp * cos_pitch;
             float z_actual = z_pitched + _cameraFocusR;
             
-            float z_limit = _cameraFocusR * (1.0f - cos_pitch);
             if (z_actual >= z_limit) {
                 float y_pitched = y * cos_pitch - z_temp * sin_pitch;
                 
@@ -228,14 +310,15 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
                 
                 if (prevVisible) {
                     if (abs(outX - prevX) < 100 && abs(outY - prevY) < 100) {
+                        float latRad = pts[j].latRad;
                         uint8_t cr = 50, cg = 150, cb = 50;
                         if (latRad > 0) {
-                            float factor = latRad / 1.57079632679f;
+                            float factor = latRad * 0.63661977f;
                             if (factor > 1.0f) factor = 1.0f;
                             cr = (uint8_t)(50 * (1 - factor));
                             cb = (uint8_t)(50 * (1 - factor) + 150 * factor);
                         } else {
-                            float factor = -latRad / 1.57079632679f;
+                            float factor = -latRad * 0.63661977f;
                             if (factor > 1.0f) factor = 1.0f;
                             cg = (uint8_t)(150 * (1 - factor) + 50 * factor);
                             cb = (uint8_t)(50 * (1 - factor) + 150 * factor);
@@ -244,7 +327,7 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
                         if (_hasSunData) {
                             float cos_lon_subLon = cos_lon * cos_subLon + sin_lon * sin_subLon;
                             float cos_dist = sin_subLat * sin_lat + cos_subLat * cos_lat * cos_lon_subLon;
-                            float illum = (cos_dist + 0.2f) / 0.4f;
+                            float illum = (cos_dist + 0.2f) * 2.5f;
                             if (illum > 1.0f) illum = 1.0f;
                             if (illum < 0.45f) illum = 0.45f;
                             cr = (uint8_t)(cr * illum);
@@ -253,8 +336,6 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
                         }
                         
                         uint16_t color = _display->color565(cr, cg, cb);
-                        
-                        // Actual land line
                         _canvas->drawLine(prevX, prevY, outX, outY, color);
                     }
                 }
@@ -651,28 +732,45 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
     */
 }
 
-static GeodeticCoord interpolateOrbit(const std::vector<GeodeticCoord>& orbit, float idx) {
-    if (orbit.empty()) return {0.0, 0.0, 0.0};
-    if (idx <= 0.0f) return orbit.front();
-    if (idx >= orbit.size() - 1.0f) return orbit.back();
-    
-    int i = (int)idx;
-    float t = idx - (float)i;
-    const auto& p1 = orbit[i];
-    const auto& p2 = orbit[i+1];
-    
-    GeodeticCoord res;
-    res.lat = p1.lat + t * (p2.lat - p1.lat);
-    
-    float dLon = p2.lon - p1.lon;
-    if (dLon > 180.0f) dLon -= 360.0f;
-    else if (dLon < -180.0f) dLon += 360.0f;
-    res.lon = p1.lon + t * dLon;
-    if (res.lon > 180.0f) res.lon -= 360.0f;
-    else if (res.lon < -180.0f) res.lon += 360.0f;
-    
-    res.alt = p1.alt + t * (p2.alt - p1.alt);
-    return res;
+static inline InertialOrbitNode interpInertialRing(const std::vector<InertialOrbitNode>& ring, bool closed, float u) {
+    const int M = (int)ring.size();
+    if (M <= 0) return {0.0f, 0.0f, 0.0f};
+    if (M == 1) return ring[0];
+    const int L = M - 1;
+
+    if (closed) {
+        u = fmodf(u, (float)L);
+        if (u < 0.0f) u += (float)L;
+    } else {
+        if (u <= 0.0f) return ring[0];
+        if (u >= (float)L) return ring[L];
+    }
+
+    int idx = (int)u;
+    if (idx >= L) idx = L - 1;
+    float t = u - (float)idx;
+
+    const InertialOrbitNode& p1 = ring[idx];
+    const InertialOrbitNode& p2 = ring[idx + 1];
+    float dx = p2.tx - p1.tx;
+    float dy = p2.ty - p1.ty;
+    float dz = p2.tz - p1.tz;
+
+    float rx = p1.tx + t * dx;
+    float ry = p1.ty + t * dy;
+    float rz = p1.tz + t * dz;
+
+    // 二阶弦矢补偿：消除稀疏采样弦中点向地心内凹导致的高度下沉，零 sqrt/trig 开销
+    float r1Sq = p1.tx * p1.tx + p1.ty * p1.ty + p1.tz * p1.tz;
+    if (r1Sq > 1000.0f) {
+        float dSq = dx * dx + dy * dy + dz * dz;
+        float sag = 1.0f + 0.5f * t * (1.0f - t) * (dSq / r1Sq);
+        if (sag > 1.12f) sag = 1.12f;
+        rx *= sag;
+        ry *= sag;
+        rz *= sag;
+    }
+    return {rx, ry, rz};
 }
 
 static uint16_t scaleColor(uint16_t color, float factor) {
@@ -725,45 +823,180 @@ static void drawRadioTransmissionWave(LGFX_Sprite* canvas, int sx, int sy, uint1
 }
 
 void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon) {
-    // Check observer visibility (reused from pre-calculated state)
     bool isVisibleToObserver = sat.isVisible;
 
-    // Draw Orbit if orbit data is available
-    if (sat.pastOrbit && sat.futureOrbit && (!sat.pastOrbit->empty() || !sat.futureOrbit->empty())) {
+    const OrbitCache* cache = sat.orbitCache;
+    if (cache && cache->ring.size() >= 3) {
+        const auto& ring = cache->ring;
+        const int M = (int)ring.size();
+        const int L = M - 1;
+        const bool closed = cache->isClosedLoop;
 
-    // Draw Orbit
-    auto drawOrbit = [&](const std::vector<GeodeticCoord>& orbit, uint16_t baseColor) {
-        int prevX = -1, prevY = -1;
-        bool prevVisible = false;
-        for (const auto& pt : orbit) {
-            int x, y;
-            bool visible = projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, x, y);
-            if (visible && prevVisible) {
-                if (abs(x - prevX) < 100 && abs(y - prevY) < 100) {
-                    bool shadow = false;
-                    if (!_isFastForwarding) {
-                        shadow = isSatelliteInShadow(pt.lat, pt.lon, pt.alt, _subsolarLat, _subsolarLon, _hasSunData);
-                    }
-                    uint16_t color = shadow ? _display->color565(70, 70, 80) : baseColor;
-                    _canvas->drawLine(prevX, prevY, x, y, color);
-                }
-            }
-            prevX = x;
-            prevY = y;
-            prevVisible = visible;
+        double simT = (sat.continuousSimTime > 0.0) ? sat.continuousSimTime : (double)sat.simTime;
+        double gmst = sat.gmstRad;
+        if (gmst == 0.0 && simT > 0.0) {
+            gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(simT));
         }
-    };
-    
-    // Dimmed colors for orbit
-    uint16_t pastColor = _display->color565(60, 60, 60);
-    uint16_t futureColor = _display->color565(120, 120, 120);
-    
-    if (sat.pastOrbit) drawOrbit(*(sat.pastOrbit), pastColor);
-    if (sat.futureOrbit) drawOrbit(*(sat.futureOrbit), futureColor);
-    }
-        
-        // Draw Mission Visualization Layer
-        if (sat.isRecentLaunchBatch && sat.pastOrbit && sat.futureOrbit && sat.proxyFormation && !sat.proxyFormation->empty()) {
+
+        double dtFromCache = simT - (double)cache->lastCalcTime;
+        double dOmega = (double)cache->raanRateRadPerSec * dtFromCache;
+        double alpha0 = gmst - dOmega;
+
+        // 将当前卫星精确地固位置反映射至惯性环参考架 pExact，确保轨道线与卫星图标 0.0 像素严丝合缝
+        float latRad = (float)sat.currentPos.lat * (float)DEG_TO_RAD;
+        float lonRing = (float) fmod((double)sat.currentPos.lon * DEG_TO_RAD + alpha0, 2.0 * M_PI);
+        float sinLat0 = sinf(latRad);
+        float cosLat0 = cosf(latRad);
+        float ux0 = cosLat0 * cosf(lonRing);
+        float uy0 = cosLat0 * sinf(lonRing);
+        float uz0 = sinLat0;
+        float rKm0 = (6378.137f - 21.385f * uz0 * uz0) + (float)sat.currentPos.alt;
+        float pExX = rKm0 * ux0;
+        float pExY = rKm0 * uy0;
+        float pExZ = rKm0 * uz0;
+
+        // 在 3D 惯性环中定位当前精确连续相位索引 uCenter
+        int searchCount = closed ? L : M;
+        int bestIdx = 0;
+        float minDistSq = 1e30f;
+        for (int j = 0; j < searchCount; j++) {
+            float dx = ring[j].tx - pExX;
+            float dy = ring[j].ty - pExY;
+            float dz = ring[j].tz - pExZ;
+            float dSq = dx * dx + dy * dy + dz * dz;
+            if (dSq < minDistSq) {
+                minDistSq = dSq;
+                bestIdx = j;
+            }
+        }
+
+        auto projSeg = [&](int iA, int iB, float& outT, float& outDistSq) {
+            const InertialOrbitNode& A = ring[iA];
+            const InertialOrbitNode& B = ring[iB];
+            float abx = B.tx - A.tx, aby = B.ty - A.ty, abz = B.tz - A.tz;
+            float apx = pExX - A.tx, apy = pExY - A.ty, apz = pExZ - A.tz;
+            float lenSq = abx * abx + aby * aby + abz * abz;
+            float t = 0.0f;
+            if (lenSq > 1e-4f) {
+                t = (apx * abx + apy * aby + apz * abz) / lenSq;
+                if (t < 0.0f) t = 0.0f;
+                else if (t > 1.0f) t = 1.0f;
+            }
+            float qx = A.tx + t * abx - pExX;
+            float qy = A.ty + t * aby - pExY;
+            float qz = A.tz + t * abz - pExZ;
+            outT = t;
+            outDistSq = qx * qx + qy * qy + qz * qz;
+        };
+
+        int prevIdx = closed ? ((bestIdx - 1 + L) % L) : ((bestIdx > 0) ? (bestIdx - 1) : 0);
+        int nextIdx = closed ? ((bestIdx + 1) % L) : ((bestIdx < L) ? (bestIdx + 1) : L);
+
+        float uCenter = (float)bestIdx;
+        if (prevIdx != bestIdx || nextIdx != bestIdx) {
+            float tL = 0.0f, dSqL = 1e30f;
+            float tR = 0.0f, dSqR = 1e30f;
+            if (prevIdx != bestIdx) {
+                int segA = prevIdx;
+                int segB = (closed && prevIdx == L - 1) ? L : bestIdx;
+                projSeg(segA, segB, tL, dSqL);
+            }
+            if (nextIdx != bestIdx) {
+                int segA = bestIdx;
+                int segB = (closed && bestIdx == L - 1) ? L : nextIdx;
+                projSeg(segA, segB, tR, dSqR);
+            }
+            if (dSqL < dSqR) {
+                uCenter = (float)prevIdx + tL;
+            } else {
+                uCenter = (float)bestIdx + tR;
+            }
+            if (closed && uCenter >= (float)L) uCenter -= (float)L;
+        }
+
+        InertialOrbitNode pRing0 = interpInertialRing(ring, closed, uCenter);
+        float errX = pExX - pRing0.tx;
+        float errY = pExY - pRing0.ty;
+        float errZ = pExZ - pRing0.tz;
+
+        int halfSteps = L / 2;
+        if (halfSteps < 1) halfSteps = 1;
+        float dtStep = cache->periodSec / (float)L;
+        // 地球恒星自转角速度 7.2921159e-5 rad/s 减去 J2 升交点进动率
+        float dPsiStep = (7.2921159e-5f - cache->raanRateRadPerSec) * dtStep;
+        float cosDPsi = cosf(dPsiStep);
+        float sinDPsi = sinf(dPsiStep);
+
+        float psi0 = (float) fmod(alpha0 + (double)_cLonRad, 2.0 * M_PI);
+        float cosPsi0 = cosf(psi0);
+        float sinPsi0 = sinf(psi0);
+
+        float wAngleStep = (float)M_PI / (float)halfSteps;
+        float cosWStep = cosf(wAngleStep);
+        float sinWStep = sinf(wAngleStep);
+
+        uint16_t shadowColor = _display->color565(70, 70, 80);
+        uint16_t pastColor = _display->color565(60, 60, 60);
+        uint16_t futureColor = _display->color565(120, 120, 120);
+
+        // dir = -1 绘制过去半圈轨迹，dir = +1 绘制未来半圈轨迹（均从卫星当前精确原点平滑向外延伸）
+        auto drawHalfArc = [&](int dir, uint16_t baseColor) {
+            float cosPsi = cosPsi0;
+            float sinPsi = sinPsi0;
+            float stepCos = cosDPsi;
+            float stepSin = (dir > 0) ? sinDPsi : -sinDPsi;
+
+            float cosW = 1.0f;
+            float sinW = 0.0f;
+
+            int prevX = -1, prevY = -1;
+            bool prevVis = false;
+
+            for (int m = 0; m <= halfSteps; m++) {
+                float u = uCenter + (float)(dir * m);
+                bool clampedEnd = false;
+                if (!closed) {
+                    if (u < 0.0f) { u = 0.0f; clampedEnd = true; }
+                    else if (u > (float)L) { u = (float)L; clampedEnd = true; }
+                }
+
+                InertialOrbitNode node = interpInertialRing(ring, closed, u);
+                float w = 0.5f * (1.0f + cosW);
+                float tx = node.tx + w * errX;
+                float ty = node.ty + w * errY;
+                float tz = node.tz + w * errZ;
+
+                int x = -1, y = -1;
+                bool inShadow = false;
+                bool vis = projectInertial(tx, ty, tz, cosPsi, sinPsi, x, y, &inShadow);
+                if (vis && prevVis) {
+                    if (abs(x - prevX) < 100 && abs(y - prevY) < 100) {
+                        _canvas->drawLine(prevX, prevY, x, y, inShadow ? shadowColor : baseColor);
+                    }
+                }
+                prevX = x;
+                prevY = y;
+                prevVis = vis;
+
+                if (clampedEnd) break;
+
+                float nextCosPsi = cosPsi * stepCos - sinPsi * stepSin;
+                float nextSinPsi = sinPsi * stepCos + cosPsi * stepSin;
+                cosPsi = nextCosPsi;
+                sinPsi = nextSinPsi;
+
+                float nextCosW = cosW * cosWStep - sinW * sinWStep;
+                float nextSinW = sinW * cosWStep + cosW * sinWStep;
+                cosW = nextCosW;
+                sinW = nextSinW;
+            }
+        };
+
+        drawHalfArc(-1, pastColor);
+        drawHalfArc(+1, futureColor);
+
+        // Draw Mission Visualization Layer (Starlink / Constellation Train) directly on the seamless 3D inertial ring
+        if (sat.isRecentLaunchBatch && sat.proxyFormation && !sat.proxyFormation->empty()) {
             double ageDays = 30.0;
             if (sat.launchEpoch > 0 && sat.simTime >= sat.launchEpoch) {
                 ageDays = (double)(sat.simTime - sat.launchEpoch) / 86400.0;
@@ -776,213 +1009,124 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
             else baseCol = 0x07FF;
 
             float breathe = 0.8f + 0.2f * sinf((float)millis() * 0.003f);
-            uint16_t missionColor = scaleColor(baseCol, breathe);
+            float dIndexPerDeg = (float)L / 360.0f;
 
-            std::vector<GeodeticCoord> mergedOrbit;
-            if (sat.pastOrbit) {
-                mergedOrbit.insert(mergedOrbit.end(), sat.pastOrbit->begin(), sat.pastOrbit->end());
-            }
-            if (sat.futureOrbit) {
-                mergedOrbit.insert(mergedOrbit.end(), sat.futureOrbit->begin(), sat.futureOrbit->end());
-            }
+            // 1. Draw Occupancy Light Band (instantaneous orbital plane at simT -> constant psi0!)
+            if (sat.occupancy > 1.0f) {
+                int numSteps = (int)(sat.occupancy / 5.0f) + 2;
+                if (numSteps > 75) numSteps = 75;
+                if (numSteps < 5) numSteps = 5;
 
-            if (!mergedOrbit.empty()) {
-                float preciseCenterIdx = 0.0f;
-                
-                // Locate the nearest point in the cached orbit to the representative sat's real-time propagated position
-                float minD = 1e9f;
-                int bestIdx = 0;
-                for (size_t i = 0; i < mergedOrbit.size(); i++) {
-                    float dLat = mergedOrbit[i].lat - sat.currentPos.lat;
-                    float dLon = mergedOrbit[i].lon - sat.currentPos.lon;
-                    if (dLon > 180.0f) dLon -= 360.0f;
-                    else if (dLon < -180.0f) dLon += 360.0f;
-                    float d = dLat * dLat + dLon * dLon;
-                    if (d < minD) {
-                        minD = d;
-                        bestIdx = i;
-                    }
-                }
-                
-                // Compute high-precision sub-pixel float index using 2D vector projection in the neighborhood of bestIdx
-                // to achieve absolute smooth, millisecond-level continuous sliding without any discrete coordinate jumping or jitter.
-                int N = mergedOrbit.size();
-                if (N > 1) {
-                    int prevIdx = (bestIdx - 1 + N) % N;
-                    int nextIdx = (bestIdx + 1) % N;
-                    
-                    float pLat = sat.currentPos.lat;
-                    float pLon = sat.currentPos.lon;
-                    
-                    float aLat = mergedOrbit[prevIdx].lat;
-                    float aLon = mergedOrbit[prevIdx].lon;
-                    if (aLon - pLon > 180.0f) aLon -= 360.0f;
-                    else if (aLon - pLon < -180.0f) aLon += 360.0f;
-                    
-                    float bLat = mergedOrbit[bestIdx].lat;
-                    float bLon = mergedOrbit[bestIdx].lon;
-                    if (bLon - pLon > 180.0f) bLon -= 360.0f;
-                    else if (bLon - pLon < -180.0f) bLon += 360.0f;
-                    
-                    float cLat = mergedOrbit[nextIdx].lat;
-                    float cLon = mergedOrbit[nextIdx].lon;
-                    if (cLon - pLon > 180.0f) cLon -= 360.0f;
-                    else if (cLon - pLon < -180.0f) cLon += 360.0f;
-                    
-                    float dPA2 = (pLat - aLat) * (pLat - aLat) + (pLon - aLon) * (pLon - aLon);
-                    float dPC2 = (pLat - cLat) * (pLat - cLat) + (pLon - cLon) * (pLon - cLon);
-                    
-                    if (dPA2 < dPC2) {
-                        // Project onto segment AB
-                        float vAB_lat = bLat - aLat;
-                        float vAB_lon = bLon - aLon;
-                        float vAP_lat = pLat - aLat;
-                        float vAP_lon = pLon - aLon;
-                        float lenSq = vAB_lat * vAB_lat + vAB_lon * vAB_lon;
-                        float t = 0.5f;
-                        if (lenSq > 1e-6f) {
-                            t = (vAP_lat * vAB_lat + vAP_lon * vAB_lon) / lenSq;
-                            if (t < 0.0f) t = 0.0f;
-                            if (t > 1.0f) t = 1.0f;
-                        }
-                        preciseCenterIdx = (float)prevIdx + t;
-                    } else {
-                        // Project onto segment BC
-                        float vBC_lat = cLat - bLat;
-                        float vBC_lon = cLon - bLon;
-                        float vBP_lat = pLat - bLat;
-                        float vBP_lon = pLon - bLon;
-                        float lenSq = vBC_lat * vBC_lat + vBC_lon * vBC_lon;
-                        float t = 0.5f;
-                        if (lenSq > 1e-6f) {
-                            t = (vBP_lat * vBC_lat + vBP_lon * vBC_lon) / lenSq;
-                            if (t < 0.0f) t = 0.0f;
-                            if (t > 1.0f) t = 1.0f;
-                        }
-                        preciseCenterIdx = (float)bestIdx + t;
-                    }
-                } else {
-                    preciseCenterIdx = (float)bestIdx;
-                }
-                
-                float dIndex = (float)(mergedOrbit.size() - 1) / 360.0f;
-                float maxIdx = (float)(mergedOrbit.size() - 1);
+                int prevLx = -1, prevLy = -1;
+                bool prevLVisible = false;
+                uint16_t lightBandColor = scaleColor(baseCol, 0.4f * breathe);
 
-                // 1. Draw Occupancy Light Band
-                if (sat.occupancy > 1.0f) {
-                    int numSteps = (int)(sat.occupancy / 5.0f) + 2;
-                    if (numSteps > 75) numSteps = 75;
-                    if (numSteps < 5) numSteps = 5;
-                    
-                    int prevLx = -1, prevLy = -1;
-                    bool prevLVisible = false;
-                    
-                    uint16_t lightBandColor = scaleColor(baseCol, 0.4f * breathe);
-                    
-                    for (int step = 0; step < numSteps; step++) {
-                        float ratio = (float)step / (float)(numSteps - 1);
-                        float P = sat.occupancyStartPhase + ratio * sat.occupancy;
-                        if (P >= 360.0f) P -= 360.0f;
-                        
-                        float diff = P - sat.repAlongTrackPhase;
-                        if (diff > 180.0f) diff -= 360.0f;
-                        else if (diff < -180.0f) diff += 360.0f;
-                        
-                        float idx = preciseCenterIdx + diff * dIndex;
-                        if (maxIdx > 0.1f) {
-                            idx = fmodf(idx, maxIdx);
-                            if (idx < 0.0f) idx += maxIdx;
-                        } else {
-                            idx = 0.0f;
-                        }
-                        
-                        GeodeticCoord pt = interpolateOrbit(mergedOrbit, idx);
-                        int lx, ly;
-                        bool lVisible = projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, lx, ly);
-                        
-                        if (lVisible && prevLVisible) {
-                            if (abs(lx - prevLx) < 100 && abs(ly - prevLy) < 100) {
-                                _canvas->drawLine(prevLx, prevLy, lx, ly, lightBandColor);
-                            }
-                        }
-                        prevLx = lx;
-                        prevLy = ly;
-                        prevLVisible = lVisible;
-                    }
-                }
+                for (int step = 0; step < numSteps; step++) {
+                    float ratio = (float)step / (float)(numSteps - 1);
+                    float P = sat.occupancyStartPhase + ratio * sat.occupancy;
+                    if (P >= 360.0f) P -= 360.0f;
 
-                // 2. Draw Proxy Satellites
-                for (const auto& fp : *(sat.proxyFormation)) {
-                    float diff = fp.AlongTrackPhase - sat.repAlongTrackPhase;
+                    float diff = P - sat.repAlongTrackPhase;
                     if (diff > 180.0f) diff -= 360.0f;
                     else if (diff < -180.0f) diff += 360.0f;
-                    
-                    float idx = preciseCenterIdx + diff * dIndex;
-                    if (maxIdx > 0.1f) {
-                        idx = fmodf(idx, maxIdx);
-                        if (idx < 0.0f) idx += maxIdx;
-                    } else {
-                        idx = 0.0f;
+
+                    float u = uCenter + diff * dIndexPerDeg;
+                    InertialOrbitNode pt = interpInertialRing(ring, true, u);
+                    float w = 0.5f * (1.0f + cosf(diff * (float)DEG_TO_RAD));
+                    int lx, ly;
+                    bool lVisible = projectInertial(pt.tx + w * errX, pt.ty + w * errY, pt.tz + w * errZ, cosPsi0, sinPsi0, lx, ly, nullptr);
+
+                    if (lVisible && prevLVisible) {
+                        if (abs(lx - prevLx) < 100 && abs(ly - prevLy) < 100) {
+                            _canvas->drawLine(prevLx, prevLy, lx, ly, lightBandColor);
+                        }
                     }
-                    
-                    GeodeticCoord pt = interpolateOrbit(mergedOrbit, idx);
-                    int px, py;
-                    if (projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, px, py)) {
-                        uint16_t proxyColor = scaleColor(baseCol, breathe * fp.brightness);
-                        _canvas->fillRect(px - 1, py - 1, 3, 3, proxyColor);
-                    }
+                    prevLx = lx;
+                    prevLy = ly;
+                    prevLVisible = lVisible;
+                }
+            }
+
+            // 2. Draw Proxy Satellites
+            for (const auto& fp : *(sat.proxyFormation)) {
+                float diff = fp.AlongTrackPhase - sat.repAlongTrackPhase;
+                if (diff > 180.0f) diff -= 360.0f;
+                else if (diff < -180.0f) diff += 360.0f;
+
+                float u = uCenter + diff * dIndexPerDeg;
+                InertialOrbitNode pt = interpInertialRing(ring, true, u);
+                float w = 0.5f * (1.0f + cosf(diff * (float)DEG_TO_RAD));
+                int px, py;
+                if (projectInertial(pt.tx + w * errX, pt.ty + w * errY, pt.tz + w * errZ, cosPsi0, sinPsi0, px, py, nullptr)) {
+                    uint16_t proxyColor = scaleColor(baseCol, breathe * fp.brightness);
+                    _canvas->fillRect(px - 1, py - 1, 3, 3, proxyColor);
                 }
             }
         }
-    
-    // Draw Fading Motion Trail for the selected satellite (rolling history of past frames)
-    if (sat.isSelected && sat.calc) {
-        const size_t MAX_TRAIL_STEPS = 5; // 5步优雅渐隐拖尾
-        struct TrailHistoryEntry {
-            uint32_t simTime = 0;
-            String name = "";
+    }
+
+    // Draw Fading Motion Trail for the selected satellite (zero-allocation fixed ring buffer, zero SGP4 calls)
+    if (sat.isSelected) {
+        static const int MAX_TRAIL_STEPS = 5;
+        struct TrailSample {
+            float lat;
+            float lon;
+            float alt;
+            double simT;
         };
-        static std::vector<TrailHistoryEntry> history;
-        
-        static String lastSelectedName = "";
-        String currentName = sat.name ? sat.name : "";
-        if (currentName != lastSelectedName) {
-            history.clear();
-            lastSelectedName = currentName;
+        static TrailSample s_trail[MAX_TRAIL_STEPS];
+        static int s_trailCount = 0;
+        static uint32_t s_lastNameHash = 0;
+
+        uint32_t h = 2166136261u;
+        if (sat.name) {
+            for (const char* p = sat.name; *p; ++p) {
+                h ^= (uint8_t)(*p);
+                h *= 16777619u;
+            }
         }
-        
-        // Add current frame to rolling history every render frame
-        TrailHistoryEntry entry;
-        entry.simTime = sat.simTime;
-        entry.name = currentName;
-        history.insert(history.begin(), entry);
-        if (history.size() > MAX_TRAIL_STEPS) {
-            history.resize(MAX_TRAIL_STEPS);
+
+        double curT = (sat.continuousSimTime > 0.0) ? sat.continuousSimTime : (double)sat.simTime;
+        if (h != s_lastNameHash) {
+            s_trailCount = 0;
+            s_lastNameHash = h;
+        } else if (s_trailCount > 0 && fabs(curT - s_trail[0].simT) > 14400.0) {
+            s_trailCount = 0;
         }
-        
-        // Draw the trail using the historical simulated times of the past N frames
-        for (size_t i = 1; i < history.size(); i++) {
-            uint32_t t_past = history[i].simTime;
-            if (t_past == sat.simTime) continue; // 静止同秒时不重复重叠绘制
-            double tx, ty, tz;
-            if (sat.calc->getTEME(t_past, tx, ty, tz)) {
-                double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t_past));
-                ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
-                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
-                
-                int tx_screen, ty_screen;
-                if (projectOrthographic(geo.lat, geo.lon, geo.alt, centerLat, centerLon, tx_screen, ty_screen)) {
-                    bool shadow = false;
-                    if (!_isFastForwarding) {
-                        shadow = isSatelliteInShadow(geo.lat, geo.lon, geo.alt, _subsolarLat, _subsolarLon, _hasSunData);
-                    }
-                    
-                    float fadeFactor = (1.0f - (float)i / (float)MAX_TRAIL_STEPS) * 0.65f;
-                    uint16_t trailCol = shadow ? _display->color565(60, 60, 70) : sat.color;
-                    trailCol = scaleColor(trailCol, fadeFactor);
-                    
-                    drawSatelliteIcon(tx_screen, ty_screen, sat.iconType, trailCol, shadow, fadeFactor);
-                }
+
+        float curLat = (float)sat.currentPos.lat;
+        float curLon = (float)sat.currentPos.lon;
+        float curAlt = (float)sat.currentPos.alt;
+
+        bool pushNew = (s_trailCount == 0);
+        if (!pushNew) {
+            float dLat = curLat - s_trail[0].lat;
+            float dLon = curLon - s_trail[0].lon;
+            if (dLon > 180.0f) dLon -= 360.0f;
+            else if (dLon < -180.0f) dLon += 360.0f;
+            // 当空间角位移超过约 0.45° 时推入新残影点，兼顾慢速观赏与时间机器高速滑行
+            if (dLat * dLat + dLon * dLon >= 0.20f) {
+                pushNew = true;
+            }
+        }
+
+        if (pushNew) {
+            int limit = (s_trailCount < MAX_TRAIL_STEPS) ? s_trailCount : (MAX_TRAIL_STEPS - 1);
+            for (int k = limit; k > 0; k--) {
+                s_trail[k] = s_trail[k - 1];
+            }
+            s_trail[0] = {curLat, curLon, curAlt, curT};
+            if (s_trailCount < MAX_TRAIL_STEPS) s_trailCount++;
+        }
+
+        for (int i = 1; i < s_trailCount; i++) {
+            int tx_screen, ty_screen;
+            if (projectOrthographic(s_trail[i].lat, s_trail[i].lon, s_trail[i].alt, centerLat, centerLon, tx_screen, ty_screen)) {
+                bool shadow = isSatelliteInShadow(s_trail[i].lat, s_trail[i].lon, s_trail[i].alt, _subsolarLat, _subsolarLon, _hasSunData);
+                float fadeFactor = (1.0f - (float)i / (float)MAX_TRAIL_STEPS) * 0.65f;
+                uint16_t trailCol = shadow ? _display->color565(60, 60, 70) : sat.color;
+                trailCol = scaleColor(trailCol, fadeFactor);
+                drawSatelliteIcon(tx_screen, ty_screen, sat.iconType, trailCol, shadow, fadeFactor);
             }
         }
     }
@@ -1025,21 +1169,19 @@ void EarthRenderer::drawFocusSightLineAndShadow(double centerLat, double centerL
     int ux = -1, uy = -1;
     bool userVisible = projectOrthographic(userLat, userLon, 0, centerLat, centerLon, ux, uy);
 
-    // 1. 绘制太阳日影方位对齐线 (Solar Shadow) —— 纯粹水滴形灰色阴影大头针，尖端直连定位点并随太阳方向围绕旋转
+    // 绘制太阳日影方位对齐线 (Solar Shadow) —— 纯粹水滴形灰色阴影大头针，尖端直连定位点并随太阳方向围绕旋转
     if (_hasSunData && userVisible) {
-        float uLatR = (float)userLat * DEG_TO_RAD;
-        float uLonR = (float)userLon * DEG_TO_RAD;
-        float subLatR = (float)_subsolarLat * DEG_TO_RAD;
-        float subLonR = (float)_subsolarLon * DEG_TO_RAD;
+        float uLatR = (float)userLat * (float)DEG_TO_RAD;
+        float uLonR = (float)userLon * (float)DEG_TO_RAD;
 
         // 计算观察者处的太阳仰角 (Solar Elevation Angle)
-        float sin_sunEl = sinf(uLatR) * sinf(subLatR) + cosf(uLatR) * cosf(subLatR) * cosf(subLonR - uLonR);
+        float sin_sunEl = sinf(uLatR) * _sinSubLat + cosf(uLatR) * _cosSubLat * cosf(_subLonRad - uLonR);
         if (sin_sunEl > 1.0f) sin_sunEl = 1.0f;
         if (sin_sunEl < -1.0f) sin_sunEl = -1.0f;
-        float sunElDeg = asinf(sin_sunEl) * RAD_TO_DEG;
+        float sunElDeg = asinf(sin_sunEl) * (float)RAD_TO_DEG;
 
         // 1. 太阳仰角晨昏过渡渐变因子 (太阳仰角在 -1.0° 到 +9.0° 之间 10° 范围平滑渐变)
-        float sunFade = (sunElDeg + 1.0f) / 10.0f;
+        float sunFade = (sunElDeg + 1.0f) * 0.1f;
         if (sunFade > 1.0f) sunFade = 1.0f;
         if (sunFade < 0.0f) sunFade = 0.0f;
 
@@ -1059,9 +1201,9 @@ void EarthRenderer::drawFocusSightLineAndShadow(double centerLat, double centerL
 
         // 仅当渐变透明度 > 1% 时绘制日影，实现丝滑渐入渐出效果
         if (totalFade > 0.01f) {
-            float dLon = subLonR - uLonR;
-            float y = sinf(dLon) * cosf(subLatR);
-            float x = cosf(uLatR) * sinf(subLatR) - sinf(uLatR) * cosf(subLatR) * cosf(dLon);
+            float dLon = _subLonRad - uLonR;
+            float y = sinf(dLon) * _cosSubLat;
+            float x = cosf(uLatR) * _sinSubLat - sinf(uLatR) * _cosSubLat * cosf(dLon);
             float sunAzRad = atan2f(y, x);
 
             // 日影方向 = 太阳反方向 (Sun Azimuth + 180deg)
@@ -1069,7 +1211,7 @@ void EarthRenderer::drawFocusSightLineAndShadow(double centerLat, double centerL
 
             // 动态调节水滴阴影大头针的伸展长度 (正午短，早晚长)
             float clampEl = sunElDeg < 5.0f ? 5.0f : sunElDeg;
-            float d_dist = 0.12f / tanf(clampEl * DEG_TO_RAD);
+            float d_dist = 0.12f / tanf(clampEl * (float)DEG_TO_RAD);
             if (d_dist < 0.06f) d_dist = 0.06f; // 正午短水滴 (~8-10px)
             if (d_dist > 0.25f) d_dist = 0.25f; // 早晚长水滴 (~25-30px)
 
@@ -1118,52 +1260,26 @@ void EarthRenderer::drawFocusSightLineAndShadow(double centerLat, double centerL
             }
         }
     }
-
-    // 2. 查找是否有处于选中焦点状态的卫星 (isSelected == true)
-    const SatRenderData* focusSat = nullptr;
-    for (const auto& sat : satellites) {
-        if (sat.isSelected) {
-            focusSat = &sat;
-            break;
-        }
-    }
-    if (!focusSat) return;
-
-    // 3. 绘制 3D 星地视线连线与仰角角标 (3D Sight Line & Ground Angle Badge)
-    int sx = -1, sy = -1;
-    bool satVisible = projectOrthographic(focusSat->currentPos.lat, focusSat->currentPos.lon, focusSat->currentPos.alt, centerLat, centerLon, sx, sy);
-
-    if (focusSat->isVisible && (userVisible || satVisible)) {
-        // 计算观察者与焦点卫星在 Topocentric 坐标系下的实时仰角与方位角
-        TopocentricCoord topo = {0, 0, 0};
-        if (focusSat->calc) {
-            double tx, ty, tz;
-            if (focusSat->calc->getTEME(focusSat->simTime, tx, ty, tz)) {
-                double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(focusSat->simTime));
-                ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
-                GeodeticCoord obsGeo = {userLat, userLon, 0.0};
-                topo = CoordTransform::ecefToTopocentric(obsGeo, ecef);
-            }
-        }
-    }
 }
 
 void EarthRenderer::render(double centerLat, double centerLon, double userLat, double userLon, const std::vector<SatRenderData>& satellites) {
     static uint32_t lastTime = 0;
     static int frames = 0;
     static int currentFPS = 0;
-    
+
+    updateFrameConstants(centerLat, centerLon);
+
     _canvas->fillSprite(BLACK);
-    
+
     drawStars(centerLat, centerLon);
     drawEarth(centerLat, centerLon, userLat, userLon);
-    
+
     for (const auto& sat : satellites) {
         drawSatellite(sat, centerLat, centerLon, userLat, userLon);
     }
 
     drawFocusSightLineAndShadow(centerLat, centerLon, userLat, userLon, satellites);
-    
+
     frames++;
     uint32_t now = millis();
     if (now - lastTime >= 1000) {
@@ -1175,100 +1291,94 @@ void EarthRenderer::render(double centerLat, double centerLon, double userLat, d
 
 void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
     if (!_hasSunData) return;
-    
-    float subLatR = (float)_subsolarLat * DEG_TO_RAD;
-    float subLonR = (float)_subsolarLon * DEG_TO_RAD;
-    float sin_subLat = sinf(subLatR);
-    float cos_subLat = cosf(subLatR);
-    float sin_subLon = sinf(subLonR);
-    float cos_subLon = cosf(subLonR);
-    
-    float cLatRad = (float)centerLat * DEG_TO_RAD;
-    float cLonRad = (float)centerLon * DEG_TO_RAD;
-    float sin_cLat = sinf(cLatRad);
-    float cos_cLat = cosf(cLatRad);
-    float sin_cLon = sinf(cLonRad);
-    float cos_cLon = cosf(cLonRad);
-    
-    float rollRad = -_cameraRoll * DEG_TO_RAD;
-    float sin_roll = sinf(rollRad);
-    float cos_roll = cosf(rollRad);
-    
-    float pitchRad = _cameraPitch * DEG_TO_RAD;
-    float sin_pitch = sinf(pitchRad);
-    float cos_pitch = cosf(pitchRad);
-    
-    float r = (float)_earthRadius;
-    
+
+    const float sin_subLat = _sinSubLat;
+    const float cos_subLat = _cosSubLat;
+    const float sin_subLon = _sinSubLon;
+    const float cos_subLon = _cosSubLon;
+
+    const float sin_cLat = _sinCLat;
+    const float cos_cLat = _cosCLat;
+    const float sin_cLon = _sinCLon;
+    const float cos_cLon = _cosCLon;
+
+    const float sin_roll = _sinRoll;
+    const float cos_roll = _cosRoll;
+
+    const float sin_pitch = _sinPitch;
+    const float cos_pitch = _cosPitch;
+    const float z_limit = _zLimit;
+    const bool zeroPitch = (_cameraPitch == 0.0f);
+
+    const float r = (float)_earthRadius;
+
     int width = _canvas->width();
     int height = _canvas->height();
     std::uint16_t* buffer = (std::uint16_t*)_canvas->getBuffer();
     if (!buffer) return;
-    
-    // Draw all light points under all states (including fast-forwarding / time adjustment)
-    int step = 1;
-    
+
+    // 快进时采用步长 2 + 1.25x 亮度能量守恒补偿，省去 50% 投影开销且夜景璀璨感无损
+    const int step = _isFastForwarding ? 2 : 1;
+    const float ffBoost = _isFastForwarding ? 6.25f : 5.0f; // (1 / 0.20) * (1.25 or 1.0)
+
     for (int i = 0; i < light_points_count; i += step) {
         float sin_lat = light_points[i].sinLat;
         float cos_lat = light_points[i].cosLat;
         float sin_lon = light_points[i].sinLon;
         float cos_lon = light_points[i].cosLon;
-        
+
         // 1. Determine if the point is in darkness (cos_dist <= 0.05f)
         float cos_lon_subLon = cos_lon * cos_subLon + sin_lon * sin_subLon;
         float cos_dist = sin_subLat * sin_lat + cos_subLat * cos_lat * cos_lon_subLon;
-        
+
         if (cos_dist <= 0.05f) {
-            // 2. Complete orthographic projection
             float cos_dLon = cos_lon * cos_cLon + sin_lon * sin_cLon;
             float cos_c = sin_cLat * sin_lat + cos_cLat * cos_lat * cos_dLon;
+            if (zeroPitch && cos_c < 0.0f) continue;
+
             float sin_dLon = sin_lon * cos_cLon - cos_lon * sin_cLon;
-            
+
             float x = r * cos_lat * sin_dLon;
             float y = r * (cos_cLat * sin_lat - sin_cLat * cos_lat * cos_dLon);
             float z = r * cos_c;
-            
+
             float z_temp = z - _cameraFocusR;
             float z_pitched = y * sin_pitch + z_temp * cos_pitch;
             float z_actual = z_pitched + _cameraFocusR;
-            
-            float z_limit = _cameraFocusR * (1.0f - cos_pitch);
+
             if (z_actual >= z_limit) {
                 float y_pitched = y * cos_pitch - z_temp * sin_pitch;
                 float rotatedX = x * cos_roll - y_pitched * sin_roll;
                 float rotatedY = x * sin_roll + y_pitched * cos_roll;
-                
+
                 int outX = _centerX + _centerOffsetX + (int)rotatedX;
                 int outY = _centerY + _centerOffsetY - (int)rotatedY;
-                
+
                 if (outX >= 0 && outX < width && outY >= 0 && outY < height) {
-                    float factor = (0.05f - cos_dist) / 0.20f;
+                    float factor = (0.05f - cos_dist) * ffBoost;
                     if (factor > 1.0f) factor = 1.0f;
                     if (factor < 0.0f) factor = 0.0f;
-                    
+
                     int idx = outY * width + outX;
                     uint16_t cur565 = __builtin_bswap16(buffer[idx]);
-                    
-                    // 提取当前像素 RGB565 (R:5bit, G:6bit, B:5bit)
+
                     uint16_t r5 = (cur565 >> 11) & 0x1F;
                     uint16_t g6 = (cur565 >> 5) & 0x3F;
                     uint16_t b5 = cur565 & 0x1F;
-                    
-                    // 璀璨金黄基色：R/G 快速提升形成金黄，B 保持较低防止过早泛白
-                    uint16_t dr5 = (uint16_t)(7 * factor);   // 红色快速提升
-                    uint16_t dg6 = (uint16_t)(9 * factor);   // 绿色稳步提升
-                    uint16_t db5 = (uint16_t)(1.5f * factor); // 蓝色低增量，维持金色基调
-                    
+
+                    uint16_t dr5 = (uint16_t)(7 * factor);
+                    uint16_t dg6 = (uint16_t)(9 * factor);
+                    uint16_t db5 = (uint16_t)(1.5f * factor);
+
                     r5 = (r5 + dr5 > 31) ? 31 : (r5 + dr5);
                     g6 = (g6 + dg6 > 63) ? 63 : (g6 + dg6);
                     b5 = (b5 + db5 > 31) ? 31 : (b5 + db5);
-                    
-                    // 仅当 R 与 G 均接近饱和（大城市极高密度重叠）时，才提升 B 分量形成“亮白核心”
+
                     if (r5 >= 28 && g6 >= 56) {
                         uint16_t extraB = (uint16_t)(3 * factor);
                         b5 = (b5 + extraB > 31) ? 31 : (b5 + extraB);
                     }
-                    
+
                     uint16_t new565 = (r5 << 11) | (g6 << 5) | b5;
                     buffer[idx] = __builtin_bswap16(new565);
                 }
