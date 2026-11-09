@@ -128,48 +128,102 @@ void StartupView::draw(int progressPercentage, bool showLangSelect, int selected
     char statusBuf[64] = {0};
     getLoadingStatusText(statusBuf, sizeof(statusBuf));
     const char* statusStr = (statusBuf[0] != '\0') ? statusBuf : I18N::get(TXT_LOADING_MODELS);
-    if (progressPercentage >= 100) {
-        // 就绪状态下温和呼吸闪烁提示用户按任意键开始
-        canvas->setTextColor(((millis() / 600) % 2 == 0) ? TFT_GREEN : TFT_YELLOW);
-    } else {
-        canvas->setTextColor(TFT_YELLOW);
-    }
-    canvas->drawString(statusStr, 120, 105);
+    // 按键提示保持纯静态黄色，不闪烁不晃眼，方便用户静心阅读上方航天小知识
+    canvas->setTextColor(TFT_YELLOW);
+    canvas->drawString(statusStr, 120, 104);
 
-    // 进度条（置于 Y=120，与地球仪边缘保持舒适间隔）
-    canvas->drawRect(35, 120, 170, 5, canvas->color565(40, 55, 70));
-    int fillW = (int)(166.0f * (progressPercentage / 100.0f));
+    // 进度条线性平滑追踪器：通过帧间插值保证进度条匀速丝滑推进，消除底层跳变
+    static float s_visualProgress = 0.0f;
+    if (progressPercentage <= 5 && s_visualProgress > 30.0f) {
+        s_visualProgress = (float)progressPercentage;
+    }
+    float targetProgress = (float)progressPercentage;
+    if (s_visualProgress < targetProgress) {
+        float diff = targetProgress - s_visualProgress;
+        float step = diff * 0.10f + 0.25f;
+        s_visualProgress += step;
+        if (s_visualProgress > targetProgress) {
+            s_visualProgress = targetProgress;
+        }
+    } else if (progressPercentage >= 100) {
+        s_visualProgress = 100.0f;
+    }
+
+    // 进度条（置于 Y=121，与地球仪边缘保持舒适间隔）
+    canvas->drawRect(35, 121, 170, 5, canvas->color565(40, 55, 70));
+    int fillW = (int)(166.0f * (s_visualProgress / 100.0f));
     if (fillW > 166) fillW = 166;
+    if (fillW < 0) fillW = 0;
     if (fillW > 0) {
-        canvas->fillRect(37, 121, fillW, 3, canvas->color565(0, 230, 120));
+        canvas->fillRect(37, 122, fillW, 3, canvas->color565(0, 230, 120));
     }
 
-    // 绘制随进度向前飞行的微型航天火箭
+    // 绘制随进度向前飞行的放大版航天火箭 (红色头部整流罩 + 白色耐热箭体 + 红色后掠尾翼 + 动态喷射橙色烈焰)
     int rx = 37 + fillW;
     if (rx > 203) rx = 203;
-    int ry = 122; // 进度条中心轴线
+    if (rx < 37) rx = 37;
+    int ry = 123; // 进度条中心轴线
 
-    if (progressPercentage >= 100) {
-        // 达到 100% 就绪待命：尾部微光离子焰
-        canvas->drawFastHLine(rx - 6, ry, 3, TFT_CYAN);
+    int nozzleX = rx - 6;
+
+    // 1. 尾部动态喷射橙色火焰 (持续喷射，包含高光亮黄内焰与闪烁尾羽)
+    uint32_t t = millis();
+    int fPhase = (t / 60) % 4;
+    int flameLen = (fPhase == 0) ? 9 : ((fPhase == 1) ? 12 : ((fPhase == 2) ? 8 : 11));
+
+    // 橙色外焰羽流
+    canvas->fillRect(nozzleX - 3, ry - 1, 3, 3, TFT_ORANGE);
+    canvas->drawFastHLine(nozzleX - 5, ry - 1, 2, TFT_ORANGE);
+    canvas->drawFastHLine(nozzleX - 5, ry + 1, 2, TFT_ORANGE);
+    canvas->drawFastHLine(nozzleX - flameLen, ry, flameLen - 2, TFT_ORANGE);
+
+    // 亮黄内焰核心与高温白炽点
+    int coreLen = flameLen / 2 + 1;
+    canvas->drawFastHLine(nozzleX - coreLen, ry, coreLen, TFT_YELLOW);
+    canvas->drawPixel(nozzleX - 1, ry, TFT_WHITE);
+
+    // 动态跳动火花
+    if (fPhase == 0) {
+        canvas->drawPixel(nozzleX - flameLen - 2, ry, TFT_ORANGE);
+        canvas->drawPixel(nozzleX - flameLen - 1, ry - 1, canvas->color565(255, 190, 0));
+    } else if (fPhase == 1) {
+        canvas->drawPixel(nozzleX - flameLen - 1, ry + 1, TFT_ORANGE);
+    } else if (fPhase == 2) {
+        canvas->drawPixel(nozzleX - flameLen - 2, ry, canvas->color565(255, 190, 0));
+        canvas->drawPixel(nozzleX - flameLen - 1, ry - 1, TFT_ORANGE);
     } else {
-        // 推进中：动态微闪烁推进尾焰
-        bool flicker = ((millis() / 70) % 2 == 0);
-        int flameLen = flicker ? 5 : 3;
-        canvas->fillRect(rx - 3 - flameLen, ry, flameLen, 1, TFT_YELLOW);
-        canvas->drawPixel(rx - 3 - flameLen - 1, ry, TFT_ORANGE);
-        canvas->drawPixel(rx - 3, ry - 1, TFT_ORANGE);
-        canvas->drawPixel(rx - 3, ry + 1, TFT_ORANGE);
+        canvas->drawPixel(nozzleX - flameLen - 1, ry, TFT_ORANGE);
     }
 
-    // 火箭箭体 (高科技白色耐热壳)
-    canvas->fillRect(rx - 3, ry - 1, 5, 3, TFT_WHITE);
-    // 上下姿态控制尾翼
-    canvas->drawFastVLine(rx - 3, ry - 3, 2, TFT_CYAN);
-    canvas->drawFastVLine(rx - 3, ry + 2, 2, TFT_CYAN);
-    // 头部整流罩 (朝右穿梭小锥体)
-    canvas->fillTriangle(rx + 2, ry - 2, rx + 2, ry + 2, rx + 6, ry, TFT_CYAN);
-    canvas->drawPixel(rx + 2, ry, TFT_WHITE);
+    // 2. 金属深灰发动机尾喷管
+    canvas->fillRect(nozzleX, ry - 1, 2, 3, canvas->color565(90, 95, 105));
+
+    // 3. 经典红色后掠气动稳定尾翼 (上下对称)
+    // 上侧尾翼
+    canvas->drawFastVLine(rx - 4, ry - 5, 4, TFT_RED);
+    canvas->drawFastVLine(rx - 3, ry - 4, 3, TFT_RED);
+    canvas->drawFastVLine(rx - 2, ry - 4, 3, TFT_RED);
+    canvas->drawFastVLine(rx - 1, ry - 3, 2, TFT_RED);
+    canvas->drawFastVLine(rx,     ry - 3, 2, TFT_RED);
+    // 下侧尾翼
+    canvas->drawFastVLine(rx - 4, ry + 2, 4, TFT_RED);
+    canvas->drawFastVLine(rx - 3, ry + 2, 3, TFT_RED);
+    canvas->drawFastVLine(rx - 2, ry + 2, 3, TFT_RED);
+    canvas->drawFastVLine(rx - 1, ry + 2, 2, TFT_RED);
+    canvas->drawFastVLine(rx,     ry + 2, 2, TFT_RED);
+
+    // 4. 白色航天耐热级体 (高 5px，含灰色级间刻线与青蓝色航天员舷窗)
+    canvas->fillRect(rx - 4, ry - 2, 11, 5, TFT_WHITE);
+    canvas->drawFastVLine(rx - 1, ry - 2, 5, canvas->color565(170, 175, 185)); // 级间刻线
+    canvas->fillRect(rx + 3, ry - 1, 2, 2, canvas->color565(0, 190, 255));      // 舷窗
+    canvas->drawFastHLine(rx - 4, ry + 2, 11, canvas->color565(210, 215, 225)); // 底部轻微立体阴影
+
+    // 5. 红色锥形流线型整流罩 (火箭头部)
+    canvas->fillRect(rx + 7, ry - 2, 3, 5, TFT_RED);  // 根部与箭体平齐 (高 5px)
+    canvas->fillRect(rx + 10, ry - 1, 2, 3, TFT_RED); // 中段收束 (高 3px)
+    canvas->drawFastHLine(rx + 12, ry, 2, TFT_RED);   // 尖锥端点 (高 1px)
+    canvas->drawFastHLine(rx + 7, ry - 2, 2, canvas->color565(255, 110, 110)); // 头部高光
+    canvas->drawFastHLine(rx + 14, ry, 2, canvas->color565(255, 180, 180));     // 前端探针 / 逃逸塔天线
     
     // Draw language selection dialog if needed
     if (showLangSelect) {

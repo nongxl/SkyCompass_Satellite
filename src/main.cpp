@@ -2418,7 +2418,7 @@ void setup() {
     }
 
     // Draw initial loading screen instantly to avoid black screen during setup
-    drawStartupScreen(18);
+    drawStartupScreen(5);
 
     // Initialize IMU
     if (imu && imu->begin()) {
@@ -2441,7 +2441,7 @@ void setup() {
     
     // Reset loader state
     g_loadingFinished = false;
-    g_loadingProgress = 18;
+    g_loadingProgress = 5;
     
     // Spawn background loader task on Core 0 to parse TLEs off the UI thread
     xTaskCreatePinnedToCore(
@@ -2600,7 +2600,7 @@ void setup() {
             
             Language currL = I18N::getLanguage();
             setLoadingStatusText((currL == LANG_ZH) ? "初始化传感器与外设..." : ((currL == LANG_JA) ? "センサー・外来機器の初期化中..." : ((currL == LANG_ES) ? "Inicializando sensores..." : "Initializing Hardware...")));
-            g_loadingProgress = 10;
+            g_loadingProgress = 15;
             
             // Load cached position from Preferences
             Preferences posPrefs;
@@ -2637,7 +2637,7 @@ void setup() {
             
             Language currL_pos = I18N::getLanguage();
             setLoadingStatusText((currL_pos == LANG_ZH) ? "载入观测坐标与太阳模型..." : ((currL_pos == LANG_JA) ? "観測座標・太陽モデルの読み込み中..." : ((currL_pos == LANG_ES) ? "Cargando ubicación y Sol..." : "Loading Location & Sun Data...")));
-            g_loadingProgress = 25;
+            g_loadingProgress = 30;
             
             sun_calc = new SunCalculator(pos_manager);
             sun_calc->begin();
@@ -2679,10 +2679,10 @@ void setup() {
                 }
                 
                 // 开机阶段仅加载轻量级 TLE 文本，待 loadSelectedSatellites() 后仅对实际勾选的卫星实例化 SGP4Calc
-                g_loadingProgress = 30 + (int)(35.0f * (float)(i + 1) / (float)NUM_SATELLITES);
+                g_loadingProgress = 30 + (int)(38.0f * (float)(i + 1) / (float)NUM_SATELLITES);
             }
             
-            g_loadingProgress = 65;
+            g_loadingProgress = 70;
             
             // Find the latest TLE Epoch as the initial system time anchor
             uint32_t latestEpoch = TLEManager::getMockTimeAnchor();
@@ -2699,7 +2699,7 @@ void setup() {
             LOG_I("APP", "Offline boot: Loaded cached TLEs. System time anchor set to: %u", current_unix);
             
             setLoadingStatusText((currL_parse == LANG_ZH) ? "解算自定义目标与频段数据..." : ((currL_parse == LANG_JA) ? "カスタム目標・周波数の計算中..." : ((currL_parse == LANG_ES) ? "Cargando satélites personalizados..." : "Loading Custom Satellites...")));
-            g_loadingProgress = 75;
+            g_loadingProgress = 80;
             
             // Load Custom Satellites from Preferences
             Preferences prefs;
@@ -2783,11 +2783,11 @@ void setup() {
             
             Language currL_boot = I18N::getLanguage();
             setLoadingStatusText((currL_boot == LANG_ZH) ? "构建火箭与群编队数据..." : ((currL_boot == LANG_JA) ? "ロケット・編隊データの構築中..." : ((currL_boot == LANG_ES) ? "Construyendo formaciones..." : "Building Launch Formations...")));
-            g_loadingProgress = 85;
+            g_loadingProgress = 90;
             tryLoadRecentLaunchCache();
             
             setLoadingStatusText((currL_boot == LANG_ZH) ? "启动核心推算引擎..." : ((currL_boot == LANG_JA) ? "推算エンジンの起動中..." : ((currL_boot == LANG_ES) ? "Iniciando motor de predicción..." : "Starting Predictor Engine...")));
-            g_loadingProgress = 95;
+            g_loadingProgress = 96;
 
             setLoadingStatusText((currL_boot == LANG_ZH) ? "加载完成，准备就绪！" : ((currL_boot == LANG_JA) ? "ロード完了、準備完了！" : ((currL_boot == LANG_ES) ? "¡Listo!" : "Ready!")));
             g_loadingProgress = 100;
