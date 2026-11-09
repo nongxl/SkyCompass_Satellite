@@ -158,72 +158,218 @@ void StartupView::draw(int progressPercentage, bool showLangSelect, int selected
         canvas->fillRect(37, 122, fillW, 3, canvas->color565(0, 230, 120));
     }
 
-    // 绘制随进度向前飞行的放大版航天火箭 (红色头部整流罩 + 白色耐热箭体 + 红色后掠尾翼 + 动态喷射橙色烈焰)
+    // 绘制航天发射与入轨全流程动效：
+    // 0% ~ 100%：整箭巡航推进（红色整流罩 + 白色耐热箭体 + 红色后掠尾翼 + 动态喷射橙色烈焰）
+    // 到达 100% 后：按真实航天流程依次触发：
+    //   阶段 1 (0~400ms)：一级关机与级间脱节后退
+    //   阶段 2 (400~900ms)：红色整流罩上下对称翻转剥离抛出，露出内部核心载荷
+    //   阶段 3 (900~1400ms)：星箭弹簧分离，上面级后退，卫星向前平稳滑出
+    //   阶段 4 (1400~2000ms)：卫星双侧科技蓝太阳能帆板平滑展开
+    //   阶段 5 (2000ms+)：卫星在轨巡航待命，天线周期性发射无线电遥测信标脉冲波
     int rx = 37 + fillW;
     if (rx > 203) rx = 203;
     if (rx < 37) rx = 37;
     int ry = 123; // 进度条中心轴线
 
-    int nozzleX = rx - 6;
-
-    // 1. 尾部动态喷射橙色火焰 (持续喷射，包含高光亮黄内焰与闪烁尾羽)
-    uint32_t t = millis();
-    int fPhase = (t / 60) % 4;
-    int flameLen = (fPhase == 0) ? 9 : ((fPhase == 1) ? 12 : ((fPhase == 2) ? 8 : 11));
-
-    // 橙色外焰羽流
-    canvas->fillRect(nozzleX - 3, ry - 1, 3, 3, TFT_ORANGE);
-    canvas->drawFastHLine(nozzleX - 5, ry - 1, 2, TFT_ORANGE);
-    canvas->drawFastHLine(nozzleX - 5, ry + 1, 2, TFT_ORANGE);
-    canvas->drawFastHLine(nozzleX - flameLen, ry, flameLen - 2, TFT_ORANGE);
-
-    // 亮黄内焰核心与高温白炽点
-    int coreLen = flameLen / 2 + 1;
-    canvas->drawFastHLine(nozzleX - coreLen, ry, coreLen, TFT_YELLOW);
-    canvas->drawPixel(nozzleX - 1, ry, TFT_WHITE);
-
-    // 动态跳动火花
-    if (fPhase == 0) {
-        canvas->drawPixel(nozzleX - flameLen - 2, ry, TFT_ORANGE);
-        canvas->drawPixel(nozzleX - flameLen - 1, ry - 1, canvas->color565(255, 190, 0));
-    } else if (fPhase == 1) {
-        canvas->drawPixel(nozzleX - flameLen - 1, ry + 1, TFT_ORANGE);
-    } else if (fPhase == 2) {
-        canvas->drawPixel(nozzleX - flameLen - 2, ry, canvas->color565(255, 190, 0));
-        canvas->drawPixel(nozzleX - flameLen - 1, ry - 1, TFT_ORANGE);
+    static uint32_t s_readyStartTime = 0;
+    if (s_visualProgress >= 99.5f) {
+        if (s_readyStartTime == 0) {
+            s_readyStartTime = millis();
+        }
     } else {
-        canvas->drawPixel(nozzleX - flameLen - 1, ry, TFT_ORANGE);
+        s_readyStartTime = 0;
     }
 
-    // 2. 金属深灰发动机尾喷管
-    canvas->fillRect(nozzleX, ry - 1, 2, 3, canvas->color565(90, 95, 105));
+    uint32_t elapsed = (s_readyStartTime > 0) ? (millis() - s_readyStartTime) : 0;
 
-    // 3. 经典红色后掠气动稳定尾翼 (上下对称)
-    // 上侧尾翼
-    canvas->drawFastVLine(rx - 4, ry - 5, 4, TFT_RED);
-    canvas->drawFastVLine(rx - 3, ry - 4, 3, TFT_RED);
-    canvas->drawFastVLine(rx - 2, ry - 4, 3, TFT_RED);
-    canvas->drawFastVLine(rx - 1, ry - 3, 2, TFT_RED);
-    canvas->drawFastVLine(rx,     ry - 3, 2, TFT_RED);
-    // 下侧尾翼
-    canvas->drawFastVLine(rx - 4, ry + 2, 4, TFT_RED);
-    canvas->drawFastVLine(rx - 3, ry + 2, 3, TFT_RED);
-    canvas->drawFastVLine(rx - 2, ry + 2, 3, TFT_RED);
-    canvas->drawFastVLine(rx - 1, ry + 2, 2, TFT_RED);
-    canvas->drawFastVLine(rx,     ry + 2, 2, TFT_RED);
+    if (elapsed == 0) {
+        // ================= 阶段 0：整箭巡航推进 (0% ~ 100%) =================
+        int nozzleX = rx - 6;
 
-    // 4. 白色航天耐热级体 (高 5px，含灰色级间刻线与青蓝色航天员舷窗)
-    canvas->fillRect(rx - 4, ry - 2, 11, 5, TFT_WHITE);
-    canvas->drawFastVLine(rx - 1, ry - 2, 5, canvas->color565(170, 175, 185)); // 级间刻线
-    canvas->fillRect(rx + 3, ry - 1, 2, 2, canvas->color565(0, 190, 255));      // 舷窗
-    canvas->drawFastHLine(rx - 4, ry + 2, 11, canvas->color565(210, 215, 225)); // 底部轻微立体阴影
+        // 1. 尾部动态喷射橙色火焰 (持续喷射，包含高光亮黄内焰与闪烁尾羽)
+        uint32_t t = millis();
+        int fPhase = (t / 60) % 4;
+        int flameLen = (fPhase == 0) ? 9 : ((fPhase == 1) ? 12 : ((fPhase == 2) ? 8 : 11));
 
-    // 5. 红色锥形流线型整流罩 (火箭头部)
-    canvas->fillRect(rx + 7, ry - 2, 3, 5, TFT_RED);  // 根部与箭体平齐 (高 5px)
-    canvas->fillRect(rx + 10, ry - 1, 2, 3, TFT_RED); // 中段收束 (高 3px)
-    canvas->drawFastHLine(rx + 12, ry, 2, TFT_RED);   // 尖锥端点 (高 1px)
-    canvas->drawFastHLine(rx + 7, ry - 2, 2, canvas->color565(255, 110, 110)); // 头部高光
-    canvas->drawFastHLine(rx + 14, ry, 2, canvas->color565(255, 180, 180));     // 前端探针 / 逃逸塔天线
+        // 橙色外焰羽流
+        canvas->fillRect(nozzleX - 3, ry - 1, 3, 3, TFT_ORANGE);
+        canvas->drawFastHLine(nozzleX - 5, ry - 1, 2, TFT_ORANGE);
+        canvas->drawFastHLine(nozzleX - 5, ry + 1, 2, TFT_ORANGE);
+        canvas->drawFastHLine(nozzleX - flameLen, ry, flameLen - 2, TFT_ORANGE);
+
+        // 亮黄内焰核心与高温白炽点
+        int coreLen = flameLen / 2 + 1;
+        canvas->drawFastHLine(nozzleX - coreLen, ry, coreLen, TFT_YELLOW);
+        canvas->drawPixel(nozzleX - 1, ry, TFT_WHITE);
+
+        // 动态跳动火花
+        if (fPhase == 0) {
+            canvas->drawPixel(nozzleX - flameLen - 2, ry, TFT_ORANGE);
+            canvas->drawPixel(nozzleX - flameLen - 1, ry - 1, canvas->color565(255, 190, 0));
+        } else if (fPhase == 1) {
+            canvas->drawPixel(nozzleX - flameLen - 1, ry + 1, TFT_ORANGE);
+        } else if (fPhase == 2) {
+            canvas->drawPixel(nozzleX - flameLen - 2, ry, canvas->color565(255, 190, 0));
+            canvas->drawPixel(nozzleX - flameLen - 1, ry - 1, TFT_ORANGE);
+        } else {
+            canvas->drawPixel(nozzleX - flameLen - 1, ry, TFT_ORANGE);
+        }
+
+        // 2. 金属深灰发动机尾喷管
+        canvas->fillRect(nozzleX, ry - 1, 2, 3, canvas->color565(90, 95, 105));
+
+        // 3. 经典红色后掠气动稳定尾翼 (上下对称)
+        canvas->drawFastVLine(rx - 4, ry - 5, 4, TFT_RED);
+        canvas->drawFastVLine(rx - 3, ry - 4, 3, TFT_RED);
+        canvas->drawFastVLine(rx - 2, ry - 4, 3, TFT_RED);
+        canvas->drawFastVLine(rx - 1, ry - 3, 2, TFT_RED);
+        canvas->drawFastVLine(rx,     ry - 3, 2, TFT_RED);
+
+        canvas->drawFastVLine(rx - 4, ry + 2, 4, TFT_RED);
+        canvas->drawFastVLine(rx - 3, ry + 2, 3, TFT_RED);
+        canvas->drawFastVLine(rx - 2, ry + 2, 3, TFT_RED);
+        canvas->drawFastVLine(rx - 1, ry + 2, 2, TFT_RED);
+        canvas->drawFastVLine(rx,     ry + 2, 2, TFT_RED);
+
+        // 4. 白色航天耐热箭体 (高 5px，含灰色级间刻线与青蓝色航天员舷窗)
+        canvas->fillRect(rx - 4, ry - 2, 11, 5, TFT_WHITE);
+        canvas->drawFastVLine(rx - 1, ry - 2, 5, canvas->color565(170, 175, 185)); // 级间刻线
+        canvas->fillRect(rx + 3, ry - 1, 2, 2, canvas->color565(0, 190, 255));      // 舷窗
+        canvas->drawFastHLine(rx - 4, ry + 2, 11, canvas->color565(210, 215, 225)); // 底部立体阴影
+
+        // 5. 红色锥形流线型整流罩 (火箭头部)
+        canvas->fillRect(rx + 7, ry - 2, 3, 5, TFT_RED);  // 根部与箭体平齐 (高 5px)
+        canvas->fillRect(rx + 10, ry - 1, 2, 3, TFT_RED); // 中段收束 (高 3px)
+        canvas->drawFastHLine(rx + 12, ry, 2, TFT_RED);   // 尖锥端点 (高 1px)
+        canvas->drawFastHLine(rx + 7, ry - 2, 2, canvas->color565(255, 110, 110)); // 头部高光
+        canvas->drawFastHLine(rx + 14, ry, 2, canvas->color565(255, 180, 180));     // 前端探针
+    } else {
+        // ================= 阶段 1~5：真实航天分离与释放卫星动效 =================
+
+        // 1. 一级助推级分离脱节与后退消散 (0ms ~ 1200ms)
+        if (elapsed < 1200) {
+            float p_sep = (elapsed < 400) ? ((float)elapsed / 400.0f) : 1.0f;
+            int boosterDx = -(int)(p_sep * 14.0f) - (int)((elapsed > 400 ? (elapsed - 400) : 0) * 0.02f);
+            int boosterDy = (int)(p_sep * 2.0f);
+            int bx = rx + boosterDx;
+            int by = ry + boosterDy;
+
+            // 助推级喷管
+            int bNozzleX = bx - 6;
+            canvas->fillRect(bNozzleX, by - 1, 2, 3, canvas->color565(80, 85, 95));
+            // 发动机关机余气 (前 120ms)
+            if (elapsed < 120) {
+                canvas->drawPixel(bNozzleX - 2, by, canvas->color565(220, 160, 60));
+                canvas->drawPixel(bNozzleX - 4, by, canvas->color565(140, 140, 150));
+            }
+
+            // 助推级白色箭体
+            canvas->fillRect(bx - 4, by - 2, 5, 5, TFT_WHITE);
+            // 助推级红色后掠尾翼
+            canvas->drawFastVLine(bx - 4, by - 5, 4, TFT_RED);
+            canvas->drawFastVLine(bx - 3, by - 4, 3, TFT_RED);
+            canvas->drawFastVLine(bx - 2, by - 4, 3, TFT_RED);
+            canvas->drawFastVLine(bx - 1, by - 3, 2, TFT_RED);
+
+            canvas->drawFastVLine(bx - 4, by + 2, 4, TFT_RED);
+            canvas->drawFastVLine(bx - 3, by + 2, 3, TFT_RED);
+            canvas->drawFastVLine(bx - 2, by + 2, 3, TFT_RED);
+            canvas->drawFastVLine(bx - 1, by + 2, 2, TFT_RED);
+        }
+
+        // 2. 上面级/过渡段箭体 (在星箭分离前护送卫星，星箭分离后 900ms~1500ms 缓退淡化)
+        if (elapsed < 1500) {
+            float p_upper = (elapsed < 900) ? 0.0f : ((elapsed < 1400) ? ((float)(elapsed - 900) / 500.0f) : 1.0f);
+            int adapterDx = -(int)(p_upper * 8.0f);
+            int ax = rx + adapterDx;
+            canvas->fillRect(ax + 1, ry - 2, 5, 5, TFT_WHITE);
+            canvas->drawFastVLine(ax + 1, ry - 2, 5, canvas->color565(170, 175, 185));
+            canvas->drawFastVLine(ax + 5, ry - 2, 5, canvas->color565(120, 125, 135)); // 载荷分离环
+        }
+
+        // 3. 红色整流罩对称翻转抛离 (400ms ~ 1100ms)
+        if (elapsed < 400) {
+            // 尚未抛罩：完整头部整流罩
+            canvas->fillRect(rx + 7, ry - 2, 3, 5, TFT_RED);
+            canvas->fillRect(rx + 10, ry - 1, 2, 3, TFT_RED);
+            canvas->drawFastHLine(rx + 12, ry, 2, TFT_RED);
+            canvas->drawFastHLine(rx + 7, ry - 2, 2, canvas->color565(255, 110, 110));
+            canvas->drawFastHLine(rx + 14, ry, 2, canvas->color565(255, 180, 180));
+        } else if (elapsed < 1100) {
+            // 抛罩中：上下两半片向外剥离抛散
+            float p_fair = (float)(elapsed - 400) / 600.0f;
+            if (p_fair > 1.0f) p_fair = 1.0f;
+            int fDy = (int)(p_fair * 9.0f);
+            int fDx = -(int)(p_fair * 5.0f);
+
+            // 上半片整流罩 (向右上方翻转抛离)
+            int fTopX = rx + 7 + fDx;
+            int fTopY = ry - fDy;
+            canvas->fillRect(fTopX, fTopY - 2, 3, 3, TFT_RED);
+            canvas->fillRect(fTopX + 3, fTopY - 1, 2, 2, TFT_RED);
+            canvas->drawPixel(fTopX + 5, fTopY, TFT_RED);
+
+            // 下半片整流罩 (向右下方翻转抛离)
+            int fBotX = rx + 7 + fDx;
+            int fBotY = ry + fDy;
+            canvas->fillRect(fBotX, fBotY, 3, 3, TFT_RED);
+            canvas->fillRect(fBotX + 3, fBotY, 2, 2, TFT_RED);
+            canvas->drawPixel(fBotX + 5, fBotY, TFT_RED);
+        }
+
+        // 4. 卫星载荷：星箭分离与太阳翼展开 (400ms+)
+        if (elapsed >= 400) {
+            float p_sat = (elapsed < 900) ? 0.0f : ((elapsed < 1400) ? ((float)(elapsed - 900) / 500.0f) : 1.0f);
+            int satDx = (int)(p_sat * 10.0f);
+            int sx = rx + 6 + satDx; // 最终就位约 X=219
+            int sy = ry;
+
+            // 阶段 5 悬浮微动姿态 (2100ms+)
+            if (elapsed >= 2100) {
+                if ((millis() / 600) % 2 == 1) {
+                    sy -= 1;
+                }
+            }
+
+            // 卫星核心舱体 (航天金色多层隔热 MLI 质感)
+            canvas->fillRect(sx - 2, sy - 2, 4, 5, canvas->color565(255, 215, 0)); // 钛金色核心
+            canvas->drawRect(sx - 2, sy - 2, 4, 5, canvas->color565(180, 140, 20)); // 金色轮廓
+            canvas->drawPixel(sx, sy, TFT_WHITE);                                   // 光学载荷透镜
+            canvas->drawFastVLine(sx, sy - 4, 2, TFT_WHITE);                        // 前向测控天线
+
+            // 太阳翼展开 (1400ms ~ 2000ms 逐步由 0 伸展至 5px)
+            if (elapsed >= 1400) {
+                float p_solar = (elapsed < 2000) ? ((float)(elapsed - 1400) / 600.0f) : 1.0f;
+                int wingW = (int)(p_solar * 5.0f);
+                if (wingW > 0) {
+                    // 左侧太阳能帆板 (深蓝光伏基底 + 青白光电网格刻线)
+                    canvas->fillRect(sx - 2 - wingW, sy - 1, wingW, 3, canvas->color565(0, 120, 220));
+                    canvas->drawFastHLine(sx - 2 - wingW, sy - 1, wingW, canvas->color565(0, 170, 255));
+                    canvas->drawPixel(sx - 2 - (wingW + 1) / 2, sy, canvas->color565(200, 240, 255));
+
+                    // 右侧太阳能帆板
+                    canvas->fillRect(sx + 2, sy - 1, wingW, 3, canvas->color565(0, 120, 220));
+                    canvas->drawFastHLine(sx + 2, sy - 1, wingW, canvas->color565(0, 170, 255));
+                    canvas->drawPixel(sx + 2 + (wingW + 1) / 2, sy, canvas->color565(200, 240, 255));
+                }
+            }
+
+            // 5. 在轨无线电遥测脉冲信标波圈与指示灯 (2100ms+)
+            if (elapsed >= 2100) {
+                uint32_t beaconCycle = (elapsed - 2100) % 1400; // 每 1.4 秒发射一波脉冲
+                if (beaconCycle < 800) {
+                    int waveR = 2 + (int)((float)beaconCycle * 0.010f); // 半径 2 到 10
+                    int ax = sx;
+                    int ay = sy - 4;
+                    uint16_t waveCol = (waveR < 6) ? canvas->color565(0, 230, 160) : canvas->color565(0, 120, 80);
+                    canvas->drawCircle(ax, ay, waveR, waveCol);
+                }
+                // 天线顶端绿色闪烁指示灯
+                bool ledOn = (beaconCycle < 250);
+                canvas->drawPixel(sx, sy - 4, ledOn ? TFT_GREEN : TFT_CYAN);
+            }
+        }
+    }
     
     // Draw language selection dialog if needed
     if (showLangSelect) {
