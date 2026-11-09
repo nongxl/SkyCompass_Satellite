@@ -72,6 +72,7 @@ WifiSetupView wifi_setup_view;
 #include "gimbal/gimbal_tracking_pipeline.h"
 SatSelectView sat_select_view;
 RecommendationView recommendation_view;
+#include "ui/sat_focus_drawer.h"
 #include "core/text_utils.h"
 
 #include "core/mono_icons.h"
@@ -3707,6 +3708,9 @@ void loop() {
             const bool isTimeMachineKeyMode = ((isSatViewMode || (!isManualLocationMode)) && !showRecommendations);
             
             auto handleContinuousKey = [&](char key) {
+                if (key != ';' && key != '.') {
+                    SatFocusDrawer::getInstance().hideImmediately();
+                }
                 if (isTimeMachineKeyMode) {
                     if (key == ',' || key == '/') {
                         lastTimeAdjustMillis = millis();
@@ -3908,6 +3912,9 @@ void loop() {
         // Handle discrete keyboard input
         if (hasAnyKeyJustPressed || (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) || justW) {
             if (appState == STATE_MAIN) {
+                if (hasAnyKeyJustPressed && !justSemi && !justDot) {
+                    SatFocusDrawer::getInstance().hideImmediately();
+                }
                 if (justShift) {
                     if (HardwareConfig::getInstance().isEnabled(HW_MOD_UNIT_8SERVOS)) {
                         appState = STATE_SERVO_TEST;
@@ -4267,6 +4274,7 @@ void loop() {
                                     initRecentLaunchCalcs(item);
                                     isCameraTransitioning = true;
                                 }
+                                SatFocusDrawer::getInstance().trigger();
                             }
                         }
                     }
@@ -4328,6 +4336,7 @@ void loop() {
                                     initRecentLaunchCalcs(item);
                                     isCameraTransitioning = true;
                                 }
+                                SatFocusDrawer::getInstance().trigger();
                             }
                         }
                     }
@@ -5856,6 +5865,11 @@ void loop() {
                     }
                 }
             }
+
+        // Sat View 模式下焦点飞行器右侧抽屉预览列表
+        if (isSatViewMode || SatFocusDrawer::getInstance().isVisible()) {
+            SatFocusDrawer::getInstance().draw(earth_renderer->getCanvas());
+        }
 
         if (appState == STATE_LANG_SELECT) {
             drawLangSelectDialog(earth_renderer->getCanvas());
