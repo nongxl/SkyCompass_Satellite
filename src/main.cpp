@@ -4300,7 +4300,7 @@ void loop() {
                                     initRecentLaunchCalcs(item);
                                     isCameraTransitioning = true;
                                 }
-                                SatFocusDrawer::getInstance().trigger();
+                                SatFocusDrawer::getInstance().trigger(-1);
                             }
                         }
                     }
@@ -4362,7 +4362,7 @@ void loop() {
                                     initRecentLaunchCalcs(item);
                                     isCameraTransitioning = true;
                                 }
-                                SatFocusDrawer::getInstance().trigger();
+                                SatFocusDrawer::getInstance().trigger(1);
                             }
                         }
                     }

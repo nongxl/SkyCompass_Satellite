@@ -18,8 +18,11 @@ extern int32_t timeMachineOffset;
 extern void lockSatMutex();
 extern void unlockSatMutex();
 
-// 抽屉水平 X 坐标物理弹簧 (屏幕宽 240，完全收起 240.0f，展开 240 - 69 = 171.0f)
-static SpringValue s_drawerX(240.0f, SpringConfig(0.26f, 0.78f));
+// 抽屉水平 X 坐标物理弹簧 (屏幕宽 240，完全收起 240.0f，展开 240 - 69 = 171.0f - lilt 物理模型)
+static SpringValue s_drawerX(240.0f, SpringConfig(0.32f, 0.82f));
+
+// 列表项垂直切换滚轮物理弹簧 (lilt 弹性平滑磁吸过渡，阻尼 0.76)
+static SpringValue s_scrollOffsetY(0.0f, SpringConfig(0.24f, 0.76f));
 
 // RGB565 颜色与背景进行 Alpha 柔和混色
 static inline uint16_t blendColor(uint16_t fg, uint16_t bg, float alpha) {
@@ -48,18 +51,35 @@ SatFocusDrawer& SatFocusDrawer::getInstance() {
     return instance;
 }
 
-void SatFocusDrawer::trigger() {
+void SatFocusDrawer::trigger(int dir) {
+    bool wasFullyClosed = (!_active && s_drawerX.get() >= 238.0f);
     _active = true;
     _hideMs = millis() + 5000;
     _lastTriggerMs = millis();
-    // 抽屉宽度减少 1/4 (原 92 -> 现 69)，展开目标 X: 240 - 69 = 171
+    // 展开目标 X: 240 - 69 = 171
     s_drawerX.set(171.0f);
+
+    // 注入 lilt 垂直切换弹性滚轮冲量
+    if (!wasFullyClosed && dir != 0) {
+        if (dir > 0) {
+            // 按 '.' 向下切换目标，新目标从下方滑上来，产生 +15px 冲量后弹性归位
+            s_scrollOffsetY.jump(15.0f);
+        } else {
+            // 按 ';' 向上切换目标，新目标从上方滑下来，产生 -15px 冲量后弹性归位
+            s_scrollOffsetY.jump(-15.0f);
+        }
+        s_scrollOffsetY.set(0.0f);
+    } else {
+        s_scrollOffsetY.jump(0.0f);
+        s_scrollOffsetY.set(0.0f);
+    }
 }
 
 void SatFocusDrawer::hideImmediately() {
     _active = false;
     _hideMs = 0;
     s_drawerX.jump(240.0f);
+    s_scrollOffsetY.jump(0.0f);
 }
 
 bool SatFocusDrawer::isVisible() const {
@@ -85,7 +105,7 @@ void SatFocusDrawer::draw(LGFX_Sprite* canvas) {
         return;
     }
 
-    const int drawerW = 69; // 宽度减少 1/4 (原 92px -> 现 69px)
+    const int drawerW = 69; // 宽度精简至 69px
     const int rowH = 15;
     const int rowCount = 5;
     const int drawerH = rowCount * rowH + 4; // 79 px
@@ -164,35 +184,50 @@ void SatFocusDrawer::draw(LGFX_Sprite* canvas) {
         targets[0].isFocus = true;
     }
 
-    uint16_t bgCol = canvas->color565(16, 22, 32);
-
-    // 绘制抽屉科技感背景 (深暗蓝黑，对比度极佳)
+    // 与推荐过境事件列表保持完全一致的暗色背景 (15, 20, 25)
+    uint16_t bgCol = canvas->color565(15, 20, 25);
     canvas->fillRect(curX, drawerY, drawerW, drawerH, bgCol);
-    // 抽屉边框与微发光分割线
-    canvas->drawFastVLine(curX, drawerY, drawerH, canvas->color565(0, 160, 240));
-    canvas->drawFastHLine(curX, drawerY, drawerW, canvas->color565(30, 50, 70));
-    canvas->drawFastHLine(curX, drawerY + drawerH - 1, drawerW, canvas->color565(30, 50, 70));
+
+    // 与推荐列表一致的灰色分割线 (TFT_DARKGREY)
+    canvas->drawFastVLine(curX, drawerY, drawerH, TFT_DARKGREY);
+    // 上下微弱暗色分割线
+    canvas->drawFastHLine(curX, drawerY, drawerW, canvas->color565(35, 45, 55));
+    canvas->drawFastHLine(curX, drawerY + drawerH - 1, drawerW, canvas->color565(35, 45, 55));
+
+    // 中间固定焦点指示底框 (固定居中于第 3 行，科技暗蓝灰高亮，无任何刺眼杂色)
+    int midRowY = drawerY + 2 + 2 * rowH;
+    canvas->fillRect(curX + 1, midRowY, drawerW - 2, rowH, canvas->color565(25, 40, 58));
+    canvas->drawRect(curX + 1, midRowY, drawerW - 2, rowH, canvas->color565(60, 85, 115));
 
     int targetCount = (int)targets.size();
     canvas->setFont(I18N::getFont());
     canvas->setTextSize(1);
     canvas->setTextDatum(TL_DATUM);
 
-    // 逐行渲染 5 行列表 (中间第 3 行 row = 2 严格对应当前焦点目标，上下淡入淡出)
-    for (int row = 0; row < rowCount; row++) {
-        int rowY = drawerY + 2 + row * rowH;
-        int offset = row - 2; // -2, -1, 0, +1, +2
+    // 开启抽屉硬件裁剪，使滚动中的行不越出抽屉边界
+    canvas->setClipRect(curX, drawerY, drawerW, drawerH);
+
+    float scrollOffY = s_scrollOffsetY.get();
+    float centerY = (float)drawerY + (float)drawerH * 0.5f;
+
+    // 渲染 7 行 (row = -1 ~ 5，包含上下各 1 行滚动候补目标，随 lilt 物理弹簧滚动)
+    for (int row = -1; row <= rowCount; row++) {
+        int rowY = drawerY + 2 + row * rowH + (int)roundf(scrollOffY);
+        if (rowY + rowH < drawerY - 5 || rowY > drawerY + drawerH + 5) {
+            continue;
+        }
+
+        int offset = row - 2;
         int candidateIdx = -1;
 
         if (targetCount >= 3) {
-            candidateIdx = (focusTargetIdx + offset + targetCount * 10) % targetCount;
+            candidateIdx = (focusTargetIdx + offset + targetCount * 20) % targetCount;
         } else if (targetCount == 2) {
             if (row == 2) candidateIdx = focusTargetIdx;
             else if (row == 1 || row == 3) candidateIdx = 1 - focusTargetIdx;
-            // row == 0, 4 留空
+            else if (row == 0 || row == 4) candidateIdx = focusTargetIdx;
         } else if (targetCount == 1) {
             if (row == 2) candidateIdx = 0;
-            // 其余行留空
         }
 
         if (candidateIdx < 0 || candidateIdx >= targetCount) {
@@ -200,26 +235,25 @@ void SatFocusDrawer::draw(LGFX_Sprite* canvas) {
         }
 
         const auto& tItem = targets[candidateIdx];
-        bool isCenter = (row == 2);
 
-        // 上下淡入淡出透明度系数: 中间 100%, 邻近 55%, 两端 22% 融入暗底
-        float alpha = isCenter ? 1.0f : ((abs(offset) == 1) ? 0.55f : 0.22f);
+        // 动态基于与中心线垂直距离计算连续平滑淡入淡出 Alpha (lilt 视觉渐变)
+        float itemCenterY = (float)rowY + (float)rowH * 0.5f;
+        float distToCenter = fabsf(itemCenterY - centerY);
+        float normDist = distToCenter / ((float)drawerH * 0.5f); // 0.0 (中心) -> 1.0 (边缘)
+        float alpha = 1.0f - normDist * 0.82f;
+        if (alpha > 1.0f) alpha = 1.0f;
+        if (alpha < 0.12f) alpha = 0.12f;
+        if (row == 2 && fabsf(scrollOffY) < 2.0f) alpha = 1.0f;
 
-        if (isCenter) {
-            // 中间焦点行：高亮科技蓝背景条与微发光边框 (已去掉黄色指示箭头以节省宽度)
-            canvas->fillRect(curX + 1, rowY, drawerW - 2, rowH, canvas->color565(20, 55, 95));
-            canvas->drawRect(curX + 1, rowY, drawerW - 2, rowH, canvas->color565(40, 140, 220));
-        }
-
-        // 绘制飞行器图标 (复用 EarthRenderer::renderSatelliteIcon，图标靠左紧凑对齐，支持上下淡入淡出)
+        // 绘制飞行器图标 (复用 EarthRenderer::renderSatelliteIcon，靠左紧凑，支持 lilt 动态淡入淡出)
         int iconCenterX = curX + 8;
         int iconCenterY = rowY + rowH / 2;
         uint16_t fadedIconCol = blendColor(tItem.color, bgCol, alpha);
         EarthRenderer::renderSatelliteIcon(canvas, iconCenterX, iconCenterY, tItem.iconType, fadedIconCol, false, alpha);
 
-        // 绘制卫星名称 (颜色与地球仪保持一致，支持上下淡入淡出与超长文字横向滚动)
+        // 绘制卫星名称 (颜色与地球仪保持一致，支持动态淡入淡出与超长文字横向跑马灯滚动)
         int textStartX = curX + 17;
-        int maxTextWidth = drawerW - 19; // 69 - 19 = 50px 可用文本宽度
+        int maxTextWidth = drawerW - 19; // 50px 可用文本宽度
         uint16_t fadedTextCol = blendColor(tItem.color, bgCol, alpha);
         canvas->setTextColor(fadedTextCol);
 
@@ -228,8 +262,8 @@ void SatFocusDrawer::draw(LGFX_Sprite* canvas) {
 
         if (fullW > maxTextWidth) {
             int overflow = fullW - maxTextWidth;
-            // 滚动周期设计: 0~800ms 静止 -> 平滑向左滚到末尾 -> 停留 800ms -> 400ms 平滑复位
-            uint32_t scrollDuration = (uint32_t)(overflow * 40); // 速度约 25px/s
+            // 滚动周期: 0~800ms 静止 -> 匀速向左滚动 (25px/s) -> 末尾停留 800ms -> 400ms 平滑归位
+            uint32_t scrollDuration = (uint32_t)(overflow * 40);
             if (scrollDuration < 500) scrollDuration = 500;
             uint32_t totalPeriod = 800 + scrollDuration + 800 + 400;
             uint32_t elapsed = (millis() >= _lastTriggerMs) ? (millis() - _lastTriggerMs) : millis();
@@ -248,12 +282,12 @@ void SatFocusDrawer::draw(LGFX_Sprite* canvas) {
             }
         }
 
-        // 使用局部硬件剪裁矩形，确保文字横向滚动不会遮挡图标或溢出抽屉右边缘
+        // 嵌套局部裁剪矩形，确保单行文字滚动不会遮挡图标或越出右边缘
         canvas->setClipRect(textStartX, rowY, maxTextWidth, rowH);
         canvas->drawString(tItem.name.c_str(), textStartX - scrollOffset, rowY + 2);
-        canvas->clearClipRect();
+        canvas->setClipRect(curX, drawerY, drawerW, drawerH); // 还原至抽屉全局裁剪
     }
 
-    // 重置画布对齐方式，防止影响后续渲染
+    canvas->clearClipRect();
     canvas->setTextDatum(TL_DATUM);
 }

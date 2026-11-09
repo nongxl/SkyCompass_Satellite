@@ -8,8 +8,8 @@ class SatFocusDrawer {
 public:
     static SatFocusDrawer& getInstance();
 
-    // 当用户在 Sat View 下按 ; 或 . 切换焦点时触发：激活显示并重置 5 秒倒计时
-    void trigger();
+    // 当用户在 Sat View 下按 ; 或 . 切换焦点时触发：激活显示、注入 lilt 滚动冲量并重置 5 秒倒计时
+    void trigger(int dir = 0);
 
     // 当用户按下其它按键或离开 Sat View 时调用：立即隐藏
     void hideImmediately();
