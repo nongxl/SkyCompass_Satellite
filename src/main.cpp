@@ -2788,30 +2788,6 @@ void setup() {
             
             setLoadingStatusText((currL_boot == LANG_ZH) ? "启动核心推算引擎..." : ((currL_boot == LANG_JA) ? "推算エンジンの起動中..." : ((currL_boot == LANG_ES) ? "Iniciando motor de predicción..." : "Starting Predictor Engine...")));
             g_loadingProgress = 95;
-            
-            // Start predictor task on Core 0 for offline data (UI runs on Core 1)
-            xTaskCreatePinnedToCore(
-                predictorTask,
-                "PredictorTask",
-                8192, // 8KB 任务栈，为多卫星 SGP4/SDP4 轨道积分、地影解算与排序提供稳定安全的栈深度
-                NULL,
-                1,
-                &predictorTaskHandle,
-                0
-            );
-            
-            // Start network task on Core 0 to handle WiFi and TLE fetching in background
-            manualWifiToggle = false; // 开机默认自动模式：数据新鲜则跳过更新，完成同步后自动关闭 WiFi
-            
-            bool hasPendingRl = hasRecentLaunchPendingReboot();
-            if (hasPendingRl) {
-                currentSatTab = TAB_RECENT_LAUNCH;
-                recentLaunchDownloading = true;
-                recentLaunchErrorMsg = (currL_boot == LANG_ZH) ? "重启恢复: 正在更新近期发射..." : "Reboot recovery: updating recent launches...";
-                LOG_I("APP", "[BOOT] Pending recent launch update detected. Defaulting to TAB_RECENT_LAUNCH.");
-            }
-            
-            xTaskCreatePinnedToCore(networkTask, "NetworkTask", 5120, NULL, 1, NULL, 0);
 
             setLoadingStatusText((currL_boot == LANG_ZH) ? "加载完成，准备就绪！" : ((currL_boot == LANG_JA) ? "ロード完了、準備完了！" : ((currL_boot == LANG_ES) ? "¡Listo!" : "Ready!")));
             g_loadingProgress = 100;
@@ -2831,6 +2807,7 @@ void setup() {
     int selectedLangIdx = (int)I18N::getLanguage();
     if (selectedLangIdx < 0 || selectedLangIdx > 3) selectedLangIdx = 1; // 默认简体中文
 
+    // 阶段 1：等待后台数据加载完成，且首次开机时完成语言选择
     while (!g_loadingFinished || needsLangSelect) {
         M5Cardputer.update();
         if (needsLangSelect) {
@@ -2858,6 +2835,55 @@ void setup() {
         updateChainMonoDisplay();
         delay(10);
     }
+
+    // 阶段 2：开机就绪状态，停留在小知识界面，等待用户读完按任意键进入程序
+    // 期间绝不进行任何后台计算、联网与搜星操作，保持完全纯净安静，绝无打扰
+    Language currL_ready = I18N::getLanguage();
+    setLoadingStatusText((currL_ready == LANG_ZH) ? "【 按任意键开始探索 】" : 
+                         ((currL_ready == LANG_JA) ? "【 キーを押して開始 】" : 
+                         ((currL_ready == LANG_ES) ? "【 Presione tecla para iniciar 】" : "[ Press any key to start ]")));
+
+    // 若刚才进行了语言选择，等待用户释放按键，防止误触立即跳出
+    while (M5Cardputer.Keyboard.isPressed()) {
+        M5Cardputer.update();
+        drawStartupScreen(100, false, 0);
+        delay(10);
+    }
+
+    while (true) {
+        M5Cardputer.update();
+        if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+            break; // 用户按下任意键，正式进入主程序！
+        }
+        drawStartupScreen(100, false, 0);
+        updateChainMonoDisplay();
+        delay(10);
+    }
+
+    // 用户确认进入主系统，正式点火核心推算引擎与后台网络任务
+    LOG_I("APP", "[BOOT] User pressed key to exit startup screen. Launching predictor & network tasks...");
+
+    // 1. 启动 Core 0 过境推算引擎任务
+    xTaskCreatePinnedToCore(
+        predictorTask,
+        "PredictorTask",
+        8192, // 8KB 任务栈，为多卫星 SGP4/SDP4 轨道积分、地影解算与排序提供稳定安全的栈深度
+        NULL,
+        1,
+        &predictorTaskHandle,
+        0
+    );
+
+    // 2. 启动 Core 0 后台网络同步任务
+    manualWifiToggle = false;
+    bool hasPendingRl = hasRecentLaunchPendingReboot();
+    if (hasPendingRl) {
+        currentSatTab = TAB_RECENT_LAUNCH;
+        recentLaunchDownloading = true;
+        recentLaunchErrorMsg = (currL_ready == LANG_ZH) ? "重启恢复: 正在更新近期发射..." : "Reboot recovery: updating recent launches...";
+        LOG_I("APP", "[BOOT] Pending recent launch update detected. Defaulting to TAB_RECENT_LAUNCH.");
+    }
+    xTaskCreatePinnedToCore(networkTask, "NetworkTask", 5120, NULL, 1, NULL, 0);
     
     // Draw the final complete state
     drawStartupScreen(100, false, 0);

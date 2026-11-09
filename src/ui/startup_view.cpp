@@ -128,7 +128,12 @@ void StartupView::draw(int progressPercentage, bool showLangSelect, int selected
     char statusBuf[64] = {0};
     getLoadingStatusText(statusBuf, sizeof(statusBuf));
     const char* statusStr = (statusBuf[0] != '\0') ? statusBuf : I18N::get(TXT_LOADING_MODELS);
-    canvas->setTextColor(TFT_YELLOW);
+    if (progressPercentage >= 100) {
+        // 就绪状态下温和呼吸闪烁提示用户按任意键开始
+        canvas->setTextColor(((millis() / 600) % 2 == 0) ? TFT_GREEN : TFT_YELLOW);
+    } else {
+        canvas->setTextColor(TFT_YELLOW);
+    }
     canvas->drawString(statusStr, 120, 105);
 
     // 进度条（置于 Y=120，与地球仪边缘保持舒适间隔）
@@ -138,6 +143,33 @@ void StartupView::draw(int progressPercentage, bool showLangSelect, int selected
     if (fillW > 0) {
         canvas->fillRect(37, 121, fillW, 3, canvas->color565(0, 230, 120));
     }
+
+    // 绘制随进度向前飞行的微型航天火箭
+    int rx = 37 + fillW;
+    if (rx > 203) rx = 203;
+    int ry = 122; // 进度条中心轴线
+
+    if (progressPercentage >= 100) {
+        // 达到 100% 就绪待命：尾部微光离子焰
+        canvas->drawFastHLine(rx - 6, ry, 3, TFT_CYAN);
+    } else {
+        // 推进中：动态微闪烁推进尾焰
+        bool flicker = ((millis() / 70) % 2 == 0);
+        int flameLen = flicker ? 5 : 3;
+        canvas->fillRect(rx - 3 - flameLen, ry, flameLen, 1, TFT_YELLOW);
+        canvas->drawPixel(rx - 3 - flameLen - 1, ry, TFT_ORANGE);
+        canvas->drawPixel(rx - 3, ry - 1, TFT_ORANGE);
+        canvas->drawPixel(rx - 3, ry + 1, TFT_ORANGE);
+    }
+
+    // 火箭箭体 (高科技白色耐热壳)
+    canvas->fillRect(rx - 3, ry - 1, 5, 3, TFT_WHITE);
+    // 上下姿态控制尾翼
+    canvas->drawFastVLine(rx - 3, ry - 3, 2, TFT_CYAN);
+    canvas->drawFastVLine(rx - 3, ry + 2, 2, TFT_CYAN);
+    // 头部整流罩 (朝右穿梭小锥体)
+    canvas->fillTriangle(rx + 2, ry - 2, rx + 2, ry + 2, rx + 6, ry, TFT_CYAN);
+    canvas->drawPixel(rx + 2, ry, TFT_WHITE);
     
     // Draw language selection dialog if needed
     if (showLangSelect) {
