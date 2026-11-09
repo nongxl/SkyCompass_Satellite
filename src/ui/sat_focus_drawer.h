@@ -28,5 +28,6 @@ private:
 
     bool _active = false;
     uint32_t _hideMs = 0;
+    uint32_t _lastTriggerMs = 0;
 };
 
