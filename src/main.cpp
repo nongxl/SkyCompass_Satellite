@@ -13,6 +13,7 @@
 #include "core/encyclopedia.h"
 #include "core/image_utils.h"
 #include "core/spring_animator.h"
+#include "core/santa_tracker.h"
 
 // Helper to convert UTC date/time to Unix timestamp
 uint32_t convertGNSSDateToUnix(int year, int month, int day, int hour, int min, int sec) {
@@ -2402,6 +2403,7 @@ void setup() {
     cfg.internal_mic = false; // 禁用麦克风电路
     M5Cardputer.begin(cfg, true);
     SpaceAudio::begin();
+    SantaTracker::init();
     I18N::begin();
     M5Cardputer.Display.setBrightness(currentBrightness);
     
@@ -3619,7 +3621,8 @@ void loop() {
 
         if (RfConsoleView::getInstance().isActive()) {
             if (justTab) {
-                int nextMode = (earth_renderer->getVisualMode() + 1) % 2;
+                int modCount = SantaTracker::isDecember() ? 3 : 2;
+                int nextMode = (earth_renderer->getVisualMode() + 1) % modCount;
                 earth_renderer->setVisualMode(nextMode);
             }
             bool justZero = (M5Cardputer.Keyboard.keysState().word.size() > 0 && M5Cardputer.Keyboard.keysState().word[0] == '0');
@@ -3956,7 +3959,8 @@ void loop() {
                         gimbal.enterManualTest();
                     }
                 } else if (justTab) {
-                    int nextMode = (earth_renderer->getVisualMode() + 1) % 2;
+                    int modCount = SantaTracker::isDecember() ? 3 : 2;
+                    int nextMode = (earth_renderer->getVisualMode() + 1) % modCount;
                     earth_renderer->setVisualMode(nextMode);
                 } else if (justC) {
                     if (isSatViewMode) {
@@ -4497,7 +4501,8 @@ void loop() {
                     g_tempCategoryMask = g_selectedCategoryMask;
                     g_categoryFocusIndex = 0;
                 } else if (justTab) {
-                    int nextMode = (earth_renderer->getVisualMode() + 1) % 2;
+                    int modCount = SantaTracker::isDecember() ? 3 : 2;
+                    int nextMode = (earth_renderer->getVisualMode() + 1) % modCount;
                     earth_renderer->setVisualMode(nextMode);
                 } else if (deleteConfirmIndex >= 0 && currentSatTab == TAB_ENCYCLOPEDIA) {
                     if (deleteConfirmIndex < NUM_BUILTIN_SATELLITES) {
@@ -4863,7 +4868,18 @@ void loop() {
                                 triggerPrediction = true;
                             }
                         } else if (justEnter) {
-                            if (realIdx >= 0 && realIdx < NUM_SATELLITES) {
+                            if (realIdx == SantaTracker::VIRTUAL_ENC_INDEX) {
+                                if (SantaTracker::isFlightPhase()) {
+                                    appState = STATE_MAIN;
+                                } else {
+                                    Language currL = I18N::getLanguage();
+                                    if (currL == LANG_ZH) downloadErrorMsg = "圣诞老人整备中 (12-24启航)";
+                                    else if (currL == LANG_JA) downloadErrorMsg = "サンタ準備中 (12/24出発)";
+                                    else if (currL == LANG_ES) downloadErrorMsg = "Papa Noel preparandose (Salida 24-Dic)";
+                                    else downloadErrorMsg = "Santa preparing (Departs Dec 24)";
+                                    downloadFinishedMs = millis();
+                                }
+                            } else if (realIdx >= 0 && realIdx < NUM_SATELLITES) {
                                 if (!g_satellites[realIdx].selected) {
                                     if (getTotalSelectedSatelliteCount() >= MAX_TOTAL_SELECTED_SATS) {
                                         downloadErrorMsg = (I18N::getLanguage() == LANG_ZH) ? "已达上限: 两列表最多共勾选20颗" : "Limit reached: Max 20 sats total";
@@ -5027,6 +5043,13 @@ void loop() {
         double current_gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(continuousSimTime));
         const float cosGmst = cosf((float)current_gmst);
         const float sinGmst = sinf((float)current_gmst);
+
+        // 圣诞彩蛋任务驱动 (基于连续模拟时间)
+        SantaTracker::update(continuousSimTime, baseUserLat, baseUserLon, (pos_manager && pos_manager->hasValidPosition()));
+        // 若模拟时间离开 12 月，雷达色彩模式自动退回正常模式
+        if (!SantaTracker::isDecember() && earth_renderer->getVisualMode() == 2) {
+            earth_renderer->setVisualMode(0);
+        }
 
         // Target camera values for smooth transitions
         double targetViewLat = 0.0;

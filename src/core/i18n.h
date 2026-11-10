@@ -221,6 +221,15 @@ enum TextId {
     TXT_RF_REMAIN,
     TXT_RF_PASSED,
 
+    // Operation Santa (Christmas Easter Egg)
+    TXT_SANTA_PREP_TITLE,
+    TXT_SANTA_PREP_MSG,
+    TXT_SANTA_LAUNCHED,
+    TXT_SANTA_DELIVERY,
+    TXT_SANTA_COMPLETE,
+    TXT_SANTA_ENC_TITLE,
+    TXT_SANTA_ENC_DESC,
+
     // Max index marker
     TXT_MAX
 };

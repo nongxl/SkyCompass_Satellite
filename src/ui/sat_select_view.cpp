@@ -11,6 +11,7 @@
 #include <LittleFS.h>
 #include "core/orbit_utils.h"
 #include "core/space_audio.h"
+#include "core/santa_tracker.h"
 
 extern volatile bool isDownloadingCustom;
 extern int getTotalSelectedSatelliteCount();
@@ -117,6 +118,27 @@ void SatSelectView::releasePreviewCalc() {
 
 void SatSelectView::updateFilteredList() {
     g_encyclopediaFilteredIndices.clear();
+
+    if (SantaTracker::isDecember()) {
+        bool allowSanta = false;
+        if (g_selectedCategoryMask == 0) {
+            allowSanta = true;
+        } else {
+            for (int bit = 0; bit < 11; bit++) {
+                if (g_selectedCategoryMask & (1 << bit)) {
+                    if (g_filterCategories[bit].cat == Category::HISTORIC_EVENT ||
+                        (g_filterCategories[bit].flag & FLAG_HISTORIC)) {
+                        allowSanta = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (allowSanta) {
+            g_encyclopediaFilteredIndices.push_back(SantaTracker::VIRTUAL_ENC_INDEX);
+        }
+    }
+
     for (int i = 0; i < NUM_SATELLITES; i++) {
         if (g_selectedCategoryMask == 0) {
             g_encyclopediaFilteredIndices.push_back(i);
@@ -527,15 +549,26 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             
             if (index < filteredCount) {
                 int realIdx = g_encyclopediaFilteredIndices[index];
-                String checkBox = g_satellites[realIdx].selected ? "[x]" : "[ ]";
-                canvas->drawString(checkBox.c_str(), 4 + curShakeX, yPos);
-                
-                if (index == satSelectedIndex) {
-                    TextUtils::drawScrollingText(canvas, g_satellites[realIdx].name.c_str(), 28 + curShakeX, yPos, 56, TFT_WHITE);
+                if (realIdx == SantaTracker::VIRTUAL_ENC_INDEX) {
+                    canvas->setTextColor(index == satSelectedIndex ? TFT_WHITE : TFT_RED);
+                    String checkBox = "[*]";
+                    canvas->drawString(checkBox.c_str(), 4 + curShakeX, yPos);
+                    if (index == satSelectedIndex) {
+                        TextUtils::drawScrollingText(canvas, "SNT-CLS", 28 + curShakeX, yPos, 56, TFT_WHITE);
+                    } else {
+                        canvas->drawString("SNT-CLS", 28, yPos);
+                    }
                 } else {
-                    String nameStr = g_satellites[realIdx].name;
-                    if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
-                    canvas->drawString(nameStr.c_str(), 28, yPos);
+                    String checkBox = g_satellites[realIdx].selected ? "[x]" : "[ ]";
+                    canvas->drawString(checkBox.c_str(), 4 + curShakeX, yPos);
+                    
+                    if (index == satSelectedIndex) {
+                        TextUtils::drawScrollingText(canvas, g_satellites[realIdx].name.c_str(), 28 + curShakeX, yPos, 56, TFT_WHITE);
+                    } else {
+                        String nameStr = g_satellites[realIdx].name;
+                        if (nameStr.length() > 9) nameStr = nameStr.substring(0, 7) + "..";
+                        canvas->drawString(nameStr.c_str(), 28, yPos);
+                    }
                 }
             } else {
                 String text = isDownloadingCustom ? I18N::get(TXT_DOWNLOADING) : ("[+] " + noradInput + "_");
@@ -574,9 +607,17 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
         if (satSelectedIndex < filteredCount) {
             int realIdx = g_encyclopediaFilteredIndices[satSelectedIndex];
             SatProfile selSat;
-            lockSatMutex();
-            selSat = g_satellites[realIdx];
-            unlockSatMutex();
+            if (realIdx == SantaTracker::VIRTUAL_ENC_INDEX) {
+                selSat.noradId = 1225;
+                selSat.name = "SNT-CLS";
+                selSat.color = TFT_RED;
+                selSat.iconType = ICON_SATELLITE;
+                selSat.opsStatus = SantaTracker::isFlightPhase() ? '+' : 'P';
+            } else {
+                lockSatMutex();
+                selSat = g_satellites[realIdx];
+                unlockSatMutex();
+            }
             
             // Draw 3x Scaled Icon
             int iconX = rightX + 21;
@@ -584,7 +625,19 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             uint16_t satColor = selSat.color;
             SatIconType t = selSat.iconType;
             
-            if (t == ICON_STATION) {
+            if (realIdx == SantaTracker::VIRTUAL_ENC_INDEX) {
+                // SNT-CLS Sleigh & Rudolph icon
+                canvas->drawFastHLine(iconX - 16, iconY + 8, 20, canvas->color565(255, 215, 0));
+                canvas->drawPixel(iconX - 16, iconY + 7, canvas->color565(255, 215, 0));
+                canvas->drawPixel(iconX + 3, iconY + 7, canvas->color565(255, 215, 0));
+                canvas->fillRect(iconX - 14, iconY + 1, 14, 6, TFT_RED);
+                canvas->fillRect(iconX - 11, iconY - 3, 8, 4, TFT_WHITE);
+                canvas->fillCircle(iconX - 7, iconY - 5, 2, TFT_RED);
+                canvas->fillRect(iconX + 7, iconY - 1, 8, 7, canvas->color565(160, 82, 45));
+                canvas->fillCircle(iconX + 15, iconY + 1, 2, TFT_RED);
+                canvas->drawPixel(iconX + 11, iconY - 3, canvas->color565(210, 180, 140));
+                canvas->drawPixel(iconX + 12, iconY - 4, canvas->color565(210, 180, 140));
+            } else if (t == ICON_STATION) {
                 canvas->fillRect(iconX - 6, iconY - 3, 15, 9, TFT_WHITE);
                 canvas->fillRect(iconX - 21, iconY - 9, 12, 21, satColor);
                 canvas->fillRect(iconX + 12, iconY - 9, 12, 21, satColor);
@@ -708,34 +761,42 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             TextUtils::drawScrollingText(canvas, selSat.name.c_str(), rightX + 48, descY + 6, width - rightX - 48 - 4, selSat.color);
             
             // Draw NORAD ID for tracking
-            canvas->setTextColor(TFT_LIGHTGRAY);
-            canvas->drawString((String(I18N::get(TXT_ID)) + String(selSat.noradId)).c_str(), rightX + 48, descY + 20);
-            
-            if (selSat.tle.line1.length() >= 32) {
-                uint32_t currentSimTime = current_unix + timeMachineOffset;
-                uint32_t satEpoch = TLEUpdater::parseTleEpochPublic(selSat.tle.line1);
-                int ageDays = -1;
-                if (satEpoch > 0 && currentSimTime >= satEpoch) {
-                    ageDays = (currentSimTime - satEpoch) / 86400;
-                }
-                
-                char ageBuf[32];
-                uint16_t ageColor = TFT_GREEN;
-                if (ageDays < 0) {
-                    sprintf(ageBuf, "%s", I18N::get(TXT_GP_AGE_NA));
-                    ageColor = TFT_RED;
-                } else {
-                    sprintf(ageBuf, "%s%dd", I18N::get(TXT_GP_AGE), ageDays);
-                    if (ageDays <= 7) ageColor = TFT_GREEN;
-                    else if (ageDays <= 14) ageColor = TFT_ORANGE;
-                    else ageColor = TFT_RED;
-                }
-                canvas->setTextColor(ageColor);
-                int ageW = canvas->textWidth(ageBuf);
-                canvas->drawString(ageBuf, width - ageW - 4, descY - 5);
+            if (realIdx == SantaTracker::VIRTUAL_ENC_INDEX) {
+                canvas->setTextColor(TFT_LIGHTGRAY);
+                canvas->drawString((String(I18N::get(TXT_ID)) + "01225").c_str(), rightX + 48, descY + 20);
+                canvas->setTextColor(TFT_GREEN);
+                const char* stLabel = SantaTracker::isFlightPhase() ? "ACTIVE" : "STANDBY";
+                canvas->drawString(stLabel, width - canvas->textWidth(stLabel) - 4, descY - 5);
             } else {
-                canvas->setTextColor(TFT_RED);
-                canvas->drawString(I18N::get(TXT_GP_AGE_NA), width - canvas->textWidth(I18N::get(TXT_GP_AGE_NA)) - 4, descY - 5);
+                canvas->setTextColor(TFT_LIGHTGRAY);
+                canvas->drawString((String(I18N::get(TXT_ID)) + String(selSat.noradId)).c_str(), rightX + 48, descY + 20);
+                
+                if (selSat.tle.line1.length() >= 32) {
+                    uint32_t currentSimTime = current_unix + timeMachineOffset;
+                    uint32_t satEpoch = TLEUpdater::parseTleEpochPublic(selSat.tle.line1);
+                    int ageDays = -1;
+                    if (satEpoch > 0 && currentSimTime >= satEpoch) {
+                        ageDays = (currentSimTime - satEpoch) / 86400;
+                    }
+                    
+                    char ageBuf[32];
+                    uint16_t ageColor = TFT_GREEN;
+                    if (ageDays < 0) {
+                        sprintf(ageBuf, "%s", I18N::get(TXT_GP_AGE_NA));
+                        ageColor = TFT_RED;
+                    } else {
+                        sprintf(ageBuf, "%s%dd", I18N::get(TXT_GP_AGE), ageDays);
+                        if (ageDays <= 7) ageColor = TFT_GREEN;
+                        else if (ageDays <= 14) ageColor = TFT_ORANGE;
+                        else ageColor = TFT_RED;
+                    }
+                    canvas->setTextColor(ageColor);
+                    int ageW = canvas->textWidth(ageBuf);
+                    canvas->drawString(ageBuf, width - ageW - 4, descY - 5);
+                } else {
+                    canvas->setTextColor(TFT_RED);
+                    canvas->drawString(I18N::get(TXT_GP_AGE_NA), width - canvas->textWidth(I18N::get(TXT_GP_AGE_NA)) - 4, descY - 5);
+                }
             }
             
             descY += 36;
@@ -746,8 +807,8 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                 s_previewSatNorad = -1;
             }
             // 已勾选卫星直接复用 selSat.calc；未勾选卫星按需懒加载单个预览算子（退出百科或联网时自动释放，0 永久静态开销）
-            SGP4Calc* activePreviewCalc = selSat.calc.get();
-            if (!activePreviewCalc && !g_networkActive && !recentLaunchDownloading && !isDownloadingCustom &&
+            SGP4Calc* activePreviewCalc = (realIdx == SantaTracker::VIRTUAL_ENC_INDEX) ? nullptr : selSat.calc.get();
+            if (realIdx != SantaTracker::VIRTUAL_ENC_INDEX && !activePreviewCalc && !g_networkActive && !recentLaunchDownloading && !isDownloadingCustom &&
                 selSat.type != SAT_TYPE_GEO_TV &&
                 selSat.tle.line1.length() >= 68 && selSat.tle.line2.length() >= 68) {
                 if (!s_previewSatCalc || s_previewSatNorad != selSat.noradId || s_previewSatLine1 != selSat.tle.line1) {
@@ -781,7 +842,64 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             Language currL = I18N::getLanguage();
             bool isZh = (currL == LANG_ZH);
             String finalDesc = "";
-            if (realIdx >= NUM_BUILTIN_SATELLITES) {
+            String deorbPrefix = "";
+            String specBlock = "";
+
+            if (realIdx == SantaTracker::VIRTUAL_ENC_INDEX) {
+                String statusStr = "";
+                if (SantaTracker::isFlightPhase()) {
+                    if (currL == LANG_ZH) statusStr = "运行状态: [+] 环球巡航投递中";
+                    else if (currL == LANG_JA) statusStr = "運用状態: [+] 世界巡航配送中";
+                    else if (currL == LANG_ES) statusStr = "Estado: [+] En vuelo global";
+                    else statusStr = "Status: [+] Cruising & Delivering";
+                } else {
+                    if (currL == LANG_ZH) statusStr = "运行状态: [*] 北极母港整备中";
+                    else if (currL == LANG_JA) statusStr = "運用状態: [*] 北極母港整備中";
+                    else if (currL == LANG_ES) statusStr = "Estado: [*] En base Polo Norte";
+                    else statusStr = "Status: [*] North Pole Base";
+                }
+
+                finalDesc = statusStr + "\n\n" + I18N::get(TXT_SANTA_ENC_DESC);
+
+                char specBuf[256];
+                if (currL == LANG_ZH) {
+                    snprintf(specBuf, sizeof(specBuf),
+                             "\n国际标识: 0000-SANTA\n"
+                             "巡航动力: 9 驯鹿推进 (领航: 鲁道夫)\n"
+                             "运行速度: 约 Mach 3000\n"
+                             "巡航高度: 30 km (平流层/亚轨道)\n"
+                             "雷达回波: 红鼻子极强红外特征");
+                } else if (currL == LANG_JA) {
+                    snprintf(specBuf, sizeof(specBuf),
+                             "\n国際識別: 0000-SANTA\n"
+                             "巡航動力: 9トナカイ (先導: ルドルフ)\n"
+                             "飛行速度: 約マッハ 3000\n"
+                             "巡航高度: 30 km\n"
+                             "レーダー: 赤鼻強力赤外線シグネチャ");
+                } else if (currL == LANG_ES) {
+                    snprintf(specBuf, sizeof(specBuf),
+                             "\nID COSPAR: 0000-SANTA\n"
+                             "Propulsion: 9 renos (Lider: Rudolf)\n"
+                             "Velocidad: Mach 3000\n"
+                             "Altitud: 30 km\n"
+                             "Firma radar: Nariz roja infrarroja");
+                } else {
+                    snprintf(specBuf, sizeof(specBuf),
+                             "\nCOSPAR: 0000-SANTA\n"
+                             "Propulsion: 9 Reindeer (Rudolf)\n"
+                             "Speed: ~Mach 3000\n"
+                             "Alt: 30 km\n"
+                             "Radar: Red Nose High-IR");
+                }
+                specBlock = String(specBuf);
+
+                float sLat = 0, sLon = 0;
+                SantaTracker::getCurrentCoord(sLat, sLon);
+                char locBuf[64];
+                snprintf(locBuf, sizeof(locBuf), "\nLat: %+.1f°  Lon: %+.1f°", sLat, sLon);
+                specBlock += String(locBuf);
+            } else {
+                if (realIdx >= NUM_BUILTIN_SATELLITES) {
                 if (selSat.description && strlen(selSat.description) > 0) {
                     finalDesc = selSat.description;
                 } else {
@@ -797,7 +915,7 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             }
             
             // 已脱轨航天器科普特别前缀
-            String deorbPrefix = "";
+            deorbPrefix = "";
             if (selSat.opsStatus == 'D') {
                 if (currL == LANG_ZH) {
                     deorbPrefix = "【已再入烧毁】该航天器已脱轨坠毁并结束运行，轨道根数保留供历史科普参考。\n\n";
@@ -812,7 +930,7 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
             }
             
             // 2. 拼接轨道参数与遥测细节 (COSPAR/周期/速度/倾角/高度/方位/仰角/频率)
-            String specBlock = "";
+            specBlock = "";
             
             // 运行状态：置于百科词条下方、“国际标识”字段之前
             {
@@ -1060,6 +1178,7 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                 }
                 specBlock += String(modeBuf);
             }
+            } // end of else (normal sat specBlock)
             
             String fullTextToRender = finalDesc + specBlock;
             

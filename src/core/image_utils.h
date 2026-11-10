@@ -14,6 +14,9 @@ public:
     // 对 Sprite 画布应用夜视红光滤镜
     static void applyNightVisionFilter(LGFX_Sprite* canvas);
 
+    // 对 Sprite 画布应用复古绿磷雷达滤镜 (Phosphor P1 Green)
+    static void applyRadarFilter(LGFX_Sprite* canvas);
+
     // 根据 EarthRenderer 当前的视觉模式推送带滤镜的 Canvas
     static void pushCanvasWithFilter(EarthRenderer* earthRenderer);
 

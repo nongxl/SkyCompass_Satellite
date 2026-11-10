@@ -6,6 +6,7 @@
 #include "light_points_data.h"
 #include "sgp4_calc.h"
 #include "i18n.h"
+#include "santa_tracker.h"
 #include <math.h>
 
 #define DEG_TO_RAD 0.017453292519943295769236907684886
@@ -1475,10 +1476,26 @@ void EarthRenderer::render(double centerLat, double centerLon, double userLat, d
         drawSatellite(sat, centerLat, centerLon, userLat, userLon);
     }
 
+    // 绘制圣诞老人雪橇与礼物投递彩蛋
+    SantaTracker::drawOnGlobe(this, _canvas, centerLat, centerLon, userLat, userLon, !_observerConstrained, (_visualMode == 2));
+
     drawFocusSightLineAndShadow(centerLat, centerLon, userLat, userLon, satellites);
 
-    frames++;
     uint32_t now = millis();
+
+    // RADAR 复古绿磷雷达模式覆盖层 (扫描线、测距环与目标锁定框)
+    if (_visualMode == 2) {
+        float pitchRad = _cameraPitch * DEG_TO_RAD;
+        float rollRad = -_cameraRoll * DEG_TO_RAD;
+        float center_y_pitched = _cameraFocusR * sinf(pitchRad);
+        float center_rotatedX = -center_y_pitched * sinf(rollRad);
+        float center_rotatedY = center_y_pitched * cosf(rollRad);
+        int circleX = _centerX + _centerOffsetX + (int)center_rotatedX;
+        int circleY = _centerY + _centerOffsetY - (int)center_rotatedY;
+        SantaTracker::drawRadarOverlay(_canvas, circleX, circleY, _earthRadius, now);
+    }
+
+    frames++;
     if (now - lastTime >= 1000) {
         currentFPS = frames;
         frames = 0;

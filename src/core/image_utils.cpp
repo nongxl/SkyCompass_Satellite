@@ -61,12 +61,46 @@ void ImageUtils::applyNightVisionFilter(LGFX_Sprite* canvas) {
     }
 }
 
+void ImageUtils::applyRadarFilter(LGFX_Sprite* canvas) {
+    if (!canvas) return;
+    int w = canvas->width();
+    int h = canvas->height();
+    uint16_t* buf = (uint16_t*)canvas->getBuffer();
+    if (!buf) return;
+    
+    int totalPixels = w * h;
+    for (int i = 0; i < totalPixels; i++) {
+        uint16_t rawCol = buf[i];
+        // Byte swap from Big Endian (display format) to Little Endian (CPU format)
+        uint16_t pixel = (rawCol >> 8) | (rawCol << 8);
+        
+        // Extract RGB565 channels
+        uint16_t r = (pixel >> 11) & 0x1F;
+        uint16_t g = (pixel >> 5) & 0x3F;
+        uint16_t b = pixel & 0x1F;
+        
+        // Calculate average brightness
+        uint16_t gray = (r * 3 + (g >> 1) * 6 + b) / 10;
+        if (gray > 0x1F) gray = 0x1F;
+        
+        // Form new pixel (Green phosphor channel with faint blue ambiance)
+        uint16_t greenVal = (gray * 63) / 31;
+        uint16_t blueVal = (gray >> 2);
+        uint16_t new_pixel = (greenVal << 5) | blueVal;
+        
+        // Byte swap back to Big Endian
+        buf[i] = (new_pixel >> 8) | (new_pixel << 8);
+    }
+}
+
 void ImageUtils::pushCanvasWithFilter(EarthRenderer* earthRenderer) {
     if (!earthRenderer) return;
     LGFX_Sprite* canvas = earthRenderer->getCanvas();
     if (!canvas) return;
     if (earthRenderer->getVisualMode() == 1) {
         applyNightVisionFilter(canvas);
+    } else if (earthRenderer->getVisualMode() == 2) {
+        applyRadarFilter(canvas);
     }
     canvas->pushSprite(0, 0);
 }

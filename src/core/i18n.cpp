@@ -214,7 +214,16 @@ static const char* const t_en[TXT_MAX] = {
     "Antenna Dir",
     "Calib",
     "Rem",
-    "Passed"
+    "Passed",
+
+    // Operation Santa (Christmas Easter Egg)
+    "[NORTH POLE CONTROL]",
+    "Santa's flight preparation has begun. Stand by for tracking.",
+    "SANTA LAUNCHED! NORAD TRACKING NETWORK ACTIVE",
+    "DELIVERY CONFIRMED! MERRY CHRISTMAS!",
+    "MISSION COMPLETE · GLOBAL DELIVERY FINISHED",
+    "SNT-CLS (Santa's Sleigh)",
+    "A fictional aerospace object for the NORAD Tracks Santa tradition. Departs North Pole annually on Dec 24 with reindeer-powered sleigh."
 };
 
 // 中文文本资源表
@@ -425,7 +434,16 @@ static const char* const t_zh[TXT_MAX] = {
     "天线指引",
     "时间校准",
     "剩余",
-    "已过"
+    "已过",
+
+    // Operation Santa (Christmas Easter Egg)
+    "[北极控制中心]",
+    "圣诞老人飞行准备工作已正式启动，请待命追踪。",
+    "圣诞老人已起飞！NORAD 环球追踪网络已上线",
+    "礼物投递确认！圣诞快乐！",
+    "环球投递任务圆满完成 · 圣诞快乐",
+    "SNT-CLS (圣诞雪橇)",
+    "用于 NORAD 追踪圣诞老人传统的虚构航天目标。每年12月24日从北极出发，驾驶由驯鹿牵引的雪橇环球飞行投递礼物。"
 };
 
 // 日文文本资源表
@@ -636,7 +654,16 @@ static const char* const t_ja[TXT_MAX] = {
     "アンテナ向き",
     "時間校正",
     "残り",
-    "通過済"
+    "通過済",
+
+    // Operation Santa (Christmas Easter Egg)
+    "[北極管制センター]",
+    "サンタの飛行準備が正式に開始されました。追跡待機してください。",
+    "サンタが出発しました！NORAD 追跡ネットワーク稼働中",
+    "プレゼント配達完了！メリークリスマス！",
+    "全地球配達任務完了・メリークリスマス",
+    "SNT-CLS (サンタのソリ)",
+    "NORADのサンタ追跡伝統のための架空の特別航空目標。毎年12月24日に北極を出発し、トナカイ牽引のソリで世界中へ贈り物を届ける。"
 };
 
 // 西班牙文文本资源表 (Standard ASCII rendering)
@@ -843,7 +870,16 @@ static const char* const t_es[TXT_MAX] = {
     "Dir Antena",
     "Calib",
     "Rest",
-    "Pasado"
+    "Pasado",
+
+    // Operation Santa (Christmas Easter Egg)
+    "[CONTROL POLO NORTE]",
+    "Preparacion del vuelo de Santa iniciada. En espera de rastreo.",
+    "SANTA HA DESPEGADO! RED DE RASTREO NORAD ACTIVA",
+    "ENTREGA CONFIRMADA! FELIZ NAVIDAD!",
+    "MISION COMPLETA · ENTREGA GLOBAL FINALIZADA",
+    "SNT-CLS (Trineo de Santa)",
+    "Objeto aeroespacial ficticio para la tradicion NORAD Tracks Santa. Parte anualmente del Polo Norte el 24 de dic con su trineo tirado por renos."
 };
 
 const lgfx::IFont* I18N::getFont() {

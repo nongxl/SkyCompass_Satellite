@@ -152,6 +152,9 @@ public:
 
     LGFX_Sprite* getCanvas() { return _canvas; }
 
+    // Helper functions for orthographic projection (lat/lon to screen pixel)
+    bool projectOrthographic(double lat, double lon, double alt, double centerLat, double centerLon, int& outX, int& outY);
+
     static void renderSatelliteIcon(LGFX_Sprite* canvas, int x, int y, SatIconType iconType, uint16_t color, bool renderDark, float intensity = 1.0f);
 
 private:
@@ -219,9 +222,6 @@ private:
     bool _evaActive = false;
     float _evaProgress = 0.0f;
 
-    // Helper functions for orthographic projection
-    bool projectOrthographic(double lat, double lon, double alt, double centerLat, double centerLon, int& outX, int& outY);
-    
     void drawStars(double centerLat, double centerLon);
     void drawEarth(double centerLat, double centerLon, double userLat, double userLon);
     void drawContinents(double centerLat, double centerLon);
