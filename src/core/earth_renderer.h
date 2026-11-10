@@ -228,6 +228,7 @@ private:
     void drawLightPollution(double centerLat, double centerLon);
     void drawFocusSightLineAndShadow(double centerLat, double centerLon, double userLat, double userLon, const std::vector<SatRenderData>& satellites);
     void drawAuroras(double centerLat, double centerLon);
+    void drawPointNemo(double centerLat, double centerLon);
     void drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon);
     void drawSatelliteIcon(int x, int y, SatIconType iconType, uint16_t color, bool renderDark, float intensity = 1.0f);
 };

@@ -536,6 +536,9 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
     // Draw polar auroras for both modes to increase polar visibility (both Normal [0] and Red [1])
     drawAuroras(centerLat, centerLon);
     
+    // Draw Point Nemo (Spacecraft Cemetery & Mir Wreckage Easter Egg)
+    drawPointNemo(centerLat, centerLon);
+    
     // Draw user location as a map pin 📍
     int ux, uy;
     if (_drawDecorations && userLat <= 90.0 && projectOrthographic(userLat, userLon, 0, centerLat, centerLon, ux, uy)) {
@@ -1170,18 +1173,16 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
             _canvas->drawPixel(sx - 4 + (sPhase & 1), sy - 2 + (sPhase >> 1), TFT_ORANGE);
             _canvas->drawPixel(sx - 6, sy + ((sPhase & 2) ? 1 : -1), _display->color565(255, 130, 0));
 
-            // 南太平洋航天器公墓 (尼莫点 Point Nemo: 48.87°S, 123.39°W) 水波涟漪
+            // 南太平洋航天器公墓 (尼莫点 Point Nemo: 48.87°S, 123.39°W) 再入等离子体激波与冲击波环
             if (sat.isSelected) {
                 int pnx, pny;
-                if (projectOrthographic(-48.87, -123.39, 0.0, centerLat, centerLon, pnx, pny)) {
-                    uint32_t nemoT = millis() % 2400;
-                    int r1 = 2 + (int)(nemoT * 0.007f);
-                    int r2 = (r1 > 8) ? (r1 - 8) : 0;
-                    _canvas->drawCircle(pnx, pny, r1, _display->color565(0, 160, 230));
-                    if (r2 > 0) _canvas->drawCircle(pnx, pny, r2, _display->color565(0, 80, 150));
-                    _canvas->drawPixel(pnx, pny, TFT_CYAN);
-                    _canvas->setTextColor(_display->color565(0, 210, 255));
-                    _canvas->drawString("Point Nemo", pnx + 6, pny - 4);
+                if (projectOrthographic(-48.8767, -123.3933, 0.0, centerLat, centerLon, pnx, pny)) {
+                    uint32_t shockT = millis() % 1600;
+                    int sr = 3 + (int)(shockT * 0.012f);
+                    _canvas->drawCircle(pnx, pny, sr, _display->color565(255, 120, 20));
+                    _canvas->drawCircle(pnx, pny, sr + 1, _display->color565(180, 50, 10));
+                    _canvas->setTextColor(_display->color565(255, 100, 50));
+                    _canvas->drawString("[IMPACT ZONE]", pnx + 7, pny + 9);
                 }
             }
         } else {
@@ -1787,4 +1788,75 @@ void EarthRenderer::drawAuroras(double centerLat, double centerLon) {
             }
         }
     }
+}
+
+void EarthRenderer::drawPointNemo(double centerLat, double centerLon) {
+    // 尼莫点精确地理坐标 (Point Nemo): 48°52.6′S, 123°23.6′W (大洋不可接近之极，世界航天器坟场)
+    const double NEMO_LAT = -48.8767;
+    const double NEMO_LON = -123.3933;
+
+    int pnx, pny;
+    if (!projectOrthographic(NEMO_LAT, NEMO_LON, 0.0, centerLat, centerLon, pnx, pny)) {
+        return; // 位于地平线以下或地球背面
+    }
+
+    if (pnx < -25 || pnx > _canvas->width() + 25 || pny < -25 || pny > _canvas->height() + 25) {
+        return;
+    }
+
+    uint32_t t = millis();
+
+    // 1. 海洋水波涟漪动画 (两道同心深海涌波，带相位差)
+    uint32_t phase1 = t % 2600;
+    float prog1 = (float)phase1 / 2600.0f;
+    int r1 = 3 + (int)(prog1 * 10.0f); // 3px ~ 13px
+    uint8_t a1 = (uint8_t)(140.0f * (1.0f - prog1));
+    if (a1 > 12) {
+        uint8_t waveG = (uint8_t)(a1 * 0.7f);
+        _canvas->drawCircle(pnx, pny, r1, _display->color565(0, waveG, a1));
+    }
+
+    uint32_t phase2 = (t + 1300) % 2600;
+    float prog2 = (float)phase2 / 2600.0f;
+    int r2 = 3 + (int)(prog2 * 10.0f);
+    uint8_t a2 = (uint8_t)(140.0f * (1.0f - prog2));
+    if (a2 > 12) {
+        uint8_t waveG = (uint8_t)(a2 * 0.55f);
+        _canvas->drawCircle(pnx, pny, r2, _display->color565(0, waveG, (uint8_t)(a2 * 0.85f)));
+    }
+
+    // 2. “和平号空间站 (Mir)”残骸水下沉浮轮廓 (Wreckage Silhouette)
+    // 2001年3月23日受控再入沉睡于南太平洋的庞然大物 (DOS-7多舱段十字交叉桁架构型)
+    uint16_t colCore = _display->color565(45, 125, 155);       // 核心舱基底色
+    uint16_t colModule = _display->color565(35, 95, 125);      // 实验舱段色
+    uint16_t colSolar = _display->color565(25, 75, 105);       // 太阳能帆板骨架
+    uint16_t colHighlight = _display->color565(90, 190, 220);  // 金属高光/对接球
+
+    // (1) 核心舱主轴体 (Base Block & Kvant-1, 斜向延伸)
+    _canvas->drawLine(pnx - 3, pny - 1, pnx + 3, pny + 1, colCore);
+    _canvas->drawPixel(pnx - 4, pny - 2, colHighlight); // 前向六向对接球节点 (Node)
+
+    // (2) 侧向实验舱 (Kvant-2 / Kristall 交叉对接舱段)
+    _canvas->drawLine(pnx - 1, pny - 3, pnx + 1, pny + 3, colModule);
+    _canvas->drawPixel(pnx - 2, pny - 4, colModule);
+    _canvas->drawPixel(pnx + 2, pny + 4, colModule);
+
+    // (3) 残留折断的太阳能帆板桁架 (Broken Solar Arrays)
+    // 一侧帆板向左上方折断残存
+    _canvas->drawPixel(pnx - 3, pny - 5, colSolar);
+    _canvas->drawPixel(pnx - 4, pny - 5, colSolar);
+    // 另一侧帆板右下方残存
+    _canvas->drawPixel(pnx + 3, pny + 2, colSolar);
+    _canvas->drawPixel(pnx + 4, pny + 3, colSolar);
+
+    // (4) 深海水下光影焦散 (Caustic Reflection) 呼吸反光
+    float glint = (sinf((float)t * 0.0028f) + 1.0f) * 0.5f;
+    uint8_t gVal = (uint8_t)(70 + 130 * glint);
+    _canvas->drawPixel(pnx, pny, _display->color565(0, gVal, (uint8_t)(gVal * 0.95f)));
+
+    // 3. 永久地标小字标注 (深海微光青色，含 Point Nemo 与 MIR 2001 残骸标识)
+    _canvas->setTextColor(_display->color565(35, 140, 180));
+    _canvas->drawString("Point Nemo", pnx + 7, pny - 5);
+    _canvas->setTextColor(_display->color565(20, 85, 115));
+    _canvas->drawString("MIR 2001", pnx + 7, pny + 2);
 }
