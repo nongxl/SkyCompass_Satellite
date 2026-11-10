@@ -5596,6 +5596,11 @@ void loop() {
                     if (propagateSatFast(*s.calc, g_satCaches[i].prop, continuousSimTime, cosGmst, sinGmst, forceExact, geo)) {
                         g_satCaches[i].lastGeo = geo;
                         g_satCaches[i].lastGeoValid = true;
+                    } else if (s.opsStatus == 'D' && g_satCaches[i].lastGeoValid) {
+                        // 处于再入/脱轨状态的航天器：即使超出最后轨道时刻，依然保持其最终坠落海面位置（高度归零），
+                        // 以便在海面上持续呈现溅落涟漪与安全离轨动效，避免直接蒸发消失
+                        g_satCaches[i].lastGeo.alt = 0.0;
+                        g_satCaches[i].lastGeoValid = true;
                     } else {
                         g_satCaches[i].lastGeoValid = false;
                     }
@@ -5615,7 +5620,7 @@ void loop() {
                     if (s.hasRadio && el >= 0.0f) {
                         isRadioPassing = true;
                     }
-                    if (s.type == SAT_TYPE_GEO_TV) {
+                    if (s.type == SAT_TYPE_GEO_TV || s.opsStatus == 'D') {
                         isVisible = true;
                     } else if (isSatViewMode) {
                         isVisible = !g_satCaches[i].lastInShadow;
@@ -5712,8 +5717,8 @@ void loop() {
         if (isEvaEligible) {
             if (s_evaAnimStart != 0) {
                 uint32_t elapsed = nowEvaMs - s_evaAnimStart;
-                if (elapsed < 11000) {
-                    float evaProgress = (float)elapsed / 11000.0f;
+                if (elapsed < 26000) {
+                    float evaProgress = (float)elapsed / 26000.0f;
                     earth_renderer->setEvaState(true, evaProgress);
                 } else {
                     s_evaAnimStart = 0;

@@ -78,14 +78,16 @@ bool SGP4Calc::getTEMEFast(double unix_ts, double& x, double& y, double& z, doub
     double ro[3];
     double vo[3];
     bool success = sgp4(wgs72, sat.satrec, tsince, ro, vo);
-    if (success && sat.satrec.error == 0) {
-        x = ro[0];
-        y = ro[1];
-        z = ro[2];
-        vx = vo[0];
-        vy = vo[1];
-        vz = vo[2];
-        return true;
+    if ((success && sat.satrec.error == 0) || sat.satrec.error == 6) {
+        if (!std::isnan(ro[0]) && !std::isnan(ro[1]) && !std::isnan(ro[2])) {
+            x = ro[0];
+            y = ro[1];
+            z = ro[2];
+            vx = vo[0];
+            vy = vo[1];
+            vz = vo[2];
+            return true;
+        }
     }
     return false;
 }
@@ -112,14 +114,16 @@ bool SGP4Calc::getTEME(double unix_ts, double& x, double& y, double& z, double& 
     
     bool success = sgp4(wgs72, temp_satrec, tsince, ro, vo);
     
-    if (success && temp_satrec.error == 0) {
-        x = ro[0];
-        y = ro[1];
-        z = ro[2];
-        vx = vo[0];
-        vy = vo[1];
-        vz = vo[2];
-        return true;
+    if ((success && temp_satrec.error == 0) || temp_satrec.error == 6) {
+        if (!std::isnan(ro[0]) && !std::isnan(ro[1]) && !std::isnan(ro[2])) {
+            x = ro[0];
+            y = ro[1];
+            z = ro[2];
+            vx = vo[0];
+            vy = vo[1];
+            vz = vo[2];
+            return true;
+        }
     }
     return false;
 }

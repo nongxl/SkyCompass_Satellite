@@ -1068,18 +1068,21 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
         }
     }
 
-    // Draw Fading Motion Trail for the selected satellite (zero-allocation fixed ring buffer, zero SGP4 calls)
+    // Draw Fading Motion Trail for the selected satellite (Photon Streamline / Motion Ribbon)
     if (sat.isSelected) {
-        static const int MAX_TRAIL_STEPS = 5;
+        static const int MAX_TRAIL_STEPS = 6;
         struct TrailSample {
             float lat;
             float lon;
             float alt;
             double simT;
+            int screenX;
+            int screenY;
         };
         static TrailSample s_trail[MAX_TRAIL_STEPS];
         static int s_trailCount = 0;
         static uint32_t s_lastNameHash = 0;
+        static uint32_t s_lastMoveMs = 0;
 
         uint32_t h = 2166136261u;
         if (sat.name) {
@@ -1090,57 +1093,80 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
         }
 
         double curT = (sat.continuousSimTime > 0.0) ? sat.continuousSimTime : (double)sat.simTime;
-        if (h != s_lastNameHash) {
+        if (h != s_lastNameHash || (s_trailCount > 0 && fabs(curT - s_trail[0].simT) > 14400.0)) {
             s_trailCount = 0;
             s_lastNameHash = h;
-        } else if (s_trailCount > 0 && fabs(curT - s_trail[0].simT) > 14400.0) {
-            s_trailCount = 0;
+            s_lastMoveMs = 0;
         }
 
         float curLat = (float)sat.currentPos.lat;
         float curLon = (float)sat.currentPos.lon;
         float curAlt = (float)sat.currentPos.alt;
 
-        bool pushNew = (s_trailCount == 0);
-        if (!pushNew) {
-            float dLat = curLat - s_trail[0].lat;
-            float dLon = curLon - s_trail[0].lon;
-            if (dLon > 180.0f) dLon -= 360.0f;
-            else if (dLon < -180.0f) dLon += 360.0f;
-            // 当空间角位移超过约 0.45° 时推入新残影点，兼顾慢速观赏与时间机器高速滑行
-            if (dLat * dLat + dLon * dLon >= 0.20f) {
-                pushNew = true;
-            }
-        }
+        int curSx = -1, curSy = -1;
+        bool curOnScreen = projectOrthographic(curLat, curLon, curAlt, centerLat, centerLon, curSx, curSy);
 
-        if (pushNew) {
-            int limit = (s_trailCount < MAX_TRAIL_STEPS) ? s_trailCount : (MAX_TRAIL_STEPS - 1);
-            for (int k = limit; k > 0; k--) {
-                s_trail[k] = s_trail[k - 1];
-            }
-            s_trail[0] = {curLat, curLon, curAlt, curT};
-            if (s_trailCount < MAX_TRAIL_STEPS) s_trailCount++;
-        }
-
-        for (int i = 1; i < s_trailCount; i++) {
-            int tx_screen, ty_screen;
-            if (projectOrthographic(s_trail[i].lat, s_trail[i].lon, s_trail[i].alt, centerLat, centerLon, tx_screen, ty_screen)) {
-                bool shadow = isSatelliteInShadow(s_trail[i].lat, s_trail[i].lon, s_trail[i].alt, _subsolarLat, _subsolarLon, _hasSunData);
-                float fadeFactor = (1.0f - (float)i / (float)MAX_TRAIL_STEPS) * 0.65f;
-                uint16_t trailCol = shadow ? _display->color565(60, 60, 70) : sat.color;
-                if (sat.opsStatus == 'D') {
-                    // 再入等离子体电离羽流 (前段橙黄炽热，后段暗红渐隐)
-                    if (i <= 3) {
-                        trailCol = TFT_ORANGE;
-                    } else if (i <= 7) {
-                        trailCol = TFT_RED;
-                    } else {
-                        trailCol = _display->color565(120, 120, 130);
-                    }
-                } else {
-                    trailCol = scaleColor(trailCol, fadeFactor);
+        if (curOnScreen) {
+            bool hasMoved = false;
+            if (s_trailCount == 0) {
+                hasMoved = true;
+            } else {
+                int dx = curSx - s_trail[0].screenX;
+                int dy = curSy - s_trail[0].screenY;
+                // 当屏幕位移 >= 2px 时记录新航迹点
+                if (dx * dx + dy * dy >= 4) {
+                    hasMoved = true;
                 }
-                drawSatelliteIcon(tx_screen, ty_screen, sat.iconType, trailCol, shadow, fadeFactor);
+            }
+
+            uint32_t nowMs = millis();
+            if (hasMoved) {
+                int limit = (s_trailCount < MAX_TRAIL_STEPS) ? s_trailCount : (MAX_TRAIL_STEPS - 1);
+                for (int k = limit; k > 0; k--) {
+                    s_trail[k] = s_trail[k - 1];
+                }
+                s_trail[0] = {curLat, curLon, curAlt, curT, curSx, curSy};
+                if (s_trailCount < MAX_TRAIL_STEPS) s_trailCount++;
+                s_lastMoveMs = nowMs;
+            }
+
+            // 若卫星停止位移超过 350ms，拖影迅速收拢清空，彻底杜绝静止残留
+            if (nowMs - s_lastMoveMs > 350 && s_trailCount > 0) {
+                s_trailCount--;
+            }
+
+            // 绘制平滑流光轨迹线条（线宽由近及远平滑变细融入夜空，决不重复画深黑矩形图标分身）
+            if (s_trailCount >= 2 && (nowMs - s_lastMoveMs <= 800)) {
+                int p1x = curSx, p1y = curSy;
+                for (int i = 0; i < s_trailCount; i++) {
+                    int p2x, p2y;
+                    if (projectOrthographic(s_trail[i].lat, s_trail[i].lon, s_trail[i].alt, centerLat, centerLon, p2x, p2y)) {
+                        int segDistSq = (p2x - p1x) * (p2x - p1x) + (p2y - p1y) * (p2y - p1y);
+                        // 避免跨地球投影背面的破线
+                        if (segDistSq < 2000 && segDistSq >= 1) {
+                            float alpha = 1.0f - (float)i / (float)s_trailCount;
+                            uint16_t lineCol;
+                            if (sat.opsStatus == 'D') {
+                                // 再入等离子体流光尾迹 (橙红火光渐隐)
+                                lineCol = (i <= 1) ? TFT_YELLOW : ((i <= 3) ? TFT_ORANGE : _display->color565(190, 45, 15));
+                            } else {
+                                // 正常航天器流光线条
+                                uint8_t r = (uint8_t)(((sat.color >> 11) & 0x1F) * 8 * alpha);
+                                uint8_t g = (uint8_t)(((sat.color >> 5) & 0x3F) * 4 * alpha);
+                                uint8_t b = (uint8_t)((sat.color & 0x1F) * 8 * alpha);
+                                if (r < 25 && g < 25 && b < 25) {
+                                    r = 25; g = 35; b = 50; // 平滑融入暗夜深海底色
+                                }
+                                lineCol = _display->color565(r, g, b);
+                            }
+                            _canvas->drawLine(p1x, p1y, p2x, p2y, lineCol);
+                            if (i == 0) {
+                                _canvas->drawLine(p1x, p1y + 1, p2x, p2y + 1, lineCol);
+                            }
+                        }
+                        p1x = p2x; p1y = p2y;
+                    }
+                }
             }
         }
     }
@@ -1161,28 +1187,60 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
         
         // 1. 空间碎片再入大气层烧毁动效 (若航天器处于脱轨坠毁状态 opsStatus == 'D'，如 Swift)
         if (sat.opsStatus == 'D') {
-            // 头部白炽等离子体激波火球
-            _canvas->fillCircle(sx, sy, 2, TFT_YELLOW);
-            _canvas->drawCircle(sx, sy, 3, TFT_ORANGE);
-            _canvas->drawCircle(sx, sy, 4, TFT_RED);
-            _canvas->drawPixel(sx, sy, TFT_WHITE);
-
-            // 脱落气化碎片微粒
             uint32_t t = millis();
-            int sPhase = (t / 80) % 4;
-            _canvas->drawPixel(sx - 4 + (sPhase & 1), sy - 2 + (sPhase >> 1), TFT_ORANGE);
-            _canvas->drawPixel(sx - 6, sy + ((sPhase & 2) ? 1 : -1), _display->color565(255, 130, 0));
+            bool hasReachedGround = (sat.currentPos.alt <= 18.0);
 
-            // 南太平洋航天器公墓 (尼莫点 Point Nemo: 48.87°S, 123.39°W) 再入等离子体激波与冲击波环
+            if (!hasReachedGround) {
+                // (1) 高空等离子体激波火球与气化微粒
+                _canvas->fillCircle(sx, sy, 2, TFT_YELLOW);
+                _canvas->drawCircle(sx, sy, 3, TFT_ORANGE);
+                _canvas->drawCircle(sx, sy, 4, TFT_RED);
+                _canvas->drawPixel(sx, sy, TFT_WHITE);
+
+                int sPhase = (t / 80) % 4;
+                _canvas->drawPixel(sx - 4 + (sPhase & 1), sy - 2 + (sPhase >> 1), TFT_ORANGE);
+                _canvas->drawPixel(sx - 6, sy + ((sPhase & 2) ? 1 : -1), _display->color565(255, 130, 0));
+            } else {
+                // (2) 航天器坠入海面时刻：激发声波水波光环与急冷水花 (Splashdown in Point Nemo Ocean)
+                uint32_t splashT = t % 2200;
+                float spProg1 = (float)splashT / 2200.0f;
+                int sr1 = 2 + (int)(spProg1 * 18.0f); // 2px ~ 20px
+                uint8_t a1 = (uint8_t)(255 * (1.0f - spProg1));
+                if (a1 > 10) {
+                    _canvas->drawCircle(sx, sy, sr1, _display->color565(0, (uint8_t)(a1 * 0.85f), a1));
+                    _canvas->drawCircle(sx, sy, sr1 + 1, _display->color565((uint8_t)(a1 * 0.4f), a1, 255));
+                }
+
+                uint32_t splashT2 = (t + 1100) % 2200;
+                float spProg2 = (float)splashT2 / 2200.0f;
+                int sr2 = 2 + (int)(spProg2 * 18.0f);
+                uint8_t a2 = (uint8_t)(255 * (1.0f - spProg2));
+                if (a2 > 10) {
+                    _canvas->drawCircle(sx, sy, sr2, _display->color565(0, (uint8_t)(a2 * 0.6f), (uint8_t)(a2 * 0.9f)));
+                }
+
+                // 核心坠落残骸光点与水汽白光
+                _canvas->fillCircle(sx, sy, 2, _display->color565(120, 240, 255));
+                _canvas->drawPixel(sx, sy, TFT_WHITE);
+                int steamPhase = (t / 90) % 4;
+                _canvas->drawPixel(sx - 2 + steamPhase, sy - 3, _display->color565(200, 230, 255));
+                _canvas->drawPixel(sx + 2 - steamPhase, sy - 2, _display->color565(180, 220, 255));
+            }
+
+            // 南太平洋航天器公墓 (尼莫点 Point Nemo) 再入等离子体激波与冲击波环
             if (sat.isSelected) {
                 int pnx, pny;
                 if (projectOrthographic(-48.8767, -123.3933, 0.0, centerLat, centerLon, pnx, pny)) {
-                    uint32_t shockT = millis() % 1600;
+                    uint32_t shockT = t % 1600;
                     int sr = 3 + (int)(shockT * 0.012f);
                     _canvas->drawCircle(pnx, pny, sr, _display->color565(255, 120, 20));
                     _canvas->drawCircle(pnx, pny, sr + 1, _display->color565(180, 50, 10));
-                    _canvas->setTextColor(_display->color565(255, 100, 50));
-                    _canvas->drawString("[IMPACT ZONE]", pnx + 7, pny + 9);
+                    _canvas->setTextColor(_display->color565(0, 230, 255));
+                    if (hasReachedGround) {
+                        _canvas->drawString("[POINT NEMO · DECAY COMPLETE]", pnx + 7, pny + 9);
+                    } else {
+                        _canvas->drawString("[ATMOSPHERE RE-ENTRY]", pnx + 7, pny + 9);
+                    }
                 }
             }
         } else {
@@ -1190,62 +1248,100 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
         }
 
         // 2. 空间站专属太空行走 (EVA Spacewalk) 彩蛋动效
+        // 透视放大：宇航员向视线近景漂浮，尺寸放大至 3.5 倍以上并展现头盔面罩探照灯、胸前 DCM 面板、生命背包与招手细节
         if (_evaActive && sat.isSelected && sat.iconType == ICON_STATION) {
             float p = _evaProgress;
-            int tetherDist = 0;
+            float zoomProg = 0.0f;
+            float distRatio = 0.0f;
             int waveY = 0;
-            bool waveArmUp = false;
 
-            if (p < 0.22f) {
-                // 阶段 1：气闸舱开启，安全系绳延伸，宇航员出舱
-                tetherDist = (int)((p / 0.22f) * 14.0f);
+            if (p < 0.25f) {
+                // 阶段 1：气闸舱开启，安全系绳延伸，宇航员向屏幕近景漂移 (约 6.5s)
+                distRatio = p / 0.25f;
+                zoomProg = distRatio;
             } else if (p < 0.75f) {
-                // 阶段 2：在轨太空行走并向屏幕招手打招呼
-                tetherDist = 14;
-                waveY = (int)(sinf((float)millis() * 0.004f) * 1.5f);
-                waveArmUp = ((millis() / 350) % 2 == 1);
+                // 阶段 2：在轨近景特写漫步，微重力浮动，向屏幕用户招手互动 (约 13s)
+                distRatio = 1.0f;
+                zoomProg = 1.0f;
+                waveY = (int)(sinf((float)millis() * 0.0035f) * 2.0f);
             } else {
-                // 阶段 3：系绳回收，宇航员入舱
-                tetherDist = (int)((1.0f - (p - 0.75f) / 0.25f) * 14.0f);
+                // 阶段 3：宇航员顺着安全系绳拉回舱口，透视缩小回舱 (约 6.5s)
+                distRatio = 1.0f - (p - 0.75f) / 0.25f;
+                zoomProg = distRatio;
             }
 
-            int ax_eva = sx + 4 + tetherDist;
-            int ay_eva = sy + 1 - (int)(tetherDist * 0.3f) + waveY;
+            // 屏幕坐标：宇航员漂浮到空间站右下方近景
+            int ax_eva = sx + (int)(distRatio * 26.0f);
+            int ay_eva = sy + 4 + (int)(distRatio * 10.0f) + waveY;
 
-            // 气闸舱门 (高亮舱口)
-            _canvas->fillRect(sx + 3, sy, 2, 2, _display->color565(140, 150, 170));
-            _canvas->drawPixel(sx + 3, sy, _display->color565(220, 240, 255));
+            // 空间站气闸舱门 (高亮舱口)
+            _canvas->fillRect(sx + 3, sy - 1, 3, 3, _display->color565(160, 170, 190));
+            _canvas->drawPixel(sx + 4, sy, _display->color565(240, 250, 255));
 
-            // 金黄色安全系绳 (Tether)
-            if (tetherDist > 1) {
-                int midX = (sx + 4 + ax_eva) / 2;
-                int midY = sy + 3;
-                _canvas->drawLine(sx + 4, sy + 1, midX, midY, _display->color565(255, 215, 0));
-                _canvas->drawLine(midX, midY, ax_eva - 1, ay_eva + 1, _display->color565(255, 215, 0));
+            // 金黄色悬链线安全系绳 (Gold Safety Tether)
+            if (distRatio > 0.05f) {
+                int midX = (sx + 4 + ax_eva) / 2 + 2;
+                int midY = (sy + ay_eva) / 2 + 5; // 失重微弱悬链自然垂弯
+                _canvas->drawLine(sx + 4, sy, midX, midY, _display->color565(210, 175, 10));
+                _canvas->drawLine(midX, midY, ax_eva - 4, ay_eva + 1, _display->color565(255, 225, 40));
+                _canvas->drawLine(midX, midY + 1, ax_eva - 4, ay_eva + 2, _display->color565(255, 205, 30));
             }
 
-            // 白色舱外宇航服宇航员 (EMU Spacesuit)
-            if (tetherDist > 2) {
-                _canvas->fillRect(ax_eva, ay_eva, 2, 3, TFT_WHITE);       // 宇航服躯干
-                _canvas->fillRect(ax_eva, ay_eva - 2, 2, 2, TFT_WHITE);   // 头盔
-                _canvas->drawPixel(ax_eva + 1, ay_eva - 2, _display->color565(255, 205, 50)); // 金色面罩反光
-                _canvas->drawFastVLine(ax_eva - 1, ay_eva - 1, 3, _display->color565(170, 175, 185)); // 生命保障背包
+            // 宇航员近景精细特写 (当完全出舱时，呈现高细节白色 EMU 宇航服)
+            if (distRatio > 0.15f) {
+                // (1) PLSS 生命保障背包 (位于宇航员左后侧)
+                _canvas->fillRect(ax_eva - 6, ay_eva - 4, 3, 8, _display->color565(160, 165, 175));
+                _canvas->drawFastVLine(ax_eva - 7, ay_eva - 3, 6, _display->color565(110, 115, 125));
+                _canvas->drawPixel(ax_eva - 6, ay_eva + 4, _display->color565(255, 130, 20)); // SAFER 辅助喷嘴微光
 
-                // 招手手臂 (阶段 2 招手)
-                if (p >= 0.22f && p < 0.75f) {
-                    if (waveArmUp) {
-                        _canvas->drawPixel(ax_eva + 2, ay_eva - 2, TFT_WHITE);
-                        _canvas->drawPixel(ax_eva + 3, ay_eva - 3, TFT_WHITE);
+                // (2) 宇航服主躯干 (Hard Upper Torso, 洁白加压防护层)
+                _canvas->fillRect(ax_eva - 3, ay_eva - 2, 7, 7, TFT_WHITE);
+                _canvas->drawFastHLine(ax_eva - 3, ay_eva + 4, 7, _display->color565(190, 195, 205)); // 腰部接环阴影
+
+                // (3) 胸前 DCM 生命维持显示控制板 (带状态指示灯)
+                _canvas->fillRect(ax_eva - 1, ay_eva - 1, 3, 3, _display->color565(70, 85, 100));
+                _canvas->drawPixel(ax_eva - 1, ay_eva, _display->color565(255, 60, 60));  // 红色氧气状态灯
+                _canvas->drawPixel(ax_eva + 1, ay_eva, _display->color565(40, 220, 255)); // 青色通信指示灯
+
+                // (4) 航天头盔 (纯白圆弧罩 + 镀金面罩 + 双侧探照灯)
+                _canvas->fillCircle(ax_eva, ay_eva - 6, 3, TFT_WHITE);
+                _canvas->fillRect(ax_eva - 2, ay_eva - 7, 5, 3, _display->color565(255, 210, 30)); // 纯金镀膜遮阳面罩
+                _canvas->drawPixel(ax_eva - 1, ay_eva - 7, _display->color565(255, 255, 210));     // 面罩高光反光
+                _canvas->drawPixel(ax_eva - 3, ay_eva - 8, _display->color565(240, 250, 255));     // 左侧头盔 LED 探照灯
+                _canvas->drawPixel(ax_eva + 3, ay_eva - 8, _display->color565(240, 250, 255));     // 右侧头盔 LED 探照灯
+
+                // (5) 左臂 (微重力自然把持)
+                _canvas->drawLine(ax_eva - 3, ay_eva, ax_eva - 5, ay_eva + 2, TFT_WHITE);
+                _canvas->drawPixel(ax_eva - 6, ay_eva + 3, _display->color565(200, 205, 215)); // 灰色加压手套
+
+                // (6) 右臂与招手动画 (在阶段 2 中向屏幕用户招手挥动)
+                if (p >= 0.25f && p < 0.75f) {
+                    int waveFrame = (millis() / 250) % 4; // 0, 1, 2, 3
+                    if (waveFrame == 0) {
+                        _canvas->drawLine(ax_eva + 3, ay_eva, ax_eva + 6, ay_eva - 4, TFT_WHITE);
+                        _canvas->drawPixel(ax_eva + 7, ay_eva - 5, _display->color565(255, 255, 255));
+                    } else if (waveFrame == 1 || waveFrame == 3) {
+                        _canvas->drawLine(ax_eva + 3, ay_eva, ax_eva + 5, ay_eva - 6, TFT_WHITE);
+                        _canvas->drawPixel(ax_eva + 5, ay_eva - 7, _display->color565(255, 255, 255));
                     } else {
-                        _canvas->drawPixel(ax_eva + 2, ay_eva - 1, TFT_WHITE);
-                        _canvas->drawPixel(ax_eva + 3, ay_eva, TFT_WHITE);
+                        _canvas->drawLine(ax_eva + 3, ay_eva, ax_eva + 7, ay_eva - 2, TFT_WHITE);
+                        _canvas->drawPixel(ax_eva + 8, ay_eva - 2, _display->color565(255, 255, 255));
                     }
+                } else {
+                    _canvas->drawLine(ax_eva + 3, ay_eva, ax_eva + 5, ay_eva + 2, TFT_WHITE);
+                    _canvas->drawPixel(ax_eva + 6, ay_eva + 3, _display->color565(200, 205, 215));
                 }
+
+                // (7) 加压双腿 (失重微屈状态)
+                _canvas->drawLine(ax_eva - 2, ay_eva + 5, ax_eva - 3, ay_eva + 9, TFT_WHITE);
+                _canvas->drawPixel(ax_eva - 4, ay_eva + 9, _display->color565(170, 175, 185)); // 左靴
+                _canvas->drawLine(ax_eva + 2, ay_eva + 5, ax_eva + 3, ay_eva + 8, TFT_WHITE);
+                _canvas->drawPixel(ax_eva + 4, ay_eva + 8, _display->color565(170, 175, 185)); // 右靴
             }
 
             // HUD 提示文字
             _canvas->setTextColor(_display->color565(0, 230, 255));
-            _canvas->drawString("EVA IN PROGRESS", sx - 22, sy + 8);
+            _canvas->drawString("EVA IN PROGRESS · ASTRONAUT SPACEWALK", sx - 40, sy + 18);
         }
 
         // 若无线电正在过境发射，叠加动态射频数据发射图标（即使未光学可见亦可发射）
