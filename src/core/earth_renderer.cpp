@@ -1228,22 +1228,7 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
                 _canvas->drawPixel(sx + 2 - steamPhase, sy - 2, _display->color565(180, 220, 255));
             }
 
-            // 南太平洋航天器公墓 (尼莫点 Point Nemo) 再入等离子体激波与冲击波环
-            if (sat.isSelected) {
-                int pnx, pny;
-                if (projectOrthographic(-48.8767, -123.3933, 0.0, centerLat, centerLon, pnx, pny)) {
-                    uint32_t shockT = t % 1600;
-                    int sr = 3 + (int)(shockT * 0.012f);
-                    _canvas->drawCircle(pnx, pny, sr, _display->color565(255, 120, 20));
-                    _canvas->drawCircle(pnx, pny, sr + 1, _display->color565(180, 50, 10));
-                    _canvas->setTextColor(_display->color565(0, 230, 255));
-                    if (hasReachedGround) {
-                        _canvas->drawString("[POINT NEMO · DECAY COMPLETE]", pnx + 7, pny + 9);
-                    } else {
-                        _canvas->drawString("[ATMOSPHERE RE-ENTRY]", pnx + 7, pny + 9);
-                    }
-                }
-            }
+
         } else {
             drawSatelliteIcon(sx, sy, sat.iconType, drawColor, renderDark, intensity);
         }
@@ -1913,63 +1898,119 @@ void EarthRenderer::drawPointNemo(double centerLat, double centerLon) {
         return; // 位于地平线以下或地球背面
     }
 
-    if (pnx < -25 || pnx > _canvas->width() + 25 || pny < -25 || pny > _canvas->height() + 25) {
+    int gcx = _centerX + _centerOffsetX;
+    int gcy = _centerY + _centerOffsetY;
+    float rGlobe = (float)_earthRadius;
+
+    float dx = (float)(pnx - gcx);
+    float dy = (float)(pny - gcy);
+    float dSq = dx * dx + dy * dy;
+    float d = sqrtf(dSq);
+
+    // 严格限制在地球圆盘内部，边缘 2px 内视为视线掠射边界隐退，杜绝悬浮到太空
+    if (d >= rGlobe - 2.0f) {
         return;
+    }
+
+    // 正射投影下球面法向与视线余弦 nz
+    float nz = sqrtf(1.0f - (d / rGlobe) * (d / rGlobe));
+    if (nz < 0.15f) {
+        return; // 极端掠射角自动消隐
     }
 
     uint32_t t = millis();
 
-    // 1. 海洋水波涟漪动画 (高对比度清澈青蓝双波，带平滑扩散与透明度淡出)
-    uint32_t phase1 = t % 2200;
-    float prog1 = (float)phase1 / 2200.0f;
-    int r1 = 3 + (int)(prog1 * 14.0f); // 3px ~ 17px
-    uint8_t a1 = (uint8_t)(255.0f * (1.0f - prog1));
-    if (a1 > 15) {
-        _canvas->drawCircle(pnx, pny, r1, _display->color565(0, (uint8_t)(a1 * 0.9f), a1));
+    // 1. 微弱、静谧的深海微澜水波 (根据视线法线方向压扁为符合球面曲率的椭圆，严格贴合地表，绝不飞入空中)
+    uint32_t phase = t % 3200;
+    float prog = (float)phase / 3200.0f;
+    float r = 1.0f + prog * 4.0f; // 微型微澜 1px ~ 5px
+    float alpha = (1.0f - prog) * nz; // 随扩散及掠射角优雅淡出
+
+    if (alpha > 0.08f) {
+        float urx = (d > 0.1f) ? (dx / d) : 1.0f;
+        float ury = (d > 0.1f) ? (dy / d) : 0.0f;
+        float utx = -ury;
+        float uty = urx;
+
+        uint8_t cG = (uint8_t)(95.0f * alpha);
+        uint8_t cB = (uint8_t)(140.0f * alpha);
+        uint16_t waveColor = _display->color565((uint8_t)(cG * 0.25f), cG, cB);
+
+        // 沿球面切线与法向绘制正射透视压缩椭圆 (短轴 = r * nz, 长轴 = r)
+        for (int deg = 0; deg < 360; deg += 36) {
+            float rad = deg * DEG_TO_RAD;
+            float c = cosf(rad);
+            float s = sinf(rad);
+            int wx = pnx + (int)roundf(r * c * utx + (r * nz) * s * urx);
+            int wy = pny + (int)roundf(r * c * uty + (r * nz) * s * ury);
+            float wdx = (float)(wx - gcx);
+            float wdy = (float)(wy - gcy);
+            if (wdx * wdx + wdy * wdy < (rGlobe - 1.0f) * (rGlobe - 1.0f)) {
+                _canvas->drawPixel(wx, wy, waveColor);
+            }
+        }
     }
 
-    uint32_t phase2 = (t + 1100) % 2200;
-    float prog2 = (float)phase2 / 2200.0f;
-    int r2 = 3 + (int)(prog2 * 14.0f);
-    uint8_t a2 = (uint8_t)(255.0f * (1.0f - prog2));
-    if (a2 > 15) {
-        _canvas->drawCircle(pnx, pny, r2, _display->color565((uint8_t)(a2 * 0.3f), a2, 255));
+    // 安全像素绘制 Lambda：严格限制在地球圆盘内部，防止残骸溢出到太空中
+    auto drawSafePixel = [&](int px, int py, uint16_t col) {
+        float pdx = (float)(px - gcx);
+        float pdy = (float)(py - gcy);
+        if (pdx * pdx + pdy * pdy < (rGlobe - 1.0f) * (rGlobe - 1.0f)) {
+            _canvas->drawPixel(px, py, col);
+        }
+    };
+
+    // 2. “和平号空间站 (Mir)”水下幽静残骸轮廓 (小巧微缩像素艺术，降低视觉喧宾夺主)
+    uint16_t colCore = _display->color565((uint8_t)(30 * nz), (uint8_t)(160 * nz), (uint8_t)(200 * nz));
+    uint16_t colModule = _display->color565((uint8_t)(50 * nz), (uint8_t)(140 * nz), (uint8_t)(180 * nz));
+    uint16_t colSolar = _display->color565((uint8_t)(180 * nz), (uint8_t)(150 * nz), (uint8_t)(30 * nz));
+
+    // (1) 核心舱主轴
+    drawSafePixel(pnx - 2, pny - 1, colCore);
+    drawSafePixel(pnx - 1, pny - 1, colCore);
+    drawSafePixel(pnx, pny, TFT_WHITE); // 中心节点
+    drawSafePixel(pnx + 1, pny + 1, colCore);
+    drawSafePixel(pnx + 2, pny + 1, colCore);
+
+    // (2) 侧向实验舱
+    drawSafePixel(pnx - 1, pny + 1, colModule);
+    drawSafePixel(pnx + 1, pny - 1, colModule);
+
+    // (3) 金黄色折断太阳翼残片
+    drawSafePixel(pnx - 2, pny - 2, colSolar);
+    drawSafePixel(pnx + 2, pny + 2, colSolar);
+
+    // (4) 深海水下微光呼吸反光
+    float glint = (sinf((float)t * 0.003f) + 1.0f) * 0.5f;
+    if (glint > 0.7f && nz > 0.3f) {
+        drawSafePixel(pnx, pny, _display->color565(180, 240, 255));
     }
 
-    // 2. “和平号空间站 (Mir)”残骸水下沉浮轮廓 (清晰高对比度像素艺术)
-    // 2001年3月23日受控再入沉睡于南太平洋的庞然大物 (DOS-7多舱段十字交叉桁架 + 金黄色太阳翼)
-    uint16_t colCore = _display->color565(0, 220, 255);        // 核心舱钛青高光
-    uint16_t colModule = _display->color565(120, 230, 255);    // 实验舱段亮青色
-    uint16_t colSolar = _display->color565(255, 215, 0);       // 太阳能帆板纯金色
-    uint16_t colHighlight = TFT_WHITE;                         // 金属高光/对接球
+    // 3. 地表贴合文字标注 (仅当尼莫点面向观察者、且文字整体完全落在地球表面内部时绘制)
+    if (nz >= 0.40f && d <= rGlobe - 16.0f) {
+        const char* txt = "Pt. Nemo";
+        int tw = _canvas->textWidth(txt);
+        int th = 8;
 
-    // (1) 核心舱主轴体 (Base Block & Kvant-1, 长轴斜贯穿)
-    _canvas->drawLine(pnx - 4, pny - 2, pnx + 4, pny + 2, TFT_WHITE);
-    _canvas->drawLine(pnx - 4, pny - 1, pnx + 4, pny + 3, colCore);
-    _canvas->drawPixel(pnx - 5, pny - 3, colHighlight); // 前向六向多功能对接节点 (Node)
+        // 文字向地心方向内部贴靠，绝不向外悬空延伸
+        int tx = (dx > 0.0f) ? (pnx - tw - 3) : (pnx + 4);
+        int ty = (dy > 0.0f) ? (pny - th - 1) : (pny + 2);
 
-    // (2) 侧向实验舱 (Kvant-2 / Kristall / Spektr 交叉十字对接舱段)
-    _canvas->drawLine(pnx - 2, pny - 4, pnx + 2, pny + 4, colModule);
-    _canvas->drawPixel(pnx - 3, pny - 5, colHighlight);
-    _canvas->drawPixel(pnx + 3, pny + 5, colHighlight);
+        // 验证文字矩形 4 个顶点是否均安全落在地球表面圆盘内
+        auto isInsideGlobe = [&](int x, int y) -> bool {
+            float fx = (float)(x - gcx);
+            float fy = (float)(y - gcy);
+            return (fx * fx + fy * fy) < (rGlobe - 2.0f) * (rGlobe - 2.0f);
+        };
 
-    // (3) 残留折断的太阳能帆板桁架 (Broken Gold Solar Arrays)
-    // 上翼：纯金黄色帆板残片
-    _canvas->drawLine(pnx - 4, pny - 6, pnx - 1, pny - 6, colSolar);
-    _canvas->drawPixel(pnx - 5, pny - 7, colSolar);
-    // 下翼：折角残存金黄帆板
-    _canvas->drawLine(pnx + 1, pny + 3, pnx + 5, pny + 4, colSolar);
-    _canvas->drawPixel(pnx + 6, pny + 5, colSolar);
-
-    // (4) 深海水下阳光折射与金属呼吸反光 (Caustic Reflection)
-    float glint = (sinf((float)t * 0.0035f) + 1.0f) * 0.5f;
-    uint8_t gVal = (uint8_t)(140 + 115 * glint);
-    _canvas->drawPixel(pnx, pny, _display->color565(gVal, 255, 255));
-    _canvas->drawPixel(pnx + 1, pny + 1, _display->color565(255, 255, gVal));
-
-    // 3. 永久地标醒目标注 (高对比度青色与纯金黄色，即使小屏幕也清晰可见)
-    _canvas->setTextColor(_display->color565(0, 255, 255));
-    _canvas->drawString("Point Nemo", pnx + 9, pny - 5);
-    _canvas->setTextColor(_display->color565(255, 215, 0));
-    _canvas->drawString("MIR 1986-2001", pnx + 9, pny + 3);
+        if (isInsideGlobe(tx, ty) &&
+            isInsideGlobe(tx + tw, ty) &&
+            isInsideGlobe(tx, ty + th) &&
+            isInsideGlobe(tx + tw, ty + th)) {
+            // 文字明度温和，柔和贴在深蓝海洋表面
+            uint8_t tVal = (uint8_t)(150 * nz);
+            _canvas->setTextColor(_display->color565((uint8_t)(tVal * 0.4f), tVal, (uint8_t)(tVal * 1.1f)));
+            _canvas->drawString(txt, tx, ty);
+        }
+    }
 }
