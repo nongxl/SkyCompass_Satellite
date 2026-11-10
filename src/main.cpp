@@ -5060,6 +5060,26 @@ void loop() {
                     fCalc = g_satellites[focusSatIndex].calc;
                     unlockSatMutex();
                     if (fCalc && propagateSatFast(*fCalc, g_satCaches[focusSatIndex].prop, continuousSimTime, cosGmst, sinGmst, true, focalGeo)) {
+                        if (g_satellites[focusSatIndex].opsStatus == 'D') {
+                            const double T_START = 1793852640.0;
+                            const double T_IMPACT = 1793852760.0;
+                            if (continuousSimTime >= T_START) {
+                                float progress = (float)((continuousSimTime - T_START) / (T_IMPACT - T_START));
+                                if (progress > 1.0f) progress = 1.0f;
+                                const double NEMO_LAT = -48.8767;
+                                const double NEMO_LON = -123.3933;
+                                double dLon = NEMO_LON - focalGeo.lon;
+                                while (dLon > 180.0) dLon -= 360.0;
+                                while (dLon < -180.0) dLon += 360.0;
+                                focalGeo.lat = focalGeo.lat * (1.0 - progress) + NEMO_LAT * progress;
+                                focalGeo.lon = focalGeo.lon + dLon * progress;
+                            }
+                        }
+                        g_satCaches[focusSatIndex].lastGeo = focalGeo;
+                        g_satCaches[focusSatIndex].lastGeoValid = true;
+                        hasFocalPos = true;
+                    } else if (g_satellites[focusSatIndex].opsStatus == 'D') {
+                        focalGeo = {-48.8767, -123.3933, 0.0};
                         g_satCaches[focusSatIndex].lastGeo = focalGeo;
                         g_satCaches[focusSatIndex].lastGeoValid = true;
                         hasFocalPos = true;
@@ -5594,12 +5614,37 @@ void loop() {
                     bool forceExact = isFocusedThisSat || ((slot & 3) == (s_mainPropShard & 3));
                     GeodeticCoord geo;
                     if (propagateSatFast(*s.calc, g_satCaches[i].prop, continuousSimTime, cosGmst, sinGmst, forceExact, geo)) {
+                        if (s.opsStatus == 'D') {
+                            // 受控再入航天器（如 Swift）：模拟在 11-05 12:24 ~ 12:26 期间受控脱轨变轨与俯冲坠落
+                            // 1793852640 = 2026-11-05 12:24:00 (北京时间)
+                            // 1793852760 = 2026-11-05 12:26:00 (北京时间再入撞击时刻)
+                            const double T_START = 1793852640.0;
+                            const double T_IMPACT = 1793852760.0;
+                            if (continuousSimTime >= T_START) {
+                                float progress = (float)((continuousSimTime - T_START) / (T_IMPACT - T_START));
+                                if (progress > 1.0f) progress = 1.0f;
+                                // 高度从 ~150km 快速俯冲至 0km
+                                geo.alt = 150.0 * (1.0 - (double)(progress * progress));
+                                if (geo.alt < 0.0) geo.alt = 0.0;
+                                // 经纬度顺畅引导至南太平洋尼莫点 (-48.8767, -123.3933)
+                                const double NEMO_LAT = -48.8767;
+                                const double NEMO_LON = -123.3933;
+                                double dLon = NEMO_LON - geo.lon;
+                                while (dLon > 180.0) dLon -= 360.0;
+                                while (dLon < -180.0) dLon += 360.0;
+                                geo.lat = geo.lat * (1.0 - progress) + NEMO_LAT * progress;
+                                geo.lon = geo.lon + dLon * progress;
+                                while (geo.lon > 180.0) geo.lon -= 360.0;
+                                while (geo.lon < -180.0) geo.lon += 360.0;
+                            }
+                        }
                         g_satCaches[i].lastGeo = geo;
                         g_satCaches[i].lastGeoValid = true;
-                    } else if (s.opsStatus == 'D' && g_satCaches[i].lastGeoValid) {
-                        // 处于再入/脱轨状态的航天器：即使超出最后轨道时刻，依然保持其最终坠落海面位置（高度归零），
-                        // 以便在海面上持续呈现溅落涟漪与安全离轨动效，避免直接蒸发消失
+                    } else if (s.opsStatus == 'D') {
+                        // SGP4 轨道在 12:26 以后终止，航天器已完成受控再入，永久安息在南太平洋尼莫点海面
                         g_satCaches[i].lastGeo.alt = 0.0;
+                        g_satCaches[i].lastGeo.lat = -48.8767;
+                        g_satCaches[i].lastGeo.lon = -123.3933;
                         g_satCaches[i].lastGeoValid = true;
                     } else {
                         g_satCaches[i].lastGeoValid = false;
