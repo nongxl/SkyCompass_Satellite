@@ -4,6 +4,7 @@
 #include "../core/encyclopedia.h"
 #include "../core/position_manager.h"
 #include "../core/earth_renderer.h"
+#include "../core/space_audio.h"
 
 extern PositionManager* pos_manager;
 extern double baseUserLat;
@@ -236,8 +237,23 @@ static const char* getCompass8Dir(float az) {
 
 void RfConsoleView::handleKeys(bool justSemi, bool justDot, bool justEnter, bool justD, bool justEsc, 
                                 bool justT, bool justComma, bool justSlash, bool justZero, bool justY, bool justN,
-                                int32_t& timeOffset, bool justBracketL, bool justBracketR) {
+                                int32_t& timeOffset, bool justBracketL, bool justBracketR, bool justB) {
+    if (justB) {
+        if (SpaceAudio::isPlaying()) {
+            SpaceAudio::stop();
+        } else {
+            RadioManager& rm = RadioManager::getInstance();
+            const RadioTrackingInfo& track = rm.getTrackingInfo();
+            uint32_t norad = track.satNorad;
+            String name = track.satName;
+            SatIconType icon = track.satIconType;
+            SpaceAudio::playBeacon(norad, name, icon);
+        }
+        return;
+    }
+
     if (justEsc) {
+        SpaceAudio::stop();
         if (_showDeleteModal) {
             _showDeleteModal = false;
         } else if (_showDetailModal) {

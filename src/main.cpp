@@ -74,6 +74,7 @@ SatSelectView sat_select_view;
 RecommendationView recommendation_view;
 #include "ui/sat_focus_drawer.h"
 #include "core/text_utils.h"
+#include "core/space_audio.h"
 
 #include "core/mono_icons.h"
 
@@ -2400,6 +2401,7 @@ void setup() {
     cfg.internal_spk = false; // 禁用内部扬声器功放与 I2S 音频任务，消除音频芯片静态功耗
     cfg.internal_mic = false; // 禁用麦克风电路
     M5Cardputer.begin(cfg, true);
+    SpaceAudio::begin();
     I18N::begin();
     M5Cardputer.Display.setBrightness(currentBrightness);
     
@@ -3070,6 +3072,7 @@ void updateRadioTrackingPipeline(uint32_t currentSimTime, int32_t tmOffset) {
 }
 
 void loop() {
+    SpaceAudio::update();
     if (HardwareConfig::getInstance().isEnabled(HW_MOD_UNIT_8SERVOS)) {
         gimbal.tick();
     }
@@ -3491,6 +3494,7 @@ void loop() {
         static bool lastCtrl = false;
         static bool lastT = false;
         static bool lastP = false;
+        static bool lastB = false;
 
         bool currSemi = M5Cardputer.Keyboard.isKeyPressed(';');
         bool currDot = M5Cardputer.Keyboard.isKeyPressed('.');
@@ -3523,6 +3527,7 @@ void loop() {
         bool currCtrl = M5Cardputer.Keyboard.isKeyPressed(KEY_LEFT_CTRL) || M5Cardputer.Keyboard.keysState().ctrl;
         bool currT = M5Cardputer.Keyboard.isKeyPressed('t') || M5Cardputer.Keyboard.isKeyPressed('T');
         bool currP = M5Cardputer.Keyboard.isKeyPressed('p') || M5Cardputer.Keyboard.isKeyPressed('P');
+        bool currB = M5Cardputer.Keyboard.isKeyPressed('b') || M5Cardputer.Keyboard.isKeyPressed('B');
 
         static bool s_bootKeyFlushed = false;
         if (!s_bootKeyFlushed) {
@@ -3532,12 +3537,12 @@ void loop() {
             lastC = currC; lastR = currR; lastW = currW; lastS = currS;
             lastH = currH; lastG = currG; lastY = currY; lastN = currN;
             lastD = currD; lastF = currF; lastA = currA; lastTab = currTab; lastShift = currShift; lastL = currL;
-            lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl; lastP = currP;
+            lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl; lastP = currP; lastB = currB;
             s_bootKeyFlushed = true;
             currSemi = currDot = currComma = currSlash = currO = currV = false;
             currEnter = currBack = currEsc = currTick = currBracketL = currBracketR = false;
             currC = currR = currW = currS = currH = currG = currY = currN = currD = currF = currA = false;
-            currTab = currShift = currL = currSpace = currM = currCtrl = currP = false;
+            currTab = currShift = currL = currSpace = currM = currCtrl = currP = currB = false;
         }
 
         bool justSemi = currSemi && !lastSemi;
@@ -3604,7 +3609,8 @@ void loop() {
         bool justCtrl = currCtrl && !lastCtrl;
         bool justT = currT && !lastT;
         bool justP = currP && !lastP;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justLongW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl || justT || justP;
+        bool justB = currB && !lastB;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justLongW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl || justT || justP || justB;
 
         // RF Console 全屏终端模式 (仅在主界面下按 Ctrl 开启，退出统一按 Esc 键)
         if (justCtrl && appState == STATE_MAIN && !RfConsoleView::getInstance().isActive()) {
@@ -3617,7 +3623,7 @@ void loop() {
                 earth_renderer->setVisualMode(nextMode);
             }
             bool justZero = (M5Cardputer.Keyboard.keysState().word.size() > 0 && M5Cardputer.Keyboard.keysState().word[0] == '0');
-            RfConsoleView::getInstance().handleKeys(justSemi, justDot, justEnter, justD, (justEsc || justTick), justT, justComma, justSlash, (justZero || justR), justY, justN, timeMachineOffset, justBracketL, justBracketR);
+            RfConsoleView::getInstance().handleKeys(justSemi, justDot, justEnter, justD, (justEsc || justTick), justT, justComma, justSlash, (justZero || justR), justY, justN, timeMachineOffset, justBracketL, justBracketR, justB);
             if (!RfConsoleView::getInstance().isActive()) {
                 // 用户按 Esc 退出了 RF 控制台，立即复位 Canvas 全局状态，防止污染主界面文字排版
                 auto c = earth_renderer->getCanvas();
@@ -3657,7 +3663,7 @@ void loop() {
                 lastC = currC; lastR = currR; lastW = currW; lastS = currS;
                 lastH = currH; lastG = currG; lastY = currY; lastN = currN;
                 lastD = currD; lastF = currF; lastA = currA; lastTab = currTab; lastShift = currShift;
-                lastL = currL; lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl; lastT = currT;
+                lastL = currL; lastSpace = currSpace; lastM = currM; lastCtrl = currCtrl; lastT = currT; lastB = currB;
                 return;
             }
         }
@@ -4464,7 +4470,29 @@ void loop() {
                         c = (c + 1) % 3;
                         g_categoryFocusIndex = r * 3 + c;
                     }
+                } else if (justB) {
+                    if (SpaceAudio::isPlaying()) {
+                        SpaceAudio::stop();
+                    } else if (currentSatTab == TAB_ENCYCLOPEDIA) {
+                        lockSatMutex();
+                        int fCount = (int)g_encyclopediaFilteredIndices.size();
+                        if (satSelectedIndex >= 0 && satSelectedIndex < fCount) {
+                            int realIdx = g_encyclopediaFilteredIndices[satSelectedIndex];
+                            if (realIdx >= 0 && realIdx < NUM_SATELLITES) {
+                                uint32_t norad = g_satellites[realIdx].noradId;
+                                String name = g_satellites[realIdx].name;
+                                SatIconType icon = g_satellites[realIdx].iconType;
+                                unlockSatMutex();
+                                SpaceAudio::playBeacon(norad, name, icon);
+                            } else {
+                                unlockSatMutex();
+                            }
+                        } else {
+                            unlockSatMutex();
+                        }
+                    }
                 } else if (justF && currentSatTab == TAB_ENCYCLOPEDIA) {
+                    SpaceAudio::stop();
                     g_showCategoryFilterDialog = true;
                     g_tempCategoryMask = g_selectedCategoryMask;
                     g_categoryFocusIndex = 0;
@@ -4797,6 +4825,7 @@ void loop() {
                     } else {
                         int realIdx = (satSelectedIndex >= 0 && satSelectedIndex < filteredCount) ? g_encyclopediaFilteredIndices[satSelectedIndex] : -1;
                         if (justBack || justEsc || justTick) {
+                            SpaceAudio::stop();
                             g_selectedCategoryMask = 0;
                             g_showCategoryFilterDialog = false;
                             sat_select_view.releasePreviewCalc();
@@ -4855,11 +4884,14 @@ void loop() {
                                 }
                             }
                         } else if (justD && realIdx >= NUM_BUILTIN_SATELLITES && realIdx < NUM_SATELLITES) {
+                            SpaceAudio::stop();
                             deleteConfirmIndex = realIdx;
                         } else if (justSemi) {
+                            SpaceAudio::stop();
                             if (satSelectedIndex > 0) satSelectedIndex--;
                             else satSelectedIndex = totalItems - 1;
                         } else if (justDot) {
+                            SpaceAudio::stop();
                             satSelectedIndex = (satSelectedIndex + 1) % totalItems;
                         } else if (justBracketL) {
                             g_descManualScrolled = true;
@@ -4949,6 +4981,7 @@ void loop() {
         lastM = currM;
         lastCtrl = currCtrl;
         lastT = currT;
+        lastB = currB;
         
         if (appState == STATE_WIFI_SETUP) {
             wifi_setup_view.draw(earth_renderer->getCanvas());
@@ -5493,6 +5526,7 @@ void loop() {
             uint32_t noradId;
             double geoSlotLon;
             bool hasRadio;
+            char opsStatus;
         };
         ActiveSatSnap activeSnaps[MAX_TOTAL_SELECTED_SATS + 8];
         int activeSatCount = 0;
@@ -5523,6 +5557,7 @@ void loop() {
                 const char* dlStr = g_satellites[i].downlinkFreq.c_str();
                 bool validDl = (dlStr && dlStr[0] != '\0' && atof(dlStr) > 0.0);
                 s.hasRadio = validDl || (s.type == SAT_TYPE_HAM) || (s.type == SAT_TYPE_WEATHER) || (s.noradId == 25544);
+                s.opsStatus = g_satellites[i].opsStatus;
             }
         }
         unlockSatMutex();
@@ -5612,6 +5647,7 @@ void loop() {
                 data.isVisible = g_satCaches[i].isVisible;
                 data.isRadioTransmitting = g_satCaches[i].isRadioPassing;
                 data.isSelected = (isSatViewMode && (focusSatIndex == i));
+                data.opsStatus = s.opsStatus;
                 if (data.isSelected && s.calc) {
                     focusCalcKeepAlive = s.calc;
                     data.calc = focusCalcKeepAlive.get();
@@ -5654,6 +5690,54 @@ void loop() {
         earth_renderer->setObserverConstrained(!isSatViewMode);
         earth_renderer->setFastForwarding(isFastForwarding);
         earth_renderer->setUnixTime(continuousSimTime);
+        // =======================================================================
+        // 空间站专属太空行走 (EVA Spacewalk) 自动检测与时序状态机
+        // 条件：视角锁定 (Sat View) + 焦点为空间站 + 放大倍率 >= 1.6 + 未操作时间机器
+        // 持续 8 秒后自动触发宇航员出舱，历时约 11 秒，冷却 45 秒
+        // =======================================================================
+        bool isEvaEligible = false;
+        if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && !g_recentLaunchFocusMode) {
+            if (g_satellites[focusSatIndex].iconType == ICON_STATION) {
+                if (currentZoom >= 1.6f && timeMachineOffset == 0 && lastTimeAdjustMillis == 0) {
+                    isEvaEligible = true;
+                }
+            }
+        }
+
+        static uint32_t s_evaEligibleStart = 0;
+        static uint32_t s_evaAnimStart = 0;
+        static uint32_t s_evaLastEnd = 0;
+        uint32_t nowEvaMs = millis();
+
+        if (isEvaEligible) {
+            if (s_evaAnimStart != 0) {
+                uint32_t elapsed = nowEvaMs - s_evaAnimStart;
+                if (elapsed < 11000) {
+                    float evaProgress = (float)elapsed / 11000.0f;
+                    earth_renderer->setEvaState(true, evaProgress);
+                } else {
+                    s_evaAnimStart = 0;
+                    s_evaEligibleStart = 0;
+                    s_evaLastEnd = nowEvaMs;
+                    earth_renderer->setEvaState(false, 0.0f);
+                }
+            } else {
+                earth_renderer->setEvaState(false, 0.0f);
+                if (s_evaLastEnd == 0 || (nowEvaMs - s_evaLastEnd > 45000)) {
+                    if (s_evaEligibleStart == 0) {
+                        s_evaEligibleStart = nowEvaMs;
+                    } else if (nowEvaMs - s_evaEligibleStart >= 8000) {
+                        s_evaAnimStart = nowEvaMs;
+                        earth_renderer->setEvaState(true, 0.0f);
+                    }
+                }
+            }
+        } else {
+            s_evaEligibleStart = 0;
+            s_evaAnimStart = 0;
+            earth_renderer->setEvaState(false, 0.0f);
+        }
+
         earth_renderer->render(viewLat, viewLon, renderUserLat, baseUserLon, sats);
         
         // Ensure canvas font and datum matches default state for HUD rendering

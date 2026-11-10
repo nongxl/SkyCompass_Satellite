@@ -10,6 +10,7 @@
 #include "core/spring_animator.h"
 #include <LittleFS.h>
 #include "core/orbit_utils.h"
+#include "core/space_audio.h"
 
 extern volatile bool isDownloadingCustom;
 extern int getTotalSelectedSatelliteCount();
@@ -1675,6 +1676,15 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
         } else if (currentSatTab == TAB_ENCYCLOPEDIA) {
             msg = downloadErrorMsg;
             textColor = getBannerTextColor(downloadErrorMsg);
+            if (msg.length() == 0) {
+                if (SpaceAudio::isPlaying()) {
+                    msg = (I18N::getLanguage() == LANG_ZH) ? "[B] 正在试听太空信标 · 按任意键停止" : "[B] Playing Beacon · Press key to stop";
+                    textColor = TFT_GREEN;
+                } else {
+                    msg = (I18N::getLanguage() == LANG_ZH) ? "[B] 试听太空信标  [O] 卫星清单  [W] 联网" : "[B] Listen Beacon  [O] List  [W] WiFi";
+                    textColor = TFT_CYAN;
+                }
+            }
         }
         
         if (msg.length() > 0) {

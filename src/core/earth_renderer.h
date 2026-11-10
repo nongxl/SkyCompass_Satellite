@@ -86,6 +86,9 @@ struct SatRenderData {
 
     // Radio pass transmitting status (downlink active while in pass)
     bool isRadioTransmitting = false;
+
+    // Operational status ('+' active, 'D' decayed/re-entering, etc.)
+    char opsStatus = '+';
 };
 
 class EarthRenderer {
@@ -113,6 +116,13 @@ public:
     void setDrawDecorations(bool draw) { _drawDecorations = draw; }
 
     void setGnssSearching(bool searching) { _gnssSearching = searching; }
+
+    // Space Station EVA (Spacewalk Easter Egg)
+    void setEvaState(bool active, float progress) {
+        _evaActive = active;
+        _evaProgress = progress;
+    }
+    bool isEvaActive() const { return _evaActive; }
 
     void setVisualMode(int mode) { _visualMode = mode; }
     int getVisualMode() const { return _visualMode; }
@@ -206,6 +216,8 @@ private:
     int _visualMode = 0; // 0: Normal (With Aurora), 1: Red Night (With Aurora)
     bool _drawDecorations = true;
     bool _gnssSearching = false;
+    bool _evaActive = false;
+    float _evaProgress = 0.0f;
 
     // Helper functions for orthographic projection
     bool projectOrthographic(double lat, double lon, double alt, double centerLat, double centerLon, int& outX, int& outY);
