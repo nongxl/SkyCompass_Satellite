@@ -475,12 +475,12 @@ void SantaTracker::drawOnGlobe(EarthRenderer* renderer, LGFX_Sprite* canvas,
         // 戴白手套向上挥动招手
         canvas->drawPixel(sx + dir * 3, sy - 4, TFT_WHITE);
 
-        // (5) 目标标识文字 (置于雪橇正上方，清晰整洁不遮挡画面)
-        canvas->setTextDatum(top_center);
+        // (5) 目标标识文字：单行精简标注，根据飞行方向与屏幕位置智能侧向避让，绝不遮挡雪橇本体与驯鹿红鼻子
+        int textX = (dir > 0) ? (sx - 12) : (sx + 12);
+        int textY = (sy < 40) ? (sy + 10) : (sy - 15);
+        canvas->setTextDatum((dir > 0) ? top_right : top_left);
         canvas->setTextColor(canvas->color565(255, 80, 80));
-        canvas->drawString("SNT-CLS", sx, sy - 17);
-        canvas->setTextColor(canvas->color565(255, 215, 0));
-        canvas->drawString("★ RUDOLPH", sx, sy - 9);
+        canvas->drawString("SNT-CLS", textX, textY);
     }
 
     // 3. 礼物投递伞降动画与地表永久留存 (用户未重启前礼物永久留存地表)
