@@ -433,7 +433,7 @@ void RecommendationView::draw(LGFX_Sprite* canvas) {
                     canvas->setTextColor(TFT_CYAN);
                     canvas->drawString(I18N::get(TXT_PASS_REASON), panelX + 5, 82);
                     String reason = "";
-                    if (p.isRadioPass || satType == SAT_TYPE_HAM) {
+                    if (p.isRadioPass) {
                         reason = I18N::get(TXT_PASS_REASON_RADIO);
                         if (p.maxElevation >= 60) reason += I18N::get(TXT_PASS_REASON_HIGH_EL);
                         else if (p.maxElevation >= 30) reason += I18N::get(TXT_PASS_REASON_GOOD_EL);

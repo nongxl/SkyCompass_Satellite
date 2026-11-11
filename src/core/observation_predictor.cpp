@@ -357,19 +357,13 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                     }
                     currentPass.epoch = parseTleEpoch(tle.line1);
 
-                    if (isRadioTarget && currentPass.maxElevation >= 15.0f) {
-                        // 业余无线电卫星通联过境：全天候（昼夜皆可），以天线仰角与通联窗口时长为核心依据
-                        currentPass.isRadioPass = true;
-                        currentPass.eventType = 8;
-                        currentPass.eventTitle = "Radio Pass";
-                        float durSec = (float)(currentPass.losTime - currentPass.aosTime);
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "Radio window (El: %.0f°, %.1f min)", currentPass.maxElevation, durSec / 60.0f);
-                        currentPass.eventDesc = buf;
-                        
-                        currentPass.baseScore = calculateRadioScore(currentPass.maxElevation, durSec);
-                        currentPass.score = currentPass.baseScore;
-                    } else if (currentPass.isVisible && currentPass.visibleDuration > 30 && currentPass.maxBrightness <= 8.5) {
+                    // 1. 优先判定肉眼光学目视过境 (Visual Observation Pass)
+                    // 当满足暗夜可见 (isVisible)、窗口 > 30s 且星等在肉眼极限内 (<= 6.5 等) 时，
+                    // 无论是否搭载无线电载荷，对地面观测者而言均属于稀缺且震撼的光学肉眼过境！
+                    bool isVisualObservation = (currentPass.isVisible && currentPass.visibleDuration > 30 && currentPass.maxBrightness <= 6.5f);
+
+                    if (isVisualObservation) {
+                        currentPass.isRadioPass = false;
                         MoonCalculator moonCalc(_pm);
                         MoonPositionData moonPos = moonCalc.calculatePosition(currentPass.maxElevTime, _userLat, _userLon);
                         
@@ -386,13 +380,13 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                             theta_deg = acos(cos_theta_val) * RAD_TO_DEG;
                         }
 
-                        // 2. Identify single satellite events
+                        // 2. 识别单星关键事件类型 (BRIGHT_PASS / ZENITH_PASS / RECENT_LAUNCH / MOON_PASS / LONG_PASS)
                         uint8_t evType = 0;
                         int evBonus = 0;
                         String evTitle = "";
                         String evDesc = "";
                         
-                        // Check RECENT_LAUNCH
+                        // Check RECENT_LAUNCH (新发射 14 天以内)
                         int launchYear = parseTleLaunchYear(tle.line1);
                         int currentYear = getYearFromUnix(startTime);
                         
@@ -403,7 +397,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                             evTitle = "Recent Launch";
                             evDesc = "Newly launched satellite (Age: " + String(ageDays) + " days)";
                         }
-                        // Check MOON_PASS
+                        // Check MOON_PASS (掠月)
                         else if (moonPos.altitude > 0.0 && theta_deg <= 3.0) {
                             evType = 6;
                             evBonus = 2;
@@ -412,17 +406,8 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                             evTitle = "Moon Pass";
                             evDesc = buf;
                         }
-                        // Check ZENITH_PASS
-                        else if (currentPass.maxElevation >= 70.0) {
-                            evType = 1;
-                            evBonus = 1; // Optimized: reduce to +1
-                            char buf[64];
-                            snprintf(buf, sizeof(buf), "Passes nearly directly overhead (Max El: %.1f°)", currentPass.maxElevation);
-                            evTitle = "Zenith Pass";
-                            evDesc = buf;
-                        }
-                        // Check BRIGHT_PASS
-                        else if (currentPass.maxBrightness <= 1.5) { // Optimized: tighten to <= 1.5
+                        // Check BRIGHT_PASS (极亮星等 <= 0.0，如 ISS / Tiangong，优先归类为亮星过境)
+                        else if (currentPass.maxBrightness <= 0.0) {
                             evType = 3;
                             evBonus = 2;
                             char buf[64];
@@ -430,7 +415,25 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                             evTitle = "Bright Pass";
                             evDesc = buf;
                         }
-                        // Check LONG_PASS
+                        // Check ZENITH_PASS (大仰角天顶过境)
+                        else if (currentPass.maxElevation >= 70.0) {
+                            evType = 1;
+                            evBonus = 1;
+                            char buf[64];
+                            snprintf(buf, sizeof(buf), "Passes nearly directly overhead (Max El: %.1f°)", currentPass.maxElevation);
+                            evTitle = "Zenith Pass";
+                            evDesc = buf;
+                        }
+                        // Check BRIGHT_PASS (常规亮星过境 <= 1.5)
+                        else if (currentPass.maxBrightness <= 1.5) {
+                            evType = 3;
+                            evBonus = 2;
+                            char buf[64];
+                            snprintf(buf, sizeof(buf), "Exceptionally bright in the sky (Mag: %.1f)", currentPass.maxBrightness);
+                            evTitle = "Bright Pass";
+                            evDesc = buf;
+                        }
+                        // Check LONG_PASS (长窗口可见过境)
                         else if (currentPass.visibleDuration >= 300.0) {
                             evType = 2;
                             evBonus = 1;
@@ -448,6 +451,11 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                         currentPass.baseScore = calculateScore(currentPass.maxElevation, currentPass.visibleDuration, currentPass.maxBrightness);
                         currentPass.score = currentPass.baseScore + evBonus;
                         
+                        // 若该目视目标同时也具备业余无线电通联能力，给予复合价值加成
+                        if (isRadioTarget && currentPass.maxElevation >= 30.0f) {
+                            currentPass.score += 1;
+                        }
+                        
                         // Apply brightness capping to suppress dim satellites to high ratings
                         if (currentPass.maxBrightness > 4.0) {
                             if (currentPass.score > 2) currentPass.score = 2;
@@ -459,6 +467,18 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                         
                         if (currentPass.score > 5) currentPass.score = 5;
                         if (currentPass.score < 1) currentPass.score = 1;
+                    } else if (isRadioTarget && currentPass.maxElevation >= 15.0f) {
+                        // 2. 纯业余无线电通联过境：白天或夜间地影中无光学可见性，全天候按天线仰角与窗口时长推荐
+                        currentPass.isRadioPass = true;
+                        currentPass.eventType = 8;
+                        currentPass.eventTitle = "Radio Pass";
+                        float durSec = (float)(currentPass.losTime - currentPass.aosTime);
+                        char buf[64];
+                        snprintf(buf, sizeof(buf), "Radio window (El: %.0f°, %.1f min)", currentPass.maxElevation, durSec / 60.0f);
+                        currentPass.eventDesc = buf;
+                        
+                        currentPass.baseScore = calculateRadioScore(currentPass.maxElevation, durSec);
+                        currentPass.score = currentPass.baseScore;
                     } else {
                         // Pass in daytime or Earth shadow (e.g. Hubble)
                         currentPass.score = 1;
