@@ -19,6 +19,8 @@ float SantaTracker::s_deliveredUserLon = 999.0f;
 uint32_t SantaTracker::s_deliveryAnimStartMs = 0;
 bool SantaTracker::s_isDelivering = false;
 bool SantaTracker::s_deliveryArmed = true;
+bool SantaTracker::s_hasDeliveredPresent = false;
+bool SantaTracker::s_showDeliveryBanner = false;
 int16_t SantaTracker::s_prepRadioYear = 0;
 int SantaTracker::s_rudolphScreenX = -100;
 int SantaTracker::s_rudolphScreenY = -100;
@@ -122,6 +124,8 @@ void SantaTracker::update(double continuousSimTime, double userLat, double userL
                     s_deliveredUserLon = (float)userLon;
                     s_deliveryAnimStartMs = millis();
                     s_isDelivering = true;
+                    s_hasDeliveredPresent = true;
+                    s_showDeliveryBanner = true;
                 }
             } else if (dist > 1200.0) {
                 // 飞离 1200km 之外，重新准备好下一次飞经触发，便于测试
@@ -248,6 +252,8 @@ void SantaTracker::getCurrentCoord(float& outLat, float& outLon) {
     outLon = (float)s_telemetry.lon;
 }
 bool SantaTracker::isDeliveringGift() { return s_isDelivering; }
+bool SantaTracker::isDeliveryBannerActive() { return s_showDeliveryBanner; }
+void SantaTracker::dismissDeliveryBanner() { s_showDeliveryBanner = false; }
 float SantaTracker::getDeliveryProgress() {
     if (!s_isDelivering) return 0.0f;
     uint32_t elapsed = millis() - s_deliveryAnimStartMs;
@@ -279,17 +285,17 @@ void SantaTracker::drawOnGlobe(EarthRenderer* renderer, LGFX_Sprite* canvas,
         canvas->fillCircle(nx, ny, 3, (s_phase == SantaPhase::MISSION_COMPLETE) ? canvas->color565(0, 255, 200) : canvas->color565(255, 215, 0));
         canvas->drawPixel(nx, ny, TFT_WHITE);
 
-        // 标注多语言文字
+        // 标注多语言文字 (增加纵向间隔至 14px，避免行间重叠)
         canvas->setTextDatum(top_left);
         canvas->setTextColor((s_phase == SantaPhase::MISSION_COMPLETE) ? canvas->color565(0, 255, 200) : canvas->color565(255, 215, 0));
-        canvas->drawString(I18N::get(TXT_SANTA_NORTH_POLE_BASE), nx + 7, ny - 5);
+        canvas->drawString(I18N::get(TXT_SANTA_NORTH_POLE_BASE), nx + 7, ny - 8);
         canvas->setTextColor(canvas->color565(180, 220, 255));
         if (s_phase == SantaPhase::PREPARATION) {
-            canvas->drawString(I18N::get(TXT_SANTA_STATUS_PREP), nx + 7, ny + 3);
+            canvas->drawString(I18N::get(TXT_SANTA_STATUS_PREP), nx + 7, ny + 6);
         } else if (s_phase == SantaPhase::MISSION_ACTIVE) {
-            canvas->drawString(I18N::get(TXT_SANTA_STATUS_FLYING), nx + 7, ny + 3);
+            canvas->drawString(I18N::get(TXT_SANTA_STATUS_FLYING), nx + 7, ny + 6);
         } else {
-            canvas->drawString(I18N::get(TXT_SANTA_STATUS_RESTING), nx + 7, ny + 3);
+            canvas->drawString(I18N::get(TXT_SANTA_STATUS_RESTING), nx + 7, ny + 6);
         }
     }
 
@@ -477,47 +483,62 @@ void SantaTracker::drawOnGlobe(EarthRenderer* renderer, LGFX_Sprite* canvas,
         canvas->drawString("★ RUDOLPH", sx, sy - 9);
     }
 
-    // 3. 礼物投递伞降动画与庆贺横幅 (Gift Drop & Delivery Confirmed)
-    if (s_isDelivering && userLat <= 90.0) {
-        float prog = getDeliveryProgress(); // 0.0 ~ 1.0
-
+    // 3. 礼物投递伞降动画与地表永久留存 (用户未重启前礼物永久留存地表)
+    if (s_hasDeliveredPresent && s_deliveredUserLat <= 90.0) {
         int ux, uy;
-        if (renderer->projectOrthographic(userLat, userLon, 0.0, centerLat, centerLon, ux, uy)) {
-            // 礼物下落起始点与终点插值
-            int startX = (sx > 0 && visible) ? sx : ux;
-            int startY = (sy > 0 && visible) ? sy : (uy - 55);
-            int curGiftX = startX + (int)((ux - startX) * prog);
-            int curGiftY = startY + (int)((uy - startY) * prog);
+        if (renderer->projectOrthographic(s_deliveredUserLat, s_deliveredUserLon, 0.0, centerLat, centerLon, ux, uy)) {
+            if (s_isDelivering) {
+                float prog = getDeliveryProgress(); // 0.0 ~ 1.0
 
-            // 白色与红条纹大号降落伞 (Parachute, 半径 6px 饱满半圆)
-            if (prog < 0.92f) {
-                canvas->fillCircle(curGiftX, curGiftY - 8, 6, TFT_WHITE);
-                canvas->fillCircle(curGiftX, curGiftY - 7, 5, canvas->color565(220, 220, 220));
-                canvas->drawFastHLine(curGiftX - 6, curGiftY - 8, 13, canvas->color565(255, 50, 50));
-                // 4 根细吊索
-                canvas->drawLine(curGiftX - 5, curGiftY - 7, curGiftX - 2, curGiftY - 2, canvas->color565(180, 180, 180));
-                canvas->drawLine(curGiftX + 5, curGiftY - 7, curGiftX + 2, curGiftY - 2, canvas->color565(180, 180, 180));
-                canvas->drawLine(curGiftX - 2, curGiftY - 6, curGiftX - 1, curGiftY - 2, canvas->color565(180, 180, 180));
-                canvas->drawLine(curGiftX + 2, curGiftY - 6, curGiftX + 1, curGiftY - 2, canvas->color565(180, 180, 180));
-            }
+                // 礼物下落起始点与终点插值
+                int startX = (sx > 0 && visible) ? sx : ux;
+                int startY = (sy > 0 && visible) ? sy : (uy - 55);
+                int curGiftX = startX + (int)((ux - startX) * prog);
+                int curGiftY = startY + (int)((uy - startY) * prog);
 
-            // 大号红色礼物盒 + 金色缎带十字结 (Gift Box, 7x7 像素)
-            canvas->fillRect(curGiftX - 3, curGiftY - 2, 7, 7, canvas->color565(230, 30, 30));
-            canvas->drawFastHLine(curGiftX - 3, curGiftY + 1, 7, canvas->color565(255, 215, 0));
-            canvas->drawFastVLine(curGiftX, curGiftY - 2, 7, canvas->color565(255, 215, 0));
-            canvas->drawPixel(curGiftX, curGiftY - 3, canvas->color565(255, 230, 100)); // 顶部蝴蝶结
+                // 白色与红条纹大号降落伞 (Parachute, 半径 6px 饱满半圆)
+                if (prog < 0.92f) {
+                    canvas->fillCircle(curGiftX, curGiftY - 8, 6, TFT_WHITE);
+                    canvas->fillCircle(curGiftX, curGiftY - 7, 5, canvas->color565(220, 220, 220));
+                    canvas->drawFastHLine(curGiftX - 6, curGiftY - 8, 13, canvas->color565(255, 50, 50));
+                    // 4 根细吊索
+                    canvas->drawLine(curGiftX - 5, curGiftY - 7, curGiftX - 2, curGiftY - 2, canvas->color565(180, 180, 180));
+                    canvas->drawLine(curGiftX + 5, curGiftY - 7, curGiftX + 2, curGiftY - 2, canvas->color565(180, 180, 180));
+                    canvas->drawLine(curGiftX - 2, curGiftY - 6, curGiftX - 1, curGiftY - 2, canvas->color565(180, 180, 180));
+                    canvas->drawLine(curGiftX + 2, curGiftY - 6, curGiftX + 1, curGiftY - 2, canvas->color565(180, 180, 180));
+                }
 
-            // 着陆时在用户地表激发出礼花光环
-            if (prog >= 0.75f) {
-                float landProg = (prog - 0.75f) / 0.25f;
-                int rLand = 3 + (int)(landProg * 18.0f);
-                uint8_t aLand = (uint8_t)(255 * (1.0f - landProg));
-                canvas->drawCircle(ux, uy, rLand, canvas->color565(aLand, aLand, 0));
-                canvas->drawCircle(ux, uy, rLand / 2, canvas->color565(0, aLand, aLand));
+                // 大号红色礼物盒 + 金色缎带十字结 (Gift Box, 7x7 像素)
+                canvas->fillRect(curGiftX - 3, curGiftY - 2, 7, 7, canvas->color565(230, 30, 30));
+                canvas->drawFastHLine(curGiftX - 3, curGiftY + 1, 7, canvas->color565(255, 215, 0));
+                canvas->drawFastVLine(curGiftX, curGiftY - 2, 7, canvas->color565(255, 215, 0));
+                canvas->drawPixel(curGiftX, curGiftY - 3, canvas->color565(255, 230, 100)); // 顶部蝴蝶结
+
+                // 着陆时在用户地表激发出礼花光环
+                if (prog >= 0.75f) {
+                    float landProg = (prog - 0.75f) / 0.25f;
+                    int rLand = 3 + (int)(landProg * 18.0f);
+                    uint8_t aLand = (uint8_t)(255 * (1.0f - landProg));
+                    canvas->drawCircle(ux, uy, rLand, canvas->color565(aLand, aLand, 0));
+                    canvas->drawCircle(ux, uy, rLand / 2, canvas->color565(0, aLand, aLand));
+                }
+            } else {
+                // 动画已结束：礼物永久留在用户地面位置 (直到设备重启)
+                canvas->fillRect(ux - 3, uy - 3, 7, 7, canvas->color565(230, 30, 30));
+                canvas->drawFastHLine(ux - 3, uy, 7, canvas->color565(255, 215, 0));
+                canvas->drawFastVLine(ux, uy - 3, 7, canvas->color565(255, 215, 0));
+                canvas->drawPixel(ux, uy - 4, canvas->color565(255, 230, 100)); // 顶部蝴蝶结
+                // 礼物盒周围带有微弱金色节日星光点缀
+                if (((nowMs / 600) % 2) == 0) {
+                    canvas->drawPixel(ux - 5, uy - 3, canvas->color565(255, 230, 120));
+                    canvas->drawPixel(ux + 5, uy + 1, canvas->color565(255, 230, 120));
+                }
             }
         }
+    }
 
-        // 屏幕顶部投递确认庆贺横幅
+    // 4. 屏幕顶部投递确认庆贺横幅 (按任意键后消失，不自动消失)
+    if (s_showDeliveryBanner) {
         canvas->fillRect(0, 0, 240, 16, canvas->color565(160, 20, 20));
         canvas->drawFastHLine(0, 15, 240, canvas->color565(255, 215, 0));
         canvas->setTextDatum(middle_center);

@@ -46,6 +46,8 @@ public:
     static void getCurrentCoord(float& outLat, float& outLon);
     static bool isDeliveringGift();
     static float getDeliveryProgress(); // 0.0f ~ 1.0f
+    static bool isDeliveryBannerActive();
+    static void dismissDeliveryBanner();
 
     /**
      * @brief 在 3D 地球仪上绘制圣诞雪橇、尾迹与礼物投递动画
@@ -83,6 +85,8 @@ private:
     static uint32_t s_deliveryAnimStartMs;
     static bool s_isDelivering;
     static bool s_deliveryArmed;
+    static bool s_hasDeliveredPresent;
+    static bool s_showDeliveryBanner;
 
     // 鲁道夫红鼻子实时屏幕像素坐标 (供雷达瞄准与追焦方块锁定)
     static int s_rudolphScreenX;

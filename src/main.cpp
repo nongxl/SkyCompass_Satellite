@@ -3645,6 +3645,11 @@ void loop() {
         bool justB = currB && !lastB;
         bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justLongR || justW || justLongW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl || justT || justP || justB;
 
+        // 礼物投递横幅：用户按任意键后消失
+        if (hasAnyKeyJustPressed && SantaTracker::isDeliveryBannerActive()) {
+            SantaTracker::dismissDeliveryBanner();
+        }
+
         // RF Console 全屏终端模式 (仅在主界面下按 Ctrl 开启，退出统一按 Esc 键)
         if (justCtrl && appState == STATE_MAIN && !RfConsoleView::getInstance().isActive()) {
             RfConsoleView::getInstance().setActive(true);
