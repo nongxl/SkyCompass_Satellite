@@ -18,6 +18,7 @@ float SantaTracker::s_deliveredUserLat = 999.0f;
 float SantaTracker::s_deliveredUserLon = 999.0f;
 uint32_t SantaTracker::s_deliveryAnimStartMs = 0;
 bool SantaTracker::s_isDelivering = false;
+bool SantaTracker::s_deliveryArmed = true;
 int16_t SantaTracker::s_prepRadioYear = 0;
 
 // 24 个全球环球巡游基础航点 (按自东向西太阳时区推进)
@@ -58,6 +59,7 @@ void SantaTracker::init() {
     s_deliveredYear = 0;
     s_deliveryAnimStartMs = 0;
     s_isDelivering = false;
+    s_deliveryArmed = true;
     s_prepRadioYear = 0;
 }
 
@@ -109,15 +111,19 @@ void SantaTracker::update(double continuousSimTime, double userLat, double userL
             double dist = calculateHaversineKm(s_telemetry.lat, s_telemetry.lon, userLat, userLon);
             s_telemetry.distToUserKm = (float)dist;
 
-            // 触发阈值 650km
-            if (dist <= 650.0) {
-                if (s_deliveredYear != s_simYear) {
+            // 触发阈值 800km：接近时触发
+            if (dist <= 800.0) {
+                if (!s_isDelivering && (s_deliveredYear != s_simYear || s_deliveryArmed)) {
                     s_deliveredYear = s_simYear;
+                    s_deliveryArmed = false;
                     s_deliveredUserLat = (float)userLat;
                     s_deliveredUserLon = (float)userLon;
                     s_deliveryAnimStartMs = millis();
                     s_isDelivering = true;
                 }
+            } else if (dist > 1200.0) {
+                // 飞离 1200km 之外，重新准备好下一次飞经触发，便于测试
+                s_deliveryArmed = true;
             }
         } else {
             s_telemetry.distToUserKm = 99999.0f;
@@ -126,9 +132,9 @@ void SantaTracker::update(double continuousSimTime, double userLat, double userL
         s_telemetry.distToUserKm = 99999.0f;
     }
 
-    // 投递动画持续 4.5 秒后自动平滑结束
+    // 投递动画持续 6.5 秒后自动平滑结束
     if (s_isDelivering) {
-        if (millis() - s_deliveryAnimStartMs >= 4500) {
+        if (millis() - s_deliveryAnimStartMs >= 6500) {
             s_isDelivering = false;
         }
     }
@@ -255,11 +261,11 @@ void SantaTracker::drawOnGlobe(EarthRenderer* renderer, LGFX_Sprite* canvas,
 
     uint32_t nowMs = millis();
 
-    // 阶段 1: 12月1日 ~ 23日 北极基地预热 (Preparation)
-    if (s_phase == SantaPhase::PREPARATION) {
-        int nx, ny;
-        if (renderer->projectOrthographic(90.0, 0.0, 0.0, centerLat, centerLon, nx, ny)) {
-            // 北极控制中心脉冲信标
+    // 1. 北极母港基地 (12月1日 ~ 12月31日 持续驻留显示)
+    int nx, ny;
+    if (renderer->projectOrthographic(90.0, 0.0, 0.0, centerLat, centerLon, nx, ny)) {
+        // 北极控制中心脉冲信标
+        if (s_phase == SantaPhase::PREPARATION) {
             uint32_t beaconT = nowMs % 1500;
             float bProg = (float)beaconT / 1500.0f;
             int rRing = 3 + (int)(bProg * 12.0f);
@@ -267,107 +273,162 @@ void SantaTracker::drawOnGlobe(EarthRenderer* renderer, LGFX_Sprite* canvas,
             if (aRing > 10) {
                 canvas->drawCircle(nx, ny, rRing, canvas->color565(aRing, (uint8_t)(aRing * 0.85f), 0));
             }
-            canvas->fillCircle(nx, ny, 3, canvas->color565(255, 215, 0)); // 金色北极基地核心点
-            canvas->drawPixel(nx, ny, TFT_WHITE);
+        }
+        canvas->fillCircle(nx, ny, 3, (s_phase == SantaPhase::MISSION_COMPLETE) ? canvas->color565(0, 255, 200) : canvas->color565(255, 215, 0));
+        canvas->drawPixel(nx, ny, TFT_WHITE);
 
-            // 标注文字
-            canvas->setTextDatum(top_left);
-            canvas->setTextColor(canvas->color565(255, 215, 0));
-            canvas->drawString("NORTH POLE BASE", nx + 7, ny - 5);
-            canvas->setTextColor(canvas->color565(180, 220, 255));
-            canvas->drawString("[PREP ACTIVE]", nx + 7, ny + 3);
+        // 标注多语言文字
+        canvas->setTextDatum(top_left);
+        canvas->setTextColor((s_phase == SantaPhase::MISSION_COMPLETE) ? canvas->color565(0, 255, 200) : canvas->color565(255, 215, 0));
+        canvas->drawString(I18N::get(TXT_SANTA_NORTH_POLE_BASE), nx + 7, ny - 5);
+        canvas->setTextColor(canvas->color565(180, 220, 255));
+        if (s_phase == SantaPhase::PREPARATION) {
+            canvas->drawString(I18N::get(TXT_SANTA_STATUS_PREP), nx + 7, ny + 3);
+        } else if (s_phase == SantaPhase::MISSION_ACTIVE) {
+            canvas->drawString(I18N::get(TXT_SANTA_STATUS_FLYING), nx + 7, ny + 3);
+        } else {
+            canvas->drawString(I18N::get(TXT_SANTA_STATUS_RESTING), nx + 7, ny + 3);
         }
-
-        // 首次进入 12 月时在屏幕顶部浮现无线电通告横幅 (显示 5 秒后淡出)
-        static uint32_t s_prepBannerStart = 0;
-        if (s_prepRadioYear != s_simYear) {
-            s_prepRadioYear = s_simYear;
-            s_prepBannerStart = nowMs;
-        }
-        if (s_prepBannerStart > 0 && (nowMs - s_prepBannerStart < 5500)) {
-            canvas->fillRect(0, 0, 240, 15, canvas->color565(20, 35, 25));
-            canvas->drawFastHLine(0, 14, 240, canvas->color565(255, 215, 0));
-            canvas->setTextDatum(middle_center);
-            canvas->setTextColor(canvas->color565(255, 215, 0));
-            canvas->drawString(I18N::get(TXT_SANTA_PREP_TITLE), 120, 7);
-        }
-        return;
     }
 
-    // 阶段 3: 12月26日 ~ 31日 任务圆满完成 (Mission Complete)
-    if (s_phase == SantaPhase::MISSION_COMPLETE) {
-        int nx, ny;
-        if (renderer->projectOrthographic(90.0, 0.0, 0.0, centerLat, centerLon, nx, ny)) {
-            canvas->fillCircle(nx, ny, 3, canvas->color565(0, 255, 200));
-            canvas->drawPixel(nx, ny, TFT_WHITE);
-            canvas->setTextDatum(top_left);
-            canvas->setTextColor(canvas->color565(0, 255, 200));
-            canvas->drawString("NORTH POLE BASE", nx + 7, ny - 5);
-            canvas->setTextColor(canvas->color565(255, 215, 0));
-            canvas->drawString("MISSION COMPLETE", nx + 7, ny + 3);
-        }
-        return;
+    // 每次时间切入 12 月时在屏幕顶部浮现无线电通告横幅 (显示 5.5 秒)
+    static uint8_t s_lastSeenMonth = 0;
+    static uint32_t s_prepBannerStart = 0;
+    if (s_simMonth == 12 && s_lastSeenMonth != 12) {
+        s_prepBannerStart = nowMs;
+    }
+    s_lastSeenMonth = s_simMonth;
+
+    if (s_prepBannerStart > 0 && (nowMs - s_prepBannerStart < 5500)) {
+        canvas->fillRect(0, 0, 240, 15, canvas->color565(20, 35, 25));
+        canvas->drawFastHLine(0, 14, 240, canvas->color565(255, 215, 0));
+        canvas->setTextDatum(middle_center);
+        canvas->setTextColor(canvas->color565(255, 215, 0));
+        canvas->drawString(I18N::get(TXT_SANTA_PREP_TITLE), 120, 7);
     }
 
-    // 阶段 2: 12月24日 ~ 25日 环球雪橇飞行与礼物投递 (Mission Active)
+    // 非活跃飞行期直接返回
+    if (s_phase != SantaPhase::MISSION_ACTIVE) return;
+
+    // 2. 环球雪橇飞行与护航战机伴飞 (12月24日 ~ 25日)
     int sx = -1, sy = -1;
     bool visible = renderer->projectOrthographic(s_telemetry.lat, s_telemetry.lon, s_telemetry.altKm, centerLat, centerLon, sx, sy);
     s_telemetry.isVisible = visible;
     s_telemetry.screenX = sx;
     s_telemetry.screenY = sy;
 
-    if (visible && sx >= -20 && sx <= canvas->width() + 20 && sy >= -20 && sy <= canvas->height() + 20) {
-        // (1) 金色星尘粒子流光尾迹 (Stardust Trail)
+    if (visible && sx >= -30 && sx <= canvas->width() + 30 && sy >= -30 && sy <= canvas->height() + 30) {
+        // 计算航向单位矢量与侧向垂直矢量
         float headingRad = s_telemetry.headingDeg * DEG_TO_RAD;
-        float tailDx = -sinf(headingRad);
-        float tailDy = cosf(headingRad);
+        float fwdX = sinf(headingRad);
+        float fwdY = -cosf(headingRad);
+        float rgtX = -fwdY;
+        float rgtY = fwdX;
 
-        for (int p = 1; p <= 5; p++) {
-            int tx = sx + (int)(tailDx * p * 3.5f) + ((nowMs / 80 + p) % 3 - 1);
-            int ty = sy + (int)(tailDy * p * 3.5f) + ((nowMs / 100 + p * 2) % 3 - 1);
-            uint16_t dustCol = (p <= 2) ? canvas->color565(255, 255, 180) : canvas->color565(255, (uint8_t)(210 - p * 30), 0);
+        // (1) 金色与彩虹星尘尾迹 (Stardust Trail, 向后流光)
+        for (int p = 1; p <= 7; p++) {
+            int tx = sx - (int)(fwdX * p * 3.5f) + ((nowMs / 70 + p) % 3 - 1);
+            int ty = sy - (int)(fwdY * p * 3.5f) + ((nowMs / 90 + p * 2) % 3 - 1);
+            uint16_t dustCol = (p <= 2) ? canvas->color565(255, 255, 200) :
+                               (p <= 4) ? canvas->color565(255, 215, 0) :
+                                          canvas->color565(255, 140, 50);
             canvas->drawPixel(tx, ty, dustCol);
-            if (p <= 2) canvas->drawPixel(tx + 1, ty, canvas->color565(255, 215, 0));
+            if (p <= 3) canvas->drawPixel(tx + 1, ty, canvas->color565(255, 230, 100));
         }
 
-        // (2) 红色圣诞雪橇与圣诞老人轮廓 (Sleigh & Santa)
-        // 雪橇车身 (红色加深与金色滑道)
-        uint16_t colSleigh = canvas->color565(230, 30, 30);
+        // (2) NORAD 军机护航编队 (双架喷气僚机，左右两翼伴飞)
+        auto drawEscortJet = [&](int jx, int jy, bool isLeft) {
+            // 引擎喷气白色双尾流
+            int jetTailX = jx - (int)(fwdX * 6.0f);
+            int jetTailY = jy - (int)(fwdY * 6.0f);
+            canvas->drawLine(jx, jy, jetTailX, jetTailY, canvas->color565(210, 230, 250));
+
+            // 三角翼空优隐身战斗机身
+            uint16_t colJet = canvas->color565(150, 165, 180);
+            uint16_t colCanopy = canvas->color565(40, 90, 140);
+            int noseX = jx + (int)(fwdX * 5.0f);
+            int noseY = jy + (int)(fwdY * 5.0f);
+            int leftWingX = jx - (int)(fwdX * 2.0f) - (int)(rgtX * 4.0f);
+            int leftWingY = jy - (int)(fwdY * 2.0f) - (int)(rgtY * 4.0f);
+            int rightWingX = jx - (int)(fwdX * 2.0f) + (int)(rgtX * 4.0f);
+            int rightWingY = jy - (int)(fwdY * 2.0f) + (int)(rgtY * 4.0f);
+
+            canvas->fillTriangle(noseX, noseY, leftWingX, leftWingY, rightWingX, rightWingY, colJet);
+            canvas->drawPixel(jx, jy, colCanopy);
+
+            // 翼尖防撞航行灯 (左红右绿高频闪烁)
+            uint8_t navBlink = (nowMs / 220) % 2;
+            if (navBlink) {
+                canvas->drawPixel(leftWingX, leftWingY, TFT_RED);
+                canvas->drawPixel(rightWingX, rightWingY, TFT_GREEN);
+            }
+        };
+
+        // 左右僚机位置 (后方 8px，左右偏移 14px)
+        int jetLeftX = sx - (int)(fwdX * 8.0f) - (int)(rgtX * 14.0f);
+        int jetLeftY = sy - (int)(fwdY * 8.0f) - (int)(rgtY * 14.0f);
+        int jetRightX = sx - (int)(fwdX * 8.0f) + (int)(rgtX * 14.0f);
+        int jetRightY = sy - (int)(fwdY * 8.0f) + (int)(rgtY * 14.0f);
+        drawEscortJet(jetLeftX, jetLeftY, true);
+        drawEscortJet(jetRightX, jetRightY, false);
+
+        // (3) 红色大号圣诞雪橇 (Sleigh & Santa, 放大精细化)
+        uint16_t colSleigh = canvas->color565(225, 25, 25);
         uint16_t colRunner = canvas->color565(255, 215, 0);
-        canvas->fillRect(sx - 3, sy - 1, 6, 3, colSleigh);
-        canvas->drawLine(sx - 4, sy + 3, sx + 3, sy + 3, colRunner); // 雪橇滑板
-        canvas->drawPixel(sx + 4, sy + 2, colRunner);                 // 翘起的雪橇前头
 
-        // 圣诞老人白胡子与红帽子
-        canvas->drawPixel(sx - 1, sy - 2, colSleigh);  // 红帽
-        canvas->drawPixel(sx - 2, sy - 3, TFT_WHITE);  // 绒球
-        canvas->drawPixel(sx, sy - 1, TFT_WHITE);      // 白胡子
+        // 金色滑轨 (下底带向上弯曲翘头)
+        canvas->fillRect(sx - 4, sy + 3, 9, 2, colRunner);
+        canvas->drawPixel(sx + 5, sy + 2, colRunner);
+        canvas->drawPixel(sx + 6, sy + 1, colRunner);
 
-        // (3) 牵引缰绳与领头红鼻子驯鹿 Rudolph (Reindeer & Rudolph)
-        int deerX = sx + (int)(-tailDx * 9.0f);
-        int deerY = sy + (int)(-tailDy * 9.0f);
-        // 金黄色魔力牵引缰绳
-        canvas->drawLine(sx + 2, sy, deerX - 2, deerY, canvas->color565(255, 220, 50));
+        // 红色雪橇舱身
+        canvas->fillRect(sx - 5, sy - 1, 9, 4, colSleigh);
+        // 后座堆叠的彩色礼物包裹
+        canvas->drawPixel(sx - 5, sy - 2, TFT_GREEN);
+        canvas->drawPixel(sx - 4, sy - 2, canvas->color565(255, 215, 0));
+        canvas->drawPixel(sx - 4, sy - 3, TFT_CYAN);
 
-        // 驯鹿身躯 (深褐色/金褐色)
-        uint16_t colDeer = canvas->color565(160, 95, 45);
-        canvas->fillRect(deerX - 2, deerY - 1, 4, 3, colDeer);
-        canvas->drawPixel(deerX + 1, deerY - 2, colDeer);             // 鹿角
-        canvas->drawPixel(deerX + 2, deerY - 2, canvas->color565(120, 70, 30));
+        // 圣诞老人 (红棉衣 + 白胡子 + 红帽子 + 白绒球)
+        canvas->fillRect(sx - 1, sy - 2, 3, 2, colSleigh);  // 红衣
+        canvas->drawPixel(sx + 1, sy - 1, TFT_WHITE);       // 白胡子
+        canvas->drawPixel(sx, sy - 3, colSleigh);          // 红帽
+        canvas->drawPixel(sx - 1, sy - 4, TFT_WHITE);      // 白绒球
 
-        // ★ 核心彩蛋：Rudolph 闪烁的红鼻子 (Red Nose Beacon)
-        uint8_t noseBlink = (nowMs / 180) % 2;
-        canvas->drawPixel(deerX + 3, deerY - 1, noseBlink ? TFT_RED : canvas->color565(255, 120, 120));
+        // (4) 领航驯鹿队与鲁道夫大红鼻子 (Reindeer & Rudolph)
+        int deerBaseX = sx + (int)(fwdX * 12.0f);
+        int deerBaseY = sy + (int)(fwdY * 12.0f);
 
-        // (4) 目标标识文字
+        // 金黄魔法牵引缰绳
+        canvas->drawLine(sx + 3, sy, deerBaseX - 3, deerBaseY, canvas->color565(255, 220, 60));
+
+        // 驯鹿身躯 (双鹿并驱, 褐色健壮身形与挺拔鹿角)
+        uint16_t colDeer = canvas->color565(150, 85, 40);
+        uint16_t colAntler = canvas->color565(200, 160, 110);
+        canvas->fillRect(deerBaseX - 2, deerBaseY - 2, 5, 4, colDeer);
+        canvas->drawPixel(deerBaseX + 1, deerBaseY - 3, colAntler);
+        canvas->drawPixel(deerBaseX + 2, deerBaseY - 4, colAntler);
+        canvas->drawPixel(deerBaseX - 1, deerBaseY - 3, colAntler);
+
+        // ★ 核心彩蛋：鲁道夫闪烁发光的大红鼻子 (高频双层光环)
+        uint8_t noseBlink = (nowMs / 160) % 2;
+        int noseX = deerBaseX + (int)(fwdX * 4.0f);
+        int noseY = deerBaseY + (int)(fwdY * 4.0f);
+        if (noseBlink) {
+            canvas->fillCircle(noseX, noseY, 2, canvas->color565(255, 80, 80));
+            canvas->drawPixel(noseX, noseY, TFT_WHITE);
+        } else {
+            canvas->drawPixel(noseX, noseY, TFT_RED);
+        }
+
+        // (5) 目标标识文字
         canvas->setTextDatum(top_left);
-        canvas->setTextColor(canvas->color565(255, 70, 70));
-        canvas->drawString("SNT-CLS", sx + 10, sy - 5);
+        canvas->setTextColor(canvas->color565(255, 80, 80));
+        canvas->drawString("SNT-CLS", sx + 12, sy - 6);
         canvas->setTextColor(canvas->color565(255, 215, 0));
-        canvas->drawString("RED NOSE", sx + 10, sy + 3);
+        canvas->drawString("RED NOSE", sx + 12, sy + 3);
     }
 
-    // (5) 礼物投递伞降动画与庆贺横幅 (Gift Drop & Delivery Confirmed)
+    // 3. 礼物投递伞降动画与庆贺横幅 (Gift Drop & Delivery Confirmed)
     if (s_isDelivering && userLat <= 90.0) {
         float prog = getDeliveryProgress(); // 0.0 ~ 1.0
 
@@ -375,28 +436,35 @@ void SantaTracker::drawOnGlobe(EarthRenderer* renderer, LGFX_Sprite* canvas,
         if (renderer->projectOrthographic(userLat, userLon, 0.0, centerLat, centerLon, ux, uy)) {
             // 礼物下落起始点与终点插值
             int startX = (sx > 0 && visible) ? sx : ux;
-            int startY = (sy > 0 && visible) ? sy : (uy - 40);
+            int startY = (sy > 0 && visible) ? sy : (uy - 55);
             int curGiftX = startX + (int)((ux - startX) * prog);
             int curGiftY = startY + (int)((uy - startY) * prog);
 
-            // 白色降落伞 (Parachute)
-            if (prog < 0.90f) {
-                canvas->fillCircle(curGiftX, curGiftY - 6, 4, TFT_WHITE);
-                canvas->drawLine(curGiftX - 4, curGiftY - 6, curGiftX - 1, curGiftY - 1, canvas->color565(200, 200, 200));
-                canvas->drawLine(curGiftX + 4, curGiftY - 6, curGiftX + 1, curGiftY - 1, canvas->color565(200, 200, 200));
+            // 白色与红条纹大号降落伞 (Parachute, 半径 6px 饱满半圆)
+            if (prog < 0.92f) {
+                canvas->fillCircle(curGiftX, curGiftY - 8, 6, TFT_WHITE);
+                canvas->fillCircle(curGiftX, curGiftY - 7, 5, canvas->color565(220, 220, 220));
+                canvas->drawFastHLine(curGiftX - 6, curGiftY - 8, 13, canvas->color565(255, 50, 50));
+                // 4 根细吊索
+                canvas->drawLine(curGiftX - 5, curGiftY - 7, curGiftX - 2, curGiftY - 2, canvas->color565(180, 180, 180));
+                canvas->drawLine(curGiftX + 5, curGiftY - 7, curGiftX + 2, curGiftY - 2, canvas->color565(180, 180, 180));
+                canvas->drawLine(curGiftX - 2, curGiftY - 6, curGiftX - 1, curGiftY - 2, canvas->color565(180, 180, 180));
+                canvas->drawLine(curGiftX + 2, curGiftY - 6, curGiftX + 1, curGiftY - 2, canvas->color565(180, 180, 180));
             }
 
-            // 红色礼物盒 + 金色丝带十字结 (Gift Box)
-            canvas->fillRect(curGiftX - 2, curGiftY - 2, 5, 5, TFT_RED);
-            canvas->drawFastHLine(curGiftX - 2, curGiftY, 5, canvas->color565(255, 215, 0));
-            canvas->drawFastVLine(curGiftX, curGiftY - 2, 5, canvas->color565(255, 215, 0));
+            // 大号红色礼物盒 + 金色缎带十字结 (Gift Box, 7x7 像素)
+            canvas->fillRect(curGiftX - 3, curGiftY - 2, 7, 7, canvas->color565(230, 30, 30));
+            canvas->drawFastHLine(curGiftX - 3, curGiftY + 1, 7, canvas->color565(255, 215, 0));
+            canvas->drawFastVLine(curGiftX, curGiftY - 2, 7, canvas->color565(255, 215, 0));
+            canvas->drawPixel(curGiftX, curGiftY - 3, canvas->color565(255, 230, 100)); // 顶部蝴蝶结
 
             // 着陆时在用户地表激发出礼花光环
-            if (prog >= 0.80f) {
-                float landProg = (prog - 0.80f) / 0.20f;
-                int rLand = 3 + (int)(landProg * 14.0f);
+            if (prog >= 0.75f) {
+                float landProg = (prog - 0.75f) / 0.25f;
+                int rLand = 3 + (int)(landProg * 18.0f);
                 uint8_t aLand = (uint8_t)(255 * (1.0f - landProg));
                 canvas->drawCircle(ux, uy, rLand, canvas->color565(aLand, aLand, 0));
+                canvas->drawCircle(ux, uy, rLand / 2, canvas->color565(0, aLand, aLand));
             }
         }
 

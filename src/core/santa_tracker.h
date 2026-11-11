@@ -82,6 +82,7 @@ private:
     static float s_deliveredUserLon;
     static uint32_t s_deliveryAnimStartMs;
     static bool s_isDelivering;
+    static bool s_deliveryArmed;
 
     // 北极基地电文弹窗
     static int16_t s_prepRadioYear;

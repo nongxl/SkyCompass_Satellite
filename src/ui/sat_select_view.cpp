@@ -765,7 +765,8 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                 canvas->setTextColor(TFT_LIGHTGRAY);
                 canvas->drawString((String(I18N::get(TXT_ID)) + "01225").c_str(), rightX + 48, descY + 20);
                 canvas->setTextColor(TFT_GREEN);
-                const char* stLabel = SantaTracker::isFlightPhase() ? "ACTIVE" : "STANDBY";
+                const char* stLabel = (SantaTracker::getPhase() == SantaPhase::MISSION_ACTIVE) ? "ACTIVE" :
+                                      ((SantaTracker::getPhase() == SantaPhase::MISSION_COMPLETE) ? "COMPLETE" : "STANDBY");
                 canvas->drawString(stLabel, width - canvas->textWidth(stLabel) - 4, descY - 5);
             } else {
                 canvas->setTextColor(TFT_LIGHTGRAY);
@@ -847,11 +848,17 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
 
             if (realIdx == SantaTracker::VIRTUAL_ENC_INDEX) {
                 String statusStr = "";
-                if (SantaTracker::isFlightPhase()) {
+                SantaPhase curPhase = SantaTracker::getPhase();
+                if (curPhase == SantaPhase::MISSION_ACTIVE) {
                     if (currL == LANG_ZH) statusStr = "运行状态: [+] 环球巡航投递中";
                     else if (currL == LANG_JA) statusStr = "運用状態: [+] 世界巡航配送中";
                     else if (currL == LANG_ES) statusStr = "Estado: [+] En vuelo global";
                     else statusStr = "Status: [+] Cruising & Delivering";
+                } else if (curPhase == SantaPhase::MISSION_COMPLETE) {
+                    if (currL == LANG_ZH) statusStr = "运行状态: [OK] 任务圆满完成 (返航休整)";
+                    else if (currL == LANG_JA) statusStr = "運用状態: [OK] 任務完了 (母港休整中)";
+                    else if (currL == LANG_ES) statusStr = "Estado: [OK] Mision cumplida (En base)";
+                    else statusStr = "Status: [OK] Mission Accomplished (At Base)";
                 } else {
                     if (currL == LANG_ZH) statusStr = "运行状态: [*] 北极母港整备中";
                     else if (currL == LANG_JA) statusStr = "運用状態: [*] 北極母港整備中";

@@ -493,6 +493,7 @@ bool gnssManualMode = false;
 bool gnssTimedOut = false;
 bool gnssLocationFixed = false; // True once GNSS provides a real position fix
 bool isSatViewMode = false;
+bool g_santaFocusMode = false;
 int focusSatIndex = -1;
 float currentZoom = 0.95f;
 uint8_t currentBrightness = 128;
@@ -3560,7 +3561,37 @@ void loop() {
         bool justBracketL = currBracketL && !lastBracketL;
         bool justBracketR = currBracketR && !lastBracketR;
         bool justC = currC && !lastC;
-        bool justR = currR && !lastR;
+        
+        // R 键支持短按与长按解耦：持续按住 700ms 触发长按跳跃至 12月24日 20:00 (圣诞快速测试通道)
+        static unsigned long s_rPressStartTime = 0;
+        static bool s_rLongPressHandled = false;
+        bool justR = false;
+        bool justLongR = false;
+
+        bool allowLongPressR = (appState == STATE_MAIN);
+        if (!allowLongPressR) {
+            justR = currR && !lastR;
+            s_rPressStartTime = 0;
+            s_rLongPressHandled = false;
+        } else {
+            if (currR && !lastR) {
+                s_rPressStartTime = millis();
+                s_rLongPressHandled = false;
+            } else if (currR && !s_rLongPressHandled) {
+                if (s_rPressStartTime > 0 && (millis() - s_rPressStartTime >= 700)) {
+                    s_rLongPressHandled = true;
+                    justLongR = true;
+                }
+            }
+
+            if (!currR && lastR) {
+                if (!s_rLongPressHandled) {
+                    justR = true;
+                }
+                s_rPressStartTime = 0;
+                s_rLongPressHandled = false;
+            }
+        }
         
         // W 键支持短按与长按解耦：持续按住 800ms 触发长按开启 WiFi 并强制扫描
         static unsigned long s_wPressStartTime = 0;
@@ -3612,7 +3643,7 @@ void loop() {
         bool justT = currT && !lastT;
         bool justP = currP && !lastP;
         bool justB = currB && !lastB;
-        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justW || justLongW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl || justT || justP || justB;
+        bool hasAnyKeyJustPressed = justSemi || justDot || justComma || justSlash || justO || justV || justEnter || justBack || justEsc || justTick || justBracketL || justBracketR || justC || justR || justLongR || justW || justLongW || justS || justH || justG || justY || justN || justD || justF || justA || justTab || justShift || justL || justSpace || justM || justCtrl || justT || justP || justB;
 
         // RF Console 全屏终端模式 (仅在主界面下按 Ctrl 开启，退出统一按 Esc 键)
         if (justCtrl && appState == STATE_MAIN && !RfConsoleView::getInstance().isActive()) {
@@ -3992,6 +4023,32 @@ void loop() {
                         unlockPassMutex();
                         triggerPrediction = true;
                     }
+                } else if (justLongR) {
+                    if (!showRecommendations && !showHelp) {
+                        time_t nowSec = current_unix;
+                        struct tm tmStruct;
+                        gmtime_r(&nowSec, &tmStruct);
+                        tmStruct.tm_mon = 11; // 12月 (0-11)
+                        tmStruct.tm_mday = 24; // 24日
+                        tmStruct.tm_hour = 20; // 20:00:00
+                        tmStruct.tm_min = 0;
+                        tmStruct.tm_sec = 0;
+                        time_t targetDec24 = mktime(&tmStruct);
+                        timeMachineOffset = (int32_t)(targetDec24 - current_unix);
+                        g_smoothTimeMachineOffset.jump((float)timeMachineOffset);
+                        lastTimeAdjustMillis = millis();
+
+                        // 开启 Sat View 锁定圣诞老人
+                        g_santaFocusMode = true;
+                        isSatViewMode = true;
+                        isCameraTransitioning = true;
+                        targetZoom = 1.35f;
+
+                        // 蜂鸣器发出欢快短鸣
+                        M5Cardputer.Speaker.tone(1318, 120);
+                        delay(120);
+                        M5Cardputer.Speaker.tone(1568, 180);
+                    }
                 } else if (justR) {
                     if (!showRecommendations && !showHelp) {
                         // 1. 检查是否存在时间机器偏移并重置对齐现实时间
@@ -4235,6 +4292,9 @@ void loop() {
                     }
                 } else if (justV) {
                     isSatViewMode = !isSatViewMode;
+                    if (!isSatViewMode) {
+                        g_santaFocusMode = false;
+                    }
                     if (isSatViewMode) {
                         validateSatViewFocusState();
                         if (isSatViewMode) {
@@ -4870,7 +4930,18 @@ void loop() {
                         } else if (justEnter) {
                             if (realIdx == SantaTracker::VIRTUAL_ENC_INDEX) {
                                 if (SantaTracker::isFlightPhase()) {
+                                    g_santaFocusMode = true;
+                                    isSatViewMode = true;
+                                    isCameraTransitioning = true;
+                                    targetZoom = 1.35f;
                                     appState = STATE_MAIN;
+                                } else if (SantaTracker::getPhase() == SantaPhase::MISSION_COMPLETE) {
+                                    Language currL = I18N::getLanguage();
+                                    if (currL == LANG_ZH) downloadErrorMsg = "任务已圆满完成 (返航休整中)";
+                                    else if (currL == LANG_JA) downloadErrorMsg = "任務完了 (母港休整中)";
+                                    else if (currL == LANG_ES) downloadErrorMsg = "Mision cumplida (En descanso)";
+                                    else downloadErrorMsg = "Mission Complete (Resting)";
+                                    downloadFinishedMs = millis();
                                 } else {
                                     Language currL = I18N::getLanguage();
                                     if (currL == LANG_ZH) downloadErrorMsg = "圣诞老人整备中 (12-24启航)";
@@ -5065,7 +5136,13 @@ void loop() {
         if (isSatViewMode) {
             bool hasFocalPos = false;
             GeodeticCoord focalGeo;
-            if (g_recentLaunchFocusMode && focusSatIndex == -1) {
+            if (g_santaFocusMode && SantaTracker::isDecember()) {
+                float sLat = 0, sLon = 0;
+                SantaTracker::getCurrentCoord(sLat, sLon);
+                focalGeo = { (double)sLat, (double)sLon, 450.0 };
+                hasFocalPos = true;
+            }
+            else if (g_recentLaunchFocusMode && focusSatIndex == -1) {
                 if (propagateSatFast(g_repSatCalc, g_repSatCache.prop, continuousSimTime, cosGmst, sinGmst, true, focalGeo)) {
                     g_repSatCache.lastGeo = focalGeo;
                     g_repSatCache.lastGeoValid = true;
@@ -5929,7 +6006,27 @@ void loop() {
                     hasSatInfo = true;
                 }
                 
-                if (hasSatInfo && (currentCalc != nullptr || currentType == SAT_TYPE_GEO_TV)) {
+                if (g_santaFocusMode && SantaTracker::isDecember()) {
+                    Language currL = I18N::getLanguage();
+                    earth_renderer->getCanvas()->setFont(I18N::getFont());
+                    earth_renderer->getCanvas()->setTextColor(earth_renderer->getCanvas()->color565(255, 70, 70));
+                    const char* satViewStr = (currL == LANG_ZH) ? "视角锁定" : ((currL == LANG_JA) ? "視点固定" : ((currL == LANG_ES) ? "Vista sat" : "Sat View"));
+                    earth_renderer->getCanvas()->drawString(satViewStr, 180, 5);
+
+                    float sLat = 0, sLon = 0;
+                    SantaTracker::getCurrentCoord(sLat, sLon);
+                    GeodeticCoord sGeo = { (double)sLat, (double)sLon, 450.0 };
+                    ECEFCoord sEcef = CoordTransform::geodeticToECEF(sGeo);
+                    float azF = 0, elF = 0, distF = 0;
+                    CoordTransform::ecefToTopocentricFast(obsFrame, (float)sEcef.x, (float)sEcef.y, (float)sEcef.z, azF, elF, distF);
+
+                    earth_renderer->getCanvas()->setTextColor(earth_renderer->getCanvas()->color565(255, 215, 0));
+                    earth_renderer->getCanvas()->drawString("SNT-CLS (Santa)", 5, 20);
+                    earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "Az:%03.0f El:%02.0f R:%.0fkm", azF, elF, distF);
+                    earth_renderer->getCanvas()->drawString(buf, 5, 32);
+                } else if (hasSatInfo && (currentCalc != nullptr || currentType == SAT_TYPE_GEO_TV)) {
                     Language currL = I18N::getLanguage();
                     bool isZh = (currL == LANG_ZH);
                     earth_renderer->getCanvas()->setFont(I18N::getFont());
