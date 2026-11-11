@@ -4,6 +4,7 @@
 #include "core/spring_animator.h"
 #include "core/i18n.h"
 #include "core/text_utils.h"
+#include "core/santa_tracker.h"
 
 extern const int MAX_SATELLITES;
 extern SatProfile g_satellites[];
@@ -11,6 +12,7 @@ extern int NUM_SATELLITES;
 extern std::vector<RecentLaunchItem> g_recentLaunches;
 extern int focusSatIndex;
 extern bool g_recentLaunchFocusMode;
+extern bool g_santaFocusMode;
 extern String recentLaunchActiveBatchId;
 extern bool isSatViewMode;
 extern volatile uint32_t current_unix;
@@ -132,7 +134,7 @@ void SatFocusDrawer::draw(LGFX_Sprite* canvas) {
             item.name = g_satellites[i].name;
             item.color = g_satellites[i].color;
             item.iconType = g_satellites[i].iconType;
-            if (!g_recentLaunchFocusMode && focusSatIndex == i) {
+            if (!g_santaFocusMode && !g_recentLaunchFocusMode && focusSatIndex == i) {
                 item.isFocus = true;
                 focusTargetIdx = (int)targets.size();
             }
@@ -165,12 +167,25 @@ void SatFocusDrawer::draw(LGFX_Sprite* canvas) {
             else if (ageDays >= 365.0) item.color = canvas->color565(150, 150, 150);
             else item.color = 0x07FF; // TFT_CYAN
 
-            if (g_recentLaunchFocusMode && rItem.batchId == recentLaunchActiveBatchId) {
+            if (!g_santaFocusMode && g_recentLaunchFocusMode && rItem.batchId == recentLaunchActiveBatchId) {
                 item.isFocus = true;
                 focusTargetIdx = (int)targets.size();
             }
             targets.push_back(item);
         }
+    }
+
+    // 圣诞彩蛋任务：在飞行巡航阶段注入 SNT-CLS
+    if (SantaTracker::isDecember() && SantaTracker::isFlightPhase()) {
+        DrawerTargetItem sItem;
+        sItem.name = "SNT-CLS";
+        sItem.color = canvas->color565(255, 75, 75);
+        sItem.iconType = ICON_SATELLITE;
+        if (g_santaFocusMode) {
+            sItem.isFocus = true;
+            focusTargetIdx = (int)targets.size();
+        }
+        targets.push_back(sItem);
     }
 
     unlockSatMutex();
@@ -249,7 +264,23 @@ void SatFocusDrawer::draw(LGFX_Sprite* canvas) {
         int iconCenterX = curX + 8;
         int iconCenterY = rowY + rowH / 2;
         uint16_t fadedIconCol = blendColor(tItem.color, bgCol, alpha);
-        EarthRenderer::renderSatelliteIcon(canvas, iconCenterX, iconCenterY, tItem.iconType, fadedIconCol, false, alpha);
+        if (tItem.name == "SNT-CLS") {
+            // 绘制专属圣诞雪橇小图标 (车身红 + 滑轨金 + 鹿鼻闪烁)
+            uint16_t colS = blendColor(canvas->color565(230, 40, 40), bgCol, alpha);
+            uint16_t colR = blendColor(canvas->color565(255, 215, 0), bgCol, alpha);
+            uint16_t colN = blendColor(canvas->color565(255, 60, 60), bgCol, alpha);
+            // 金滑轨
+            canvas->drawFastHLine(iconCenterX - 5, iconCenterY + 2, 7, colR);
+            canvas->drawPixel(iconCenterX + 2, iconCenterY + 1, colR);
+            // 红车身
+            canvas->fillRect(iconCenterX - 4, iconCenterY - 1, 5, 3, colS);
+            // 圣诞老人白帽球
+            canvas->drawPixel(iconCenterX - 2, iconCenterY - 3, blendColor(TFT_WHITE, bgCol, alpha));
+            // 鲁道夫红鼻子
+            canvas->drawPixel(iconCenterX + 4, iconCenterY, colN);
+        } else {
+            EarthRenderer::renderSatelliteIcon(canvas, iconCenterX, iconCenterY, tItem.iconType, fadedIconCol, false, alpha);
+        }
 
         // 绘制卫星名称 (颜色与地球仪保持一致，支持动态淡入淡出与超长文字横向跑马灯滚动)
         int textStartX = curX + 17;

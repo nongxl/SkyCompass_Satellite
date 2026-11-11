@@ -20,6 +20,8 @@ uint32_t SantaTracker::s_deliveryAnimStartMs = 0;
 bool SantaTracker::s_isDelivering = false;
 bool SantaTracker::s_deliveryArmed = true;
 int16_t SantaTracker::s_prepRadioYear = 0;
+int SantaTracker::s_rudolphScreenX = -100;
+int SantaTracker::s_rudolphScreenY = -100;
 
 // 24 个全球环球巡游基础航点 (按自东向西太阳时区推进)
 struct Waypoint {
@@ -336,7 +338,7 @@ void SantaTracker::drawOnGlobe(EarthRenderer* renderer, LGFX_Sprite* canvas,
             if (p <= 3) canvas->drawPixel(tx + 1, ty, canvas->color565(255, 230, 100));
         }
 
-        // (2) NORAD 军机护航编队 (双架喷气僚机，左右两翼伴飞)
+        // (2) NORAD 军机护航编队 (双架喷气僚机，在雪橇后方左右两翼伴飞)
         auto drawEscortJet = [&](int jx, int jy, bool isLeft) {
             // 引擎喷气白色双尾流
             int jetTailX = jx - (int)(fwdX * 6.0f);
@@ -344,16 +346,16 @@ void SantaTracker::drawOnGlobe(EarthRenderer* renderer, LGFX_Sprite* canvas,
             canvas->drawLine(jx, jy, jetTailX, jetTailY, canvas->color565(210, 230, 250));
 
             // 三角翼空优隐身战斗机身
-            uint16_t colJet = canvas->color565(150, 165, 180);
+            uint16_t colJet = canvas->color565(160, 175, 190);
             uint16_t colCanopy = canvas->color565(40, 90, 140);
-            int noseX = jx + (int)(fwdX * 5.0f);
-            int noseY = jy + (int)(fwdY * 5.0f);
+            int jNoseX = jx + (int)(fwdX * 5.0f);
+            int jNoseY = jy + (int)(fwdY * 5.0f);
             int leftWingX = jx - (int)(fwdX * 2.0f) - (int)(rgtX * 4.0f);
             int leftWingY = jy - (int)(fwdY * 2.0f) - (int)(rgtY * 4.0f);
             int rightWingX = jx - (int)(fwdX * 2.0f) + (int)(rgtX * 4.0f);
             int rightWingY = jy - (int)(fwdY * 2.0f) + (int)(rgtY * 4.0f);
 
-            canvas->fillTriangle(noseX, noseY, leftWingX, leftWingY, rightWingX, rightWingY, colJet);
+            canvas->fillTriangle(jNoseX, jNoseY, leftWingX, leftWingY, rightWingX, rightWingY, colJet);
             canvas->drawPixel(jx, jy, colCanopy);
 
             // 翼尖防撞航行灯 (左红右绿高频闪烁)
@@ -364,68 +366,115 @@ void SantaTracker::drawOnGlobe(EarthRenderer* renderer, LGFX_Sprite* canvas,
             }
         };
 
-        // 左右僚机位置 (后方 8px，左右偏移 14px)
-        int jetLeftX = sx - (int)(fwdX * 8.0f) - (int)(rgtX * 14.0f);
-        int jetLeftY = sy - (int)(fwdY * 8.0f) - (int)(rgtY * 14.0f);
-        int jetRightX = sx - (int)(fwdX * 8.0f) + (int)(rgtX * 14.0f);
-        int jetRightY = sy - (int)(fwdY * 8.0f) + (int)(rgtY * 14.0f);
+        // 左右僚机位置 (拉开间距，斜后方 18px，左右偏移 16px，避免遮挡雪橇本体)
+        int jetLeftX = sx - (int)(fwdX * 18.0f) - (int)(rgtX * 16.0f);
+        int jetLeftY = sy - (int)(fwdY * 18.0f) - (int)(rgtY * 16.0f);
+        int jetRightX = sx - (int)(fwdX * 18.0f) + (int)(rgtX * 16.0f);
+        int jetRightY = sy - (int)(fwdY * 18.0f) + (int)(rgtY * 16.0f);
         drawEscortJet(jetLeftX, jetLeftY, true);
         drawEscortJet(jetRightX, jetRightY, false);
 
-        // (3) 红色大号圣诞雪橇 (Sleigh & Santa, 放大精细化)
-        uint16_t colSleigh = canvas->color565(225, 25, 25);
-        uint16_t colRunner = canvas->color565(255, 215, 0);
+        // (3) 高辨识度像素艺术：领航驯鹿队与鲁道夫大红鼻子 (Reindeer & Rudolph)
+        int dir = (fwdX >= -0.1f) ? 1 : -1; // 飞行水平朝向 (1: 朝右飞, -1: 朝左飞)
+        int deerBaseX = sx + dir * 18;
+        int deerBaseY = sy - 2;
 
-        // 金色滑轨 (下底带向上弯曲翘头)
-        canvas->fillRect(sx - 4, sy + 3, 9, 2, colRunner);
-        canvas->drawPixel(sx + 5, sy + 2, colRunner);
-        canvas->drawPixel(sx + 6, sy + 1, colRunner);
+        uint16_t colDeer = canvas->color565(175, 95, 45);
+        uint16_t colDeerDark = canvas->color565(120, 60, 25);
+        uint16_t colAntler = canvas->color565(255, 220, 100);
 
-        // 红色雪橇舱身
-        canvas->fillRect(sx - 5, sy - 1, 9, 4, colSleigh);
-        // 后座堆叠的彩色礼物包裹
-        canvas->drawPixel(sx - 5, sy - 2, TFT_GREEN);
-        canvas->drawPixel(sx - 4, sy - 2, canvas->color565(255, 215, 0));
-        canvas->drawPixel(sx - 4, sy - 3, TFT_CYAN);
+        // 驯鹿飞跃身形 (鹿身 7x4，飞奔蹄腿)
+        canvas->fillRect(deerBaseX - dir * 3, deerBaseY - 1, 7, 4, colDeer);
+        canvas->drawFastHLine(deerBaseX - dir * 2, deerBaseY + 3, 5, colDeerDark); // 腹部阴影
+        // 飞跃前蹄与后蹬后腿
+        canvas->drawLine(deerBaseX + dir * 3, deerBaseY + 2, deerBaseX + dir * 6, deerBaseY + 5, colDeerDark);
+        canvas->drawLine(deerBaseX - dir * 3, deerBaseY + 2, deerBaseX - dir * 6, deerBaseY + 5, colDeerDark);
 
-        // 圣诞老人 (红棉衣 + 白胡子 + 红帽子 + 白绒球)
-        canvas->fillRect(sx - 1, sy - 2, 3, 2, colSleigh);  // 红衣
-        canvas->drawPixel(sx + 1, sy - 1, TFT_WHITE);       // 白胡子
-        canvas->drawPixel(sx, sy - 3, colSleigh);          // 红帽
-        canvas->drawPixel(sx - 1, sy - 4, TFT_WHITE);      // 白绒球
+        // 鹿颈与鹿头 (向上向前昂扬)
+        canvas->fillRect(deerBaseX + dir * 2, deerBaseY - 4, 3, 4, colDeer);
+        canvas->fillRect(deerBaseX + dir * 4, deerBaseY - 3, 3, 3, colDeer);
+        canvas->drawPixel(deerBaseX + dir * 3, deerBaseY, canvas->color565(255, 215, 0)); // 金色铃铛圈
 
-        // (4) 领航驯鹿队与鲁道夫大红鼻子 (Reindeer & Rudolph)
-        int deerBaseX = sx + (int)(fwdX * 12.0f);
-        int deerBaseY = sy + (int)(fwdY * 12.0f);
+        // 挺拔分叉金色鹿角 (Antlers)
+        canvas->drawFastVLine(deerBaseX + dir * 2, deerBaseY - 7, 4, colAntler);
+        canvas->drawPixel(deerBaseX + dir * 1, deerBaseY - 6, colAntler);
+        canvas->drawPixel(deerBaseX + dir * 3, deerBaseY - 8, colAntler);
+        canvas->drawPixel(deerBaseX, deerBaseY - 7, canvas->color565(255, 240, 180));
 
-        // 金黄魔法牵引缰绳
-        canvas->drawLine(sx + 3, sy, deerBaseX - 3, deerBaseY, canvas->color565(255, 220, 60));
+        // ★ 核心焦点：鲁道夫发光大红鼻子 (Shiny Red Nose)
+        int noseX = deerBaseX + dir * 8;
+        int noseY = deerBaseY - 2;
+        s_rudolphScreenX = noseX;
+        s_rudolphScreenY = noseY;
 
-        // 驯鹿身躯 (双鹿并驱, 褐色健壮身形与挺拔鹿角)
-        uint16_t colDeer = canvas->color565(150, 85, 40);
-        uint16_t colAntler = canvas->color565(200, 160, 110);
-        canvas->fillRect(deerBaseX - 2, deerBaseY - 2, 5, 4, colDeer);
-        canvas->drawPixel(deerBaseX + 1, deerBaseY - 3, colAntler);
-        canvas->drawPixel(deerBaseX + 2, deerBaseY - 4, colAntler);
-        canvas->drawPixel(deerBaseX - 1, deerBaseY - 3, colAntler);
-
-        // ★ 核心彩蛋：鲁道夫闪烁发光的大红鼻子 (高频双层光环)
-        uint8_t noseBlink = (nowMs / 160) % 2;
-        int noseX = deerBaseX + (int)(fwdX * 4.0f);
-        int noseY = deerBaseY + (int)(fwdY * 4.0f);
+        uint8_t noseBlink = (nowMs / 140) % 2;
+        canvas->fillCircle(noseX, noseY, 2, canvas->color565(255, 25, 25));
+        canvas->drawPixel(noseX, noseY, TFT_WHITE); // 中心白炽闪烁核心
         if (noseBlink) {
-            canvas->fillCircle(noseX, noseY, 2, canvas->color565(255, 80, 80));
-            canvas->drawPixel(noseX, noseY, TFT_WHITE);
-        } else {
-            canvas->drawPixel(noseX, noseY, TFT_RED);
+            // 鲜亮红粉色呼吸外光晕
+            canvas->drawPixel(noseX - 2, noseY, canvas->color565(255, 120, 120));
+            canvas->drawPixel(noseX + 2, noseY, canvas->color565(255, 120, 120));
+            canvas->drawPixel(noseX, noseY - 2, canvas->color565(255, 120, 120));
+            canvas->drawPixel(noseX, noseY + 2, canvas->color565(255, 120, 120));
         }
 
-        // (5) 目标标识文字
-        canvas->setTextDatum(top_left);
+        // 双道金黄魔法牵引缰绳
+        uint16_t colReins = canvas->color565(255, 225, 80);
+        canvas->drawLine(sx + dir * 6, sy, deerBaseX + dir * 2, deerBaseY - 1, colReins);
+        canvas->drawLine(sx + dir * 6, sy + 2, deerBaseX + dir * 1, deerBaseY + 1, colReins);
+
+        // (4) 经典大号圣诞红金雪橇与圣诞老人 (Sleigh & Santa)
+        uint16_t colSleigh = canvas->color565(225, 20, 20);
+        uint16_t colSleighDark = canvas->color565(160, 10, 10);
+        uint16_t colRunner = canvas->color565(255, 215, 0);
+
+        // 金色弯曲滑轨 (底部平直长 14px，前端高高优雅向上翘起，后部微翘)
+        int runnerBaseY = sy + 4;
+        canvas->drawFastHLine(sx - dir * 6, runnerBaseY, 13, colRunner);
+        canvas->drawPixel(sx + dir * 7, runnerBaseY - 1, colRunner);
+        canvas->drawPixel(sx + dir * 8, runnerBaseY - 2, colRunner);
+        canvas->drawPixel(sx + dir * 9, runnerBaseY - 3, colRunner); // 翘头弧度
+        canvas->drawPixel(sx - dir * 7, runnerBaseY - 1, colRunner); // 后微翘
+        // 滑轨支撑金属斜柱
+        canvas->drawFastVLine(sx - dir * 3, runnerBaseY - 2, 2, colRunner);
+        canvas->drawFastVLine(sx + dir * 3, runnerBaseY - 2, 2, colRunner);
+
+        // 红色饱满车体斗 (前低后高流线型)
+        canvas->fillRect(sx - dir * 5, sy - 1, 11, 4, colSleigh);
+        canvas->drawFastHLine(sx - dir * 5, sy + 3, 11, colSleighDark); // 车底阴影
+        canvas->drawFastHLine(sx - dir * 4, sy - 2, 9, canvas->color565(255, 220, 100)); // 金色护栏滚边
+        // 车后升起的高靠背
+        canvas->drawFastVLine(sx - dir * 6, sy - 3, 4, colSleigh);
+
+        // 后座堆满的五彩礼物包裹 (Sack of Gifts)
+        canvas->fillRect(sx - dir * 5, sy - 4, 4, 3, canvas->color565(35, 155, 55)); // 绿色大礼包
+        canvas->drawPixel(sx - dir * 3, sy - 5, canvas->color565(255, 215, 0));      // 金色十字结
+        canvas->fillRect(sx - dir * 4, sy - 6, 3, 2, canvas->color565(30, 180, 240)); // 天蓝色礼盒
+        canvas->drawPixel(sx - dir * 3, sy - 7, TFT_WHITE);                         // 礼盒白色蝴蝶结
+
+        // 端坐在驾驶席的圣诞老人 (Santa Claus)
+        // 红大衣身躯
+        canvas->fillRect(sx - dir * 1, sy - 3, 4, 3, colSleigh);
+        canvas->drawFastHLine(sx - dir * 1, sy - 1, 4, TFT_BLACK); // 黑色腰带
+        canvas->drawPixel(sx, sy - 1, colRunner);                  // 金色皮带扣
+        // 桃红脸颊
+        canvas->drawPixel(sx + dir * 1, sy - 4, canvas->color565(255, 200, 180));
+        // 经典超大蓬松白胡子 (包裹下巴与胸口，极显眼)
+        canvas->fillRect(sx + dir * 1, sy - 3, 3, 2, TFT_WHITE);
+        canvas->drawPixel(sx + dir * 2, sy - 1, TFT_WHITE);
+        // 经典红色尖顶睡帽 + 白毛绒球
+        canvas->drawFastHLine(sx - dir * 1, sy - 5, 4, TFT_WHITE); // 帽檐洁白羊羔绒
+        canvas->fillRect(sx - dir * 1, sy - 7, 3, 2, colSleigh);   // 红色帽尖
+        canvas->drawPixel(sx - dir * 2, sy - 8, TFT_WHITE);        // 垂下的白毛绒球
+        // 戴白手套向上挥动招手
+        canvas->drawPixel(sx + dir * 3, sy - 4, TFT_WHITE);
+
+        // (5) 目标标识文字 (置于雪橇正上方，清晰整洁不遮挡画面)
+        canvas->setTextDatum(top_center);
         canvas->setTextColor(canvas->color565(255, 80, 80));
-        canvas->drawString("SNT-CLS", sx + 12, sy - 6);
+        canvas->drawString("SNT-CLS", sx, sy - 17);
         canvas->setTextColor(canvas->color565(255, 215, 0));
-        canvas->drawString("RED NOSE", sx + 12, sy + 3);
+        canvas->drawString("★ RUDOLPH", sx, sy - 9);
     }
 
     // 3. 礼物投递伞降动画与庆贺横幅 (Gift Drop & Delivery Confirmed)
@@ -497,20 +546,20 @@ void SantaTracker::drawRadarOverlay(LGFX_Sprite* canvas, int centerX, int center
     int sweepEndY = centerY + (int)(sinf(sweepAngleRad) * radius);
     canvas->drawLine(centerX, centerY, sweepEndX, sweepEndY, canvas->color565(50, 255, 80));
 
-    // 3. 若雪橇在正面，绘制雷达目标菱形锁定框 (Target Lock Box)
+    // 3. 若雪橇在正面，绘制雷达目标锁定框 (准星精确锁定鲁道夫发光红鼻子)
     if (s_telemetry.isVisible && s_phase == SantaPhase::MISSION_ACTIVE) {
-        int tx = s_telemetry.screenX;
-        int ty = s_telemetry.screenY;
+        int tx = (s_rudolphScreenX >= -10 && s_rudolphScreenX < canvas->width() + 10) ? s_rudolphScreenX : s_telemetry.screenX;
+        int ty = (s_rudolphScreenY >= -10 && s_rudolphScreenY < canvas->height() + 10) ? s_rudolphScreenY : s_telemetry.screenY;
         if (tx >= 0 && tx < canvas->width() && ty >= 0 && ty < canvas->height()) {
             uint16_t colLock = ((nowMs / 200) % 2) ? canvas->color565(80, 255, 100) : canvas->color565(20, 160, 40);
-            canvas->drawRect(tx - 6, ty - 6, 13, 13, colLock);
-            canvas->drawFastHLine(tx - 9, ty, 3, colLock);
-            canvas->drawFastHLine(tx + 7, ty, 3, colLock);
-            canvas->drawFastVLine(tx, ty - 9, 3, colLock);
-            canvas->drawFastVLine(tx, ty + 7, 3, colLock);
+            canvas->drawRect(tx - 7, ty - 7, 15, 15, colLock);
+            canvas->drawFastHLine(tx - 11, ty, 4, colLock);
+            canvas->drawFastHLine(tx + 8, ty, 4, colLock);
+            canvas->drawFastVLine(tx, ty - 11, 4, colLock);
+            canvas->drawFastVLine(tx, ty + 8, 4, colLock);
             canvas->setTextDatum(top_left);
             canvas->setTextColor(colLock);
-            canvas->drawString("TRK: SNT-CLS", tx + 8, ty - 9);
+            canvas->drawString("TRK: RUDOLPH", tx + 9, ty - 10);
         }
     }
 }

@@ -872,28 +872,28 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                 if (currL == LANG_ZH) {
                     snprintf(specBuf, sizeof(specBuf),
                              "\n国际标识: 0000-SANTA\n"
-                             "巡航动力: 9 驯鹿推进 (领航: 鲁道夫)\n"
+                             "巡航动力: 9 驯鹿推进 (鲁道夫领航)\n"
                              "运行速度: 约 Mach 3000\n"
                              "巡航高度: 30 km (平流层/亚轨道)\n"
                              "雷达回波: 红鼻子极强红外特征");
                 } else if (currL == LANG_JA) {
                     snprintf(specBuf, sizeof(specBuf),
                              "\n国際識別: 0000-SANTA\n"
-                             "巡航動力: 9トナカイ (先導: ルドルフ)\n"
+                             "巡航動力: 9トナカイ (ルドルフ先導)\n"
                              "飛行速度: 約マッハ 3000\n"
                              "巡航高度: 30 km\n"
                              "レーダー: 赤鼻強力赤外線シグネチャ");
                 } else if (currL == LANG_ES) {
                     snprintf(specBuf, sizeof(specBuf),
                              "\nID COSPAR: 0000-SANTA\n"
-                             "Propulsion: 9 renos (Lider: Rudolf)\n"
+                             "Propulsion: 9 renos (guia Rudolf)\n"
                              "Velocidad: Mach 3000\n"
                              "Altitud: 30 km\n"
                              "Firma radar: Nariz roja infrarroja");
                 } else {
                     snprintf(specBuf, sizeof(specBuf),
                              "\nCOSPAR: 0000-SANTA\n"
-                             "Propulsion: 9 Reindeer (Rudolf)\n"
+                             "Propulsion: 9 Reindeers (Rudolph)\n"
                              "Speed: ~Mach 3000\n"
                              "Alt: 30 km\n"
                              "Radar: Red Nose High-IR");
@@ -1323,7 +1323,19 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                                 colonIdx = line.indexOf("：");
                             }
                             
-                            if (colonIdx != -1) {
+                            bool isKeyField = false;
+                            if (colonIdx != -1 && colonIdx < 16) {
+                                String candidate = line.substring(0, colonIdx);
+                                candidate.trim();
+                                if (candidate.length() > 0 &&
+                                    !candidate.startsWith("(") && !candidate.startsWith("（") &&
+                                    !candidate.startsWith("[") && !candidate.startsWith("【") &&
+                                    candidate.indexOf("(") == -1 && candidate.indexOf("（") == -1) {
+                                    isKeyField = true;
+                                }
+                            }
+                            
+                            if (isKeyField) {
                                 String namePart = line.substring(0, colonIdx + 1);
                                 String valuePart = line.substring(colonIdx + 1);
                                 
@@ -1341,7 +1353,7 @@ void SatSelectView::draw(LGFX_Sprite* canvas) {
                                 canvas->setTextColor(valColor);
                                 canvas->drawString(valuePart.c_str(), rightX + nameW, lineY);
                             } else {
-                                // 没有冒号的延续行：若上一行是运行状态字段，则继承状态专属颜色；否则普通文本
+                                // 没有冒号或属于括号说明类的延续行：若上一行是运行状态字段，则继承状态专属颜色；否则普通文本
                                 if (inOpsStatusContinuation && line.length() > 0) {
                                     canvas->setTextColor(I18N::getOpsStatusColor(selSat.opsStatus));
                                 } else {

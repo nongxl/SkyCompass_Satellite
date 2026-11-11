@@ -4317,7 +4317,7 @@ void loop() {
                         validateSatViewFocusState();
                         if (isSatViewMode) {
                             struct FocusTarget {
-                                int type; // 0 = Regular Sat, 1 = Recent Launch
+                                int type; // 0 = Regular Sat, 1 = Recent Launch, 2 = Santa
                                 int index;
                             };
                             std::vector<FocusTarget> targets;
@@ -4332,20 +4332,30 @@ void loop() {
                                     targets.push_back({1, (int)i});
                                 }
                             }
+                            if (SantaTracker::isDecember() && SantaTracker::isFlightPhase()) {
+                                targets.push_back({2, 0});
+                            }
                             
                             if (!targets.empty()) {
                                 int currentIdx = -1;
-                                if (g_recentLaunchFocusMode) {
+                                if (g_santaFocusMode) {
+                                    for (size_t i = 0; i < targets.size(); i++) {
+                                        if (targets[i].type == 2) {
+                                            currentIdx = (int)i;
+                                            break;
+                                        }
+                                    }
+                                } else if (g_recentLaunchFocusMode) {
                                     for (size_t i = 0; i < targets.size(); i++) {
                                         if (targets[i].type == 1 && g_recentLaunches[targets[i].index].batchId == recentLaunchActiveBatchId) {
-                                            currentIdx = i;
+                                            currentIdx = (int)i;
                                             break;
                                         }
                                     }
                                 } else if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
                                     for (size_t i = 0; i < targets.size(); i++) {
                                         if (targets[i].type == 0 && targets[i].index == focusSatIndex) {
-                                            currentIdx = i;
+                                            currentIdx = (int)i;
                                             break;
                                         }
                                     }
@@ -4358,13 +4368,20 @@ void loop() {
 
                                 int prevIdx = (currentIdx - 1 + targets.size()) % targets.size();
                                 const auto& prevTarget = targets[prevIdx];
-                                if (prevTarget.type == 0) {
+                                if (prevTarget.type == 2) {
+                                    focusSatIndex = -1;
+                                    g_recentLaunchFocusMode = false;
+                                    g_santaFocusMode = true;
+                                    isCameraTransitioning = true;
+                                } else if (prevTarget.type == 0) {
                                     focusSatIndex = prevTarget.index;
                                     g_recentLaunchFocusMode = false;
+                                    g_santaFocusMode = false;
                                     isCameraTransitioning = true;
                                 } else {
                                     focusSatIndex = -1;
                                     g_recentLaunchFocusMode = true;
+                                    g_santaFocusMode = false;
                                     auto& item = g_recentLaunches[prevTarget.index];
                                     recentLaunchActiveBatchId = item.batchId;
                                     initRecentLaunchCalcs(item);
@@ -4379,7 +4396,7 @@ void loop() {
                         validateSatViewFocusState();
                         if (isSatViewMode) {
                             struct FocusTarget {
-                                int type; // 0 = Regular Sat, 1 = Recent Launch
+                                int type; // 0 = Regular Sat, 1 = Recent Launch, 2 = Santa
                                 int index;
                             };
                             std::vector<FocusTarget> targets;
@@ -4394,20 +4411,30 @@ void loop() {
                                     targets.push_back({1, (int)i});
                                 }
                             }
+                            if (SantaTracker::isDecember() && SantaTracker::isFlightPhase()) {
+                                targets.push_back({2, 0});
+                            }
                             
                             if (!targets.empty()) {
                                 int currentIdx = -1;
-                                if (g_recentLaunchFocusMode) {
+                                if (g_santaFocusMode) {
+                                    for (size_t i = 0; i < targets.size(); i++) {
+                                        if (targets[i].type == 2) {
+                                            currentIdx = (int)i;
+                                            break;
+                                        }
+                                    }
+                                } else if (g_recentLaunchFocusMode) {
                                     for (size_t i = 0; i < targets.size(); i++) {
                                         if (targets[i].type == 1 && g_recentLaunches[targets[i].index].batchId == recentLaunchActiveBatchId) {
-                                            currentIdx = i;
+                                            currentIdx = (int)i;
                                             break;
                                         }
                                     }
                                 } else if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
                                     for (size_t i = 0; i < targets.size(); i++) {
                                         if (targets[i].type == 0 && targets[i].index == focusSatIndex) {
-                                            currentIdx = i;
+                                            currentIdx = (int)i;
                                             break;
                                         }
                                     }
@@ -4420,13 +4447,20 @@ void loop() {
 
                                 int nextIdx = (currentIdx + 1) % targets.size();
                                 const auto& nextTarget = targets[nextIdx];
-                                if (nextTarget.type == 0) {
+                                if (nextTarget.type == 2) {
+                                    focusSatIndex = -1;
+                                    g_recentLaunchFocusMode = false;
+                                    g_santaFocusMode = true;
+                                    isCameraTransitioning = true;
+                                } else if (nextTarget.type == 0) {
                                     focusSatIndex = nextTarget.index;
                                     g_recentLaunchFocusMode = false;
+                                    g_santaFocusMode = false;
                                     isCameraTransitioning = true;
                                 } else {
                                     focusSatIndex = -1;
                                     g_recentLaunchFocusMode = true;
+                                    g_santaFocusMode = false;
                                     auto& item = g_recentLaunches[nextTarget.index];
                                     recentLaunchActiveBatchId = item.batchId;
                                     initRecentLaunchCalcs(item);
@@ -6020,12 +6054,26 @@ void loop() {
                     float azF = 0, elF = 0, distF = 0;
                     CoordTransform::ecefToTopocentricFast(obsFrame, (float)sEcef.x, (float)sEcef.y, (float)sEcef.z, azF, elF, distF);
 
-                    earth_renderer->getCanvas()->setTextColor(earth_renderer->getCanvas()->color565(255, 215, 0));
-                    earth_renderer->getCanvas()->drawString("SNT-CLS (Santa)", 5, 20);
-                    earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
-                    char buf[64];
-                    snprintf(buf, sizeof(buf), "Az:%03.0f El:%02.0f R:%.0fkm", azF, elF, distF);
-                    earth_renderer->getCanvas()->drawString(buf, 5, 32);
+                    earth_renderer->getCanvas()->setTextColor(earth_renderer->getCanvas()->color565(255, 80, 80));
+                    char azBuf[32];
+                    char elBuf[32];
+                    char distBuf[32];
+                    if (currL == LANG_ZH) {
+                        snprintf(azBuf, sizeof(azBuf), "方位: %03.0f°", azF);
+                        snprintf(elBuf, sizeof(elBuf), "仰角: %02.0f°", elF);
+                        snprintf(distBuf, sizeof(distBuf), "距离: %.0fkm", distF);
+                    } else if (currL == LANG_JA) {
+                        snprintf(azBuf, sizeof(azBuf), "方位: %03.0f°", azF);
+                        snprintf(elBuf, sizeof(elBuf), "仰角: %02.0f°", elF);
+                        snprintf(distBuf, sizeof(distBuf), "距離: %.0fkm", distF);
+                    } else {
+                        snprintf(azBuf, sizeof(azBuf), "Az : %03.0f°", azF);
+                        snprintf(elBuf, sizeof(elBuf), "El : %02.0f°", elF);
+                        snprintf(distBuf, sizeof(distBuf), "Dist: %.0fkm", distF);
+                    }
+                    earth_renderer->getCanvas()->drawString(azBuf, 5, 91);
+                    earth_renderer->getCanvas()->drawString(elBuf, 5, 103);
+                    earth_renderer->getCanvas()->drawString(distBuf, 5, 115);
                 } else if (hasSatInfo && (currentCalc != nullptr || currentType == SAT_TYPE_GEO_TV)) {
                     Language currL = I18N::getLanguage();
                     bool isZh = (currL == LANG_ZH);

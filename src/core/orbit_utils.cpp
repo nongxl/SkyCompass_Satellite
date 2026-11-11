@@ -9,6 +9,7 @@
 #include "core/coord_transform.h"
 #include "core/sun_calculator.h"
 #include "core/recent_launch_item.h"
+#include "core/santa_tracker.h"
 
 extern volatile bool recentLaunchDownloading;
 extern bool recentLaunchCacheDirty;
@@ -18,6 +19,7 @@ extern int focusSatIndex;
 extern int NUM_SATELLITES;
 extern SatProfile g_satellites[];
 extern bool g_recentLaunchFocusMode;
+extern bool g_santaFocusMode;
 extern std::vector<RecentLaunchItem> g_recentLaunches;
 extern String recentLaunchActiveBatchId;
 extern bool g_repSatInitialized;
@@ -374,6 +376,17 @@ void OrbitUtils::calculateFormationsForItems(std::vector<RecentLaunchItem>& item
 
 void OrbitUtils::validateSatViewFocusState() {
     if (!isSatViewMode) return;
+
+    // 0. 若当前聚焦的是圣诞老人特别任务，校验时间是否在 12 月飞行期
+    if (g_santaFocusMode) {
+        if (SantaTracker::isDecember() && SantaTracker::isFlightPhase()) {
+            focusSatIndex = -1;
+            g_recentLaunchFocusMode = false;
+            return;
+        } else {
+            g_santaFocusMode = false;
+        }
+    }
 
     // 1. 若当前聚焦的是常规百科卫星，校验该卫星是否仍然有效且处于勾选状态
     if (focusSatIndex >= 0) {

@@ -84,6 +84,10 @@ private:
     static bool s_isDelivering;
     static bool s_deliveryArmed;
 
+    // 鲁道夫红鼻子实时屏幕像素坐标 (供雷达瞄准与追焦方块锁定)
+    static int s_rudolphScreenX;
+    static int s_rudolphScreenY;
+
     // 北极基地电文弹窗
     static int16_t s_prepRadioYear;
 
